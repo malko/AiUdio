@@ -131,7 +131,8 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
             "instruct": None,
             "ref_audio": str(wav),
             "ref_text": avatar.ref_text or None,
-            "x_vector_only_mode": bool(avatar.x_vector_only),
+            # A clone without a transcript must use the speaker embedding only.
+            "x_vector_only_mode": bool(avatar.x_vector_only) or not (avatar.ref_text or "").strip(),
             "generation": gen,
         }
 

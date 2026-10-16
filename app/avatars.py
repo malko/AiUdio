@@ -34,6 +34,11 @@ class Avatar:
     has_photo: bool = False
     created_at: float = field(default_factory=time.time)
 
+    def __post_init__(self) -> None:
+        # A cloned voice with no transcript can only use the speaker embedding.
+        if self.kind == "clone" and not (self.ref_text or "").strip():
+            self.x_vector_only = True
+
 
 class AvatarStore:
     def __init__(self, directory: str | Path):
