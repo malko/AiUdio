@@ -306,6 +306,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | Authenticated WS fails | use an API key (Basic does not work over browser WebSocket) |
 | STT unreachable | `docker compose logs stt`; the upstream build may need a path adjustment (`cmake --install`) |
 | Choppy TTS streaming | lower `chunking.max_chars` or use the `vllm` profile |
+| `Warning: flash-attn is not installed` | expected — attention falls back to PyTorch `sdpa` (no FlashAttention build in the image) |
 
 ## Licenses and credits
 

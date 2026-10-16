@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libsndfile1 ffmpeg git curl \
+      libsndfile1 ffmpeg sox libsox-fmt-all git curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
