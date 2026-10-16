@@ -16,6 +16,18 @@ until [ -s "${DIR}/.active" ]; do
   sleep 3
 done
 
+# Locate the nemo-speech binary (name on PATH, or common install locations).
+BIN="$(command -v nemo-speech 2>/dev/null || true)"
+if [ -z "${BIN}" ]; then
+  for p in /usr/local/bin/nemo-speech /opt/nemo-speech/bin/nemo-speech /opt/nemo/bin/nemo-speech; do
+    if [ -x "${p}" ]; then BIN="${p}"; break; fi
+  done
+fi
+if [ -z "${BIN}" ]; then
+  echo "[stt] error: nemo-speech binary not found" >&2
+  exit 1
+fi
+
 FILE="$(cat "${DIR}/.active")"
 until [ -f "${DIR}/${FILE}" ]; do
   echo "[stt] waiting for ${FILE} ..."
@@ -30,6 +42,6 @@ if [ -s "${DIR}/.active-diar" ]; then
   fi
 fi
 
-echo "[stt] starting: nemo-speech serve --host 0.0.0.0 --port ${PORT} ${ARGS}"
+echo "[stt] starting: ${BIN} serve --host 0.0.0.0 --port ${PORT} ${ARGS}"
 # shellcheck disable=SC2086
-exec nemo-speech serve --host 0.0.0.0 --port "${PORT}" ${ARGS}
+exec "${BIN}" serve --host 0.0.0.0 --port "${PORT}" ${ARGS}

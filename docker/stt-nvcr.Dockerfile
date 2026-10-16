@@ -8,7 +8,8 @@ FROM busybox:1.36 AS busybox
 
 FROM ${STT_BASE_IMAGE}
 ARG STT_BASE_IMAGE
-USER root
+# The base is distroless (no /etc/passwd), so use the numeric uid instead of "root".
+USER 0:0
 
 COPY --from=busybox /bin/busybox /bin/busybox
 COPY docker/stt-wait.sh /stt-wait.sh
