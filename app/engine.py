@@ -38,6 +38,11 @@ def _design_ref_text(language: Optional[str]) -> str:
     return _DESIGN_REF_TEXTS.get((language or "english").lower(), _DESIGN_REF_TEXTS["english"])
 
 
+def design_ref_text(language: Optional[str]) -> str:
+    """Public alias used by the API when creating a VoiceDesign avatar."""
+    return _design_ref_text(language)
+
+
 @dataclass
 class ModelHandle:
     family: str
@@ -207,22 +212,22 @@ class TTSEngine:
                 )
             elif family == "base":
                 prompt = items[0].get("voice_clone_prompt")
-                if prompt is not None:
-                    wavs, sr = handle.model.generate_voice_clone(
-                        text=[i["text"] for i in items],
-                        language=[i.get("language") or "Auto" for i in items],
-                        voice_clone_prompt=prompt,
-                        **gen,
+                if prompt is None:
+                    ref_audio = items[0].get("ref_audio")
+                    if not ref_audio:
+                        raise ValueError("base model requires ref_audio or voice_clone_prompt")
+                    prompt = self._cached_clone_prompt(
+                        handle,
+                        ref_audio,
+                        items[0].get("ref_text"),
+                        bool(items[0].get("x_vector_only_mode")),
                     )
-                else:
-                    wavs, sr = handle.model.generate_voice_clone(
-                        text=[i["text"] for i in items],
-                        language=[i.get("language") or "Auto" for i in items],
-                        ref_audio=[i.get("ref_audio") for i in items],
-                        ref_text=[i.get("ref_text") for i in items],
-                        x_vector_only_mode=[bool(i.get("x_vector_only_mode")) for i in items],
-                        **gen,
-                    )
+                wavs, sr = handle.model.generate_voice_clone(
+                    text=[i["text"] for i in items],
+                    language=[i.get("language") or "Auto" for i in items],
+                    voice_clone_prompt=prompt,
+                    **gen,
+                )
             else:
                 raise ValueError(f"Unknown model family: {family}")
 
@@ -241,6 +246,37 @@ class TTSEngine:
             speakers = []
         handle.default_speaker = speakers[0] if speakers else ""
         return handle.default_speaker
+
+    def design_reference(self, instruct: str, language) -> Tuple[np.ndarray, int]:
+        """Generate a reference clip from a VoiceDesign description."""
+        handle = self.ensure("voice_design")
+        ref_text = _design_ref_text(language)
+        gen = self._generation_defaults()
+        with self._lock:
+            wavs, sr = handle.model.generate_voice_design(
+                text=ref_text, language=language or "Auto", instruct=instruct, **gen
+            )
+        return np.asarray(wavs[0], dtype=np.float32), int(sr)
+
+    def clear_clone_prompts(self) -> None:
+        with self._lock:
+            self._clone_prompts.clear()
+
+    def _cached_clone_prompt(self, handle: ModelHandle, ref_audio: str, ref_text, x_vector_only: bool) -> Any:
+        """Build (and cache) a clone prompt from a reference audio path/payload."""
+        key = f"ref:{self.clone_prompt_key(str(ref_audio), ref_text)}\x00{int(bool(x_vector_only))}"
+        with self._lock:
+            if key in self._clone_prompts:
+                return self._clone_prompts[key]
+            items = handle.model.create_voice_clone_prompt(
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+                x_vector_only_mode=bool(x_vector_only),
+            )
+            if len(self._clone_prompts) >= 8:
+                self._clone_prompts.clear()
+            self._clone_prompts[key] = items
+            return items
 
     def _design_clone_prompt(self, instruct: str, language) -> Any:
         """Cached voice-clone prompt built once from a VoiceDesign reference clip.

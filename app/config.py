@@ -113,6 +113,13 @@ class UIConfig(BaseModel):
     show_chat_tab: bool = True
 
 
+class StartupConfig(BaseModel):
+    """What to preload when the server starts."""
+
+    stt_model: str = ""   # STT model filename or alias to activate at startup
+    voice: str = ""       # TTS family (custom_voice/voice_design/base) or "avatar:<id>"
+
+
 class AuthConfig(BaseModel):
     """API and UI access control.
 
@@ -141,6 +148,7 @@ class Settings(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     vllm: VLLMConfig = Field(default_factory=VLLMConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    startup: StartupConfig = Field(default_factory=StartupConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
 
 

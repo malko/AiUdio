@@ -171,6 +171,17 @@ AiUdio renders a short reference clip once per (description, language) and clone
 **Base** model — the voice stays identical until you change the description. This uses the
 Base model (it is downloaded/loaded on first VoiceDesign use).
 
+**Voices / avatars**: the Synthesis tab lets you create reusable voices — either **cloned**
+from a reference audio or **designed** from a description (VoiceDesign). Each avatar can have a
+photo/name, be regenerated (design) or its description edited then regenerated, and is then
+selectable in the **Conversation** tab. Avatars are stored as `<name>.wav` + `<name>.json` (+
+`<name>.png`) under `voices/avatars/` (persistent). API: `GET/POST/PUT/DELETE /api/avatars`,
+`POST /api/avatars/{id}/regenerate`, `GET /api/avatars/{id}/audio|photo`.
+
+**Conversation is the home page** and lets you pick the voice (presets or an avatar) and the
+STT model. In **Settings → Startup** you can mark an STT model and a voice to preload when the
+server starts (`startup.stt_model`, `startup.voice`).
+
 ## API
 
 Quick examples (full reference: [`docs/api.md`](docs/api.md)):

@@ -7,13 +7,16 @@ NeMo-Speech.cpp service and conversation to an external LLM (OpenAI-compatible).
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
+import soundfile as sf
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -21,9 +24,10 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .audio import to_pcm16, wav_bytes
+from .avatars import Avatar, AvatarStore
 from .chunking import chunk_text
 from .config import ConfigStore, Settings, get_store
-from .engine import TTSEngine
+from .engine import TTSEngine, design_ref_text
 from .llm import LLMClient, build_messages, trim_history
 from .scheduler import BatchScheduler
 from .schemas import TTSRequest
@@ -34,10 +38,53 @@ log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 
+def _avatar_dir(settings: Settings) -> Path:
+    return Path(settings.paths.voices) / "avatars"
+
+
+async def _apply_startup(app: FastAPI) -> None:
+    """Preload the STT model / voice configured in Settings (best effort)."""
+    settings: Settings = app.state.settings
+    engine: TTSEngine = app.state.engine
+
+    if settings.startup.stt_model:
+        try:
+            index = await asyncio.to_thread(load_index, settings.stt.model_index)
+            model = index.find(settings.startup.stt_model) if index else None
+            artifact = model.asr_artifact() if model else None
+            if artifact and model.local_path(artifact, settings.stt.models_dir).is_file():
+                await asyncio.to_thread(mark_active, settings.stt.models_dir, artifact.filename)
+                log.info("Startup: activated STT model '%s'", settings.startup.stt_model)
+            else:
+                log.info("Startup: STT model '%s' not downloaded yet", settings.startup.stt_model)
+        except Exception:
+            log.exception("Startup STT activation failed")
+
+    voice = settings.startup.voice
+    if voice:
+        try:
+            if voice.startswith("avatar:"):
+                store = AvatarStore(_avatar_dir(settings))
+                avatar = store.get(voice.split(":", 1)[1])
+                if avatar:
+                    handle = await asyncio.to_thread(engine.ensure, "base")
+                    await asyncio.to_thread(
+                        engine._cached_clone_prompt, handle,
+                        str(store.wav_path(avatar.id)), avatar.ref_text, False,
+                    )
+                    log.info("Startup: loaded voice '%s'", avatar.name)
+            else:
+                await asyncio.to_thread(engine.ensure, voice)
+                log.info("Startup: loaded model '%s'", voice)
+        except Exception:
+            log.exception("Startup voice load failed")
+
+
 def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
     return {
         "version": __version__,
         "ui": settings.ui.model_dump(),
+        "startup": settings.startup.model_dump(),
         "auth_required": settings.auth.enabled,
         "models": {
             "families": engine.available(),
@@ -64,8 +111,30 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
 
 
 def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[str, Any]:
-    family = req.resolve_family(settings.models.default_family)
     gen = req.generation.to_kwargs() if req.generation else {}
+
+    if req.avatar:
+        store = AvatarStore(_avatar_dir(settings))
+        avatar = store.get(req.avatar)
+        wav = store.wav_path(req.avatar)
+        if avatar is None or not wav.is_file():
+            raise HTTPException(404, f"Unknown voice: {req.avatar}")
+        language = req.language if isinstance(req.language, str) else None
+        if not language or language == "Auto":
+            language = avatar.language or "Auto"
+        return {
+            "family": "base",
+            "text": text,
+            "language": language,
+            "speaker": None,
+            "instruct": None,
+            "ref_audio": str(wav),
+            "ref_text": avatar.ref_text or None,
+            "x_vector_only_mode": False,
+            "generation": gen,
+        }
+
+    family = req.resolve_family(settings.models.default_family)
     return {
         "family": family,
         "text": text,
@@ -136,6 +205,7 @@ def create_app(
     async def _startup() -> None:
         await scheduler.start()
         log.info("Gateway started (auth=%s)", app.state.settings.auth.enabled)
+        asyncio.create_task(_apply_startup(app))
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
@@ -197,9 +267,114 @@ def create_app(
             "reference_files": refs,
         }
 
+    # ------------------------------------------------------------- avatars
+    @app.get("/api/avatars")
+    async def list_avatars() -> Dict[str, Any]:
+        store = AvatarStore(_avatar_dir(app.state.settings))
+        return {"avatars": [asdict(a) for a in store.list()]}
+
+    @app.post("/api/avatars")
+    async def create_avatar(
+        name: str = Form(...),
+        kind: str = Form("design"),
+        prompt: str = Form(""),
+        language: str = Form("Auto"),
+        ref_text: str = Form(""),
+        ref_audio: Optional[UploadFile] = File(None),
+        image: Optional[UploadFile] = File(None),
+    ) -> Dict[str, Any]:
+        store = AvatarStore(_avatar_dir(app.state.settings))
+        aid = store.new_id(name)
+        avatar = Avatar(id=aid, name=name, kind="clone" if kind == "clone" else "design",
+                        language=language or "Auto", prompt=prompt, ref_text=ref_text)
+        wav = store.wav_path(aid)
+        try:
+            if avatar.kind == "clone":
+                if ref_audio is None:
+                    raise HTTPException(400, "A reference audio is required to clone a voice")
+                data = await ref_audio.read()
+                try:
+                    audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
+                except Exception as exc:
+                    raise HTTPException(400, f"Unreadable reference audio: {exc}") from exc
+                sf.write(str(wav), audio, int(sr))
+            else:
+                if not prompt.strip():
+                    raise HTTPException(400, "A description is required to design a voice")
+                arr, sr = await asyncio.to_thread(engine.design_reference, prompt, language)
+                sf.write(str(wav), arr, int(sr))
+                avatar.ref_text = design_ref_text(language)
+            if image is not None:
+                store.photo_path(aid).write_bytes(await image.read())
+        except HTTPException:
+            store.delete(aid)
+            raise
+        store.save(avatar)
+        await asyncio.to_thread(engine.clear_clone_prompts)
+        return asdict(store.get(aid))
+
+    @app.put("/api/avatars/{avatar_id}")
+    async def update_avatar(
+        avatar_id: str,
+        name: Optional[str] = Form(None),
+        prompt: Optional[str] = Form(None),
+        language: Optional[str] = Form(None),
+        image: Optional[UploadFile] = File(None),
+    ) -> Dict[str, Any]:
+        store = AvatarStore(_avatar_dir(app.state.settings))
+        avatar = store.get(avatar_id)
+        if avatar is None:
+            raise HTTPException(404, f"Unknown voice: {avatar_id}")
+        if name is not None:
+            avatar.name = name
+        if prompt is not None:
+            avatar.prompt = prompt
+        if language is not None:
+            avatar.language = language
+        if image is not None:
+            store.photo_path(avatar_id).write_bytes(await image.read())
+        store.save(avatar)
+        return asdict(store.get(avatar_id))
+
+    @app.post("/api/avatars/{avatar_id}/regenerate")
+    async def regenerate_avatar(avatar_id: str) -> Dict[str, Any]:
+        store = AvatarStore(_avatar_dir(app.state.settings))
+        avatar = store.get(avatar_id)
+        if avatar is None:
+            raise HTTPException(404, f"Unknown voice: {avatar_id}")
+        if avatar.kind != "design":
+            raise HTTPException(400, "Only designed voices can be regenerated")
+        arr, sr = await asyncio.to_thread(engine.design_reference, avatar.prompt, avatar.language)
+        sf.write(str(store.wav_path(avatar_id)), arr, int(sr))
+        avatar.ref_text = design_ref_text(avatar.language)
+        store.save(avatar)
+        await asyncio.to_thread(engine.clear_clone_prompts)
+        return asdict(store.get(avatar_id))
+
+    @app.delete("/api/avatars/{avatar_id}")
+    async def delete_avatar(avatar_id: str) -> Dict[str, Any]:
+        store = AvatarStore(_avatar_dir(app.state.settings))
+        store.delete(avatar_id)
+        await asyncio.to_thread(engine.clear_clone_prompts)
+        return {"deleted": avatar_id}
+
+    @app.get("/api/avatars/{avatar_id}/audio")
+    async def avatar_audio(avatar_id: str) -> FileResponse:
+        path = AvatarStore(_avatar_dir(app.state.settings)).wav_path(avatar_id)
+        if not path.is_file():
+            raise HTTPException(404, "No audio")
+        return FileResponse(str(path), media_type="audio/wav")
+
+    @app.get("/api/avatars/{avatar_id}/photo")
+    async def avatar_photo(avatar_id: str) -> FileResponse:
+        path = AvatarStore(_avatar_dir(app.state.settings)).photo_path(avatar_id)
+        if not path.is_file():
+            raise HTTPException(404, "No photo")
+        return FileResponse(str(path))
+
     @app.put("/api/settings")
     async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
-        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui"}
+        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup"}
         sections = {k: v for k, v in payload.items() if k in allowed}
         if not sections:
             raise HTTPException(400, "No editable section provided")

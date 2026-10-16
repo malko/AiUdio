@@ -20,19 +20,46 @@
   </header>
 
   <nav class="tabs">
-    <button data-tab="tts" class="active" data-i18n="nav.synthesis">Synthesis</button>
+    <button data-tab="chat" class="active" data-i18n="nav.conversation">Conversation</button>
+    <button data-tab="tts" data-i18n="nav.synthesis">Synthesis</button>
     <button data-tab="stt" data-i18n="nav.transcription">Transcription</button>
-    <button data-tab="chat" data-i18n="nav.conversation">Conversation</button>
     <button data-tab="settings" data-i18n="nav.settings">Settings</button>
   </nav>
 
+  <!-- ------------------------------------------------------------- CHAT -->
+  <section id="tab-chat" class="tab active">
+    <div class="grid">
+      <div class="card wide">
+        <h2 data-i18n="chat.title">Conversation (external LLM)</h2>
+        <div class="row">
+          <label class="grow"><span data-i18n="chat.voice">Voice</span>
+            <select id="chat-voice"></select>
+          </label>
+          <label class="grow"><span data-i18n="chat.sttModel">STT model</span>
+            <select id="chat-stt"></select>
+          </label>
+          <button id="chat-voice-refresh" data-i18n="stt.refresh">Refresh</button>
+        </div>
+        <div id="chat-log" class="transcript"></div>
+        <div class="row">
+          <input id="chat-input" type="text" data-i18n-ph="chat.placeholder" placeholder="Your message..." />
+          <button id="chat-mic" data-i18n-title="chat.dictate" title="Dictate via STT">🎤</button>
+          <button id="chat-send" class="primary" data-i18n="chat.send">Send</button>
+          <button id="chat-stop" data-i18n="chat.stop">Stop</button>
+        </div>
+        <label class="inline"><input id="chat-speak" type="checkbox" checked /> <span data-i18n="chat.speak">Speak the reply (TTS)</span></label>
+        <div id="chat-status" class="muted"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ------------------------------------------------------------- TTS -->
-  <section id="tab-tts" class="tab active">
+  <section id="tab-tts" class="tab">
     <div class="grid">
       <div class="card wide">
         <h2 data-i18n="models.title">Model</h2>
         <div class="row">
-          <label><span data-i18n="models.family">Model</span>
+          <label class="grow"><span data-i18n="models.family">Model</span>
             <select id="tts-family"></select>
           </label>
           <button id="tts-load" class="primary" data-i18n="models.load">Load</button>
@@ -46,10 +73,10 @@
           <textarea id="tts-text" rows="6" data-i18n-ph="tts.textPlaceholder" placeholder="Hello, this is a test."></textarea>
         </label>
         <div class="row">
-          <label><span data-i18n="tts.language">Language</span>
+          <label class="grow"><span data-i18n="tts.language">Language</span>
             <select id="tts-language"></select>
           </label>
-          <label><span data-i18n="tts.speaker">Voice (speaker)</span>
+          <label class="grow"><span data-i18n="tts.speaker">Voice (speaker)</span>
             <select id="tts-speaker"></select>
           </label>
         </div>
@@ -74,6 +101,34 @@
         <audio id="tts-player" controls></audio>
         <div id="tts-log" class="log"></div>
       </div>
+      <div class="card wide">
+        <h2 data-i18n="avatars.title">Voices (avatars)</h2>
+        <div class="muted" data-i18n="avatars.hint">Reusable voices: clone a voice or design one from a description, then use it in the conversation.</div>
+        <div id="avatars-list" class="avatars"></div>
+        <details>
+          <summary data-i18n="avatars.create">Create a voice</summary>
+          <label><span data-i18n="avatars.name">Name</span> <input id="av-name" type="text" /></label>
+          <label><span data-i18n="avatars.type">Type</span>
+            <select id="av-kind">
+              <option value="design" data-i18n="avatars.kindDesign">Design from a description</option>
+              <option value="clone" data-i18n="avatars.kindClone">Clone from audio</option>
+            </select>
+          </label>
+          <div id="av-design-box">
+            <label><span data-i18n="avatars.prompt">Description</span>
+              <textarea id="av-prompt" rows="2" data-i18n-ph="avatars.promptPlaceholder" placeholder="e.g. warm, calm female voice, slight British accent"></textarea>
+            </label>
+          </div>
+          <div id="av-clone-box" hidden>
+            <label><span data-i18n="avatars.refAudio">Reference audio</span> <input id="av-ref" type="file" accept="audio/*" /></label>
+            <label><span data-i18n="avatars.refText">Reference transcript</span> <input id="av-reftext" type="text" /></label>
+          </div>
+          <label><span data-i18n="avatars.language">Language</span> <select id="av-lang"></select></label>
+          <label><span data-i18n="avatars.photo">Photo (optional)</span> <input id="av-photo" type="file" accept="image/*" /></label>
+          <button id="av-create" class="primary" data-i18n="avatars.createBtn">Create</button>
+          <div id="av-status" class="muted"></div>
+        </details>
+      </div>
     </div>
   </section>
 
@@ -86,7 +141,7 @@
           <label class="grow"><span data-i18n="stt.model">Model</span>
             <select id="stt-model-select"></select>
           </label>
-          <button id="stt-model-download" class="primary" data-i18n="stt.download">Download</button>
+          <button id="stt-model-download" class="primary" data-i18n="stt.load">Load</button>
           <button id="stt-model-stop" data-i18n="stt.stopDownload" hidden>Stop</button>
           <button id="stt-model-refresh" data-i18n="stt.refresh">Refresh</button>
         </div>
@@ -117,26 +172,22 @@
     </div>
   </section>
 
-  <!-- ------------------------------------------------------------- CHAT -->
-  <section id="tab-chat" class="tab">
-    <div class="grid">
-      <div class="card wide">
-        <h2 data-i18n="chat.title">Conversation (external LLM)</h2>
-        <div id="chat-log" class="transcript"></div>
-        <div class="row">
-          <input id="chat-input" type="text" data-i18n-ph="chat.placeholder" placeholder="Your message..." />
-          <button id="chat-mic" data-i18n-title="chat.dictate" title="Dictate via STT">🎤</button>
-          <button id="chat-send" class="primary" data-i18n="chat.send">Send</button>
-          <button id="chat-stop" data-i18n="chat.stop">Stop</button>
-        </div>
-        <label class="inline"><input id="chat-speak" type="checkbox" checked /> <span data-i18n="chat.speak">Speak the reply (TTS)</span></label>
-      </div>
-    </div>
-  </section>
-
   <!-- --------------------------------------------------------- SETTINGS -->
   <section id="tab-settings" class="tab">
     <div class="grid">
+      <div class="card wide">
+        <h2 data-i18n="settings.startupTitle">Startup</h2>
+        <div class="row">
+          <label class="grow"><span data-i18n="settings.startupStt">STT model to load</span>
+            <select id="set-startup-stt"></select>
+          </label>
+          <label class="grow"><span data-i18n="settings.startupVoice">Voice to load</span>
+            <select id="set-startup-voice"></select>
+          </label>
+        </div>
+        <button id="set-startup-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="set-startup-status" class="muted"></div>
+      </div>
       <div class="card">
         <h2 data-i18n="settings.llmTitle">External LLM</h2>
         <label><span data-i18n="settings.baseUrl">Base URL</span> <input id="set-llm-url" type="text" /></label>

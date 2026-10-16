@@ -42,6 +42,7 @@ class TTSRequest(BaseModel):
     instructions: Optional[str] = None
     ref_audio: Optional[str] = None
     ref_text: Optional[str] = None
+    avatar: Optional[str] = None
     x_vector_only_mode: bool = False
     stream: bool = False
     format: Optional[str] = None

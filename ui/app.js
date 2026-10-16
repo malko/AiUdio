@@ -29,6 +29,8 @@ function wsURL(path) {
   return `${proto}://${location.host}${path}${key ? `?api_key=${encodeURIComponent(key)}` : ""}`;
 }
 
+const fmtMB = (bytes) => ((bytes || 0) / (1024 * 1024)).toFixed(0);
+
 // ----------------------------------------------------------------- player PCM
 class PCMPlayer {
   constructor(sampleRate) {
@@ -66,30 +68,50 @@ class PCMPlayer {
   stop() { try { this.ctx.close(); } catch (e) { /* already closed */ } }
 }
 
+function downsampleTo16k(input, inRate) {
+  const ratio = inRate / 16000;
+  const outLen = Math.round(input.length / ratio);
+  const out = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const v = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)] || 0));
+    out[i] = v * 32767;
+  }
+  return out;
+}
+
 // --------------------------------------------------------------- global state
 let CONFIG = null;
 const TTS_SESSION = { format: "pcm", sample_rate: 24000 };
+let sttModels = [];
+let avatars = [];
+let speakers = [];
+let micDeviceId = "";
 
-// i18n: apply static labels + language switcher.
+// ---------------------------------------------------------------- tabs + i18n
 window.I18N.init();
 window.I18N.apply();
+
+function switchTab(name) {
+  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach((el) => el.classList.remove("active"));
+  const section = $(`#tab-${name}`);
+  if (section) section.classList.add("active");
+}
+
+document.querySelectorAll(".tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+});
+
 $("#lang-select").addEventListener("change", (e) => {
   window.I18N.setLang(e.target.value);
   if (CONFIG) {
     buildTtsFamilySelect();
+    buildChatVoiceSelect();
+    buildStartupVoiceSelect();
     updateSttModelDesc();
+    renderAvatars();
     loadMicDevices();
   }
-});
-
-// --------------------------------------------------------------------- tabs
-document.querySelectorAll(".tabs button").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
-    document.querySelectorAll(".tab").forEach((el) => el.classList.remove("active"));
-    btn.classList.add("active");
-    $(`#tab-${btn.dataset.tab}`).classList.add("active");
-  });
 });
 
 // ------------------------------------------------------------------ init app
@@ -106,63 +128,45 @@ async function init() {
   $("#health").className = "dot ok";
 
   buildTtsFamilySelect();
-  $("#tts-family").addEventListener("change", () => {
-    loadVoices();
-    updateTtsModelDesc();
-  });
+  $("#tts-family").addEventListener("change", () => { loadVoices(); updateTtsModelDesc(); });
 
   const lang = $("#tts-language");
   lang.innerHTML = "";
   (CONFIG.languages || ["Auto"]).forEach((l) => {
-    const o = document.createElement("option");
-    o.value = l; o.textContent = l; lang.appendChild(o);
+    const o = document.createElement("option"); o.value = l; o.textContent = l; lang.appendChild(o);
   });
 
-  $("#set-llm-url").value = CONFIG.llm.base_url || "";
-  $("#set-llm-model").value = CONFIG.llm.model || "";
-  $("#set-llm-system").value = CONFIG.llm.system_prompt || "";
-  $("#set-temp").value = CONFIG.generation.temperature;
-  $("#set-batch").value = CONFIG.generation.batch_size;
-  $("#set-maxchars").value = CONFIG.chunking.max_chars;
-  $("#set-apikey").value = apiKey();
+  const avLang = $("#av-lang");
+  avLang.innerHTML = "";
+  (CONFIG.languages || ["Auto"]).forEach((l) => {
+    const o = document.createElement("option"); o.value = l; o.textContent = l; avLang.appendChild(o);
+  });
+  avLang.value = "English";
+
+  applySettingsFields(CONFIG);
 
   await loadVoices();
-  loadSttModels();
-  loadMicDevices();
+  await loadSttModels();
+  await loadAvatars();
+  await buildChatVoiceSelect();
+  buildStartupVoiceSelect();
+  buildStartupSttSelect();
+  await loadMicDevices();
   refreshConfigModels();
   refreshStatus();
 }
 
-async function loadVoices() {
-  const family = $("#tts-family").value;
-  try {
-    const data = await getJSON(`/api/voices?family=${encodeURIComponent(family)}`);
-    const sel = $("#tts-speaker");
-    sel.innerHTML = "";
-    (data.speakers || []).forEach((s) => {
-      const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o);
-    });
-    if (!data.speakers || !data.speakers.length) {
-      const o = document.createElement("option"); o.value = ""; o.textContent = t("tts.defaultSpeaker"); sel.appendChild(o);
-    }
-  } catch (e) { /* ignore */ }
+function applySettingsFields(cfg) {
+  $("#set-llm-url").value = cfg.llm.base_url || "";
+  $("#set-llm-model").value = cfg.llm.model || "";
+  $("#set-llm-system").value = cfg.llm.system_prompt || "";
+  $("#set-temp").value = cfg.generation.temperature;
+  $("#set-batch").value = cfg.generation.batch_size;
+  $("#set-maxchars").value = cfg.chunking.max_chars;
+  $("#set-apikey").value = apiKey();
 }
 
-async function refreshStatus() {
-  try {
-    const h = await getJSON("/health");
-    $("#health").className = "dot ok";
-    $("#active-model").textContent = h.active_family
-      ? `${t("status.active")}: ${h.active_family}`
-      : t("status.noModel");
-  } catch (e) {
-    $("#health").className = "dot err";
-    $("#active-model").textContent = t("status.offline");
-  }
-}
-setInterval(refreshStatus, 15000);
-
-// ---------------------------------------------------------- TTS model choice
+// -------------------------------------------------------------- TTS model UI
 function tt(key, fallback) {
   const v = window.I18N.t(key);
   return v === key ? fallback : v;
@@ -195,14 +199,14 @@ async function refreshConfigModels() {
     CONFIG.models.families = data.families;
     buildTtsFamilySelect();
     const loaded = (data.loaded || []).map(ttsName).join(", ");
-    $("#tts-model-status").textContent = loaded
-      ? `${t("models.loaded")}: ${loaded}`
-      : t("models.notLoaded");
+    $("#tts-model-status").textContent = loaded ? `${t("models.loaded")}: ${loaded}` : t("models.notLoaded");
   } catch (e) { /* ignore */ }
 }
 
 $("#tts-load").addEventListener("click", async () => {
   const family = $("#tts-family").value;
+  const btn = $("#tts-load");
+  btn.disabled = true;
   $("#tts-model-status").textContent = t("models.loading");
   try {
     const r = await apiFetch("/api/models/load", {
@@ -210,15 +214,55 @@ $("#tts-load").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ family }),
     });
-    if (!r.ok) throw new Error(await r.text());
-    $("#tts-model-status").textContent = `${ttsName(family)} — ${t("models.loaded")}`;
-    await refreshConfigModels();
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text;
+      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      $("#tts-model-status").textContent = `${t("status.error")} ${detail}`;
+    } else {
+      $("#tts-model-status").textContent = `${ttsName(family)} — ${t("models.loaded")}`;
+    }
   } catch (e) {
     $("#tts-model-status").textContent = `${t("status.error")} ${e}`;
+  } finally {
+    btn.disabled = false;
+    await refreshConfigModels();
+    await loadVoices();
+    await buildChatVoiceSelect();
   }
 });
 
 $("#tts-refresh-models").addEventListener("click", refreshConfigModels);
+
+async function loadVoices() {
+  const family = $("#tts-family").value;
+  try {
+    const data = await getJSON(`/api/voices?family=${encodeURIComponent(family)}`);
+    speakers = data.speakers || [];
+    const sel = $("#tts-speaker");
+    sel.innerHTML = "";
+    speakers.forEach((s) => {
+      const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o);
+    });
+    if (!speakers.length) {
+      const o = document.createElement("option"); o.value = ""; o.textContent = t("tts.defaultSpeaker"); sel.appendChild(o);
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function refreshStatus() {
+  try {
+    const h = await getJSON("/health");
+    $("#health").className = "dot ok";
+    $("#active-model").textContent = h.active_family
+      ? `${t("status.active")}: ${ttsName(h.active_family)}`
+      : t("status.noModel");
+  } catch (e) {
+    $("#health").className = "dot err";
+    $("#active-model").textContent = t("status.offline");
+  }
+}
+setInterval(refreshStatus, 15000);
 
 // ------------------------------------------------------------------ TTS tab
 function ttsPayload(text) {
@@ -243,10 +287,10 @@ async function uploadReference() {
   if (!file) return null;
   const fd = new FormData();
   fd.append("file", file);
-  // Reuse the transcription proxy to prefill the reference transcript.
   try {
     const r = await apiFetch("/v1/audio/transcriptions", { method: "POST", body: fd });
-    if (r.ok) { const j = await r.json(); if (j.text) $("#tts-ref-text").value = j.text; }
+    const text = await r.text();
+    if (r.ok) { const j = JSON.parse(text); if (j.text) $("#tts-ref-text").value = j.text; }
   } catch (e) { /* STT may be disabled */ }
   return await fileToDataURL(file);
 }
@@ -271,16 +315,14 @@ $("#tts-go").addEventListener("click", async () => {
     const ref = await uploadReference();
     if (ref) payload.ref_audio = ref;
   }
-
   if (payload.stream) {
     ttsPlayer = ttsPlayer || new PCMPlayer(TTS_SESSION.sample_rate);
     ttsPlayer.reset();
     try {
       const r = await apiFetch("/api/tts", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
-      if (!r.ok) throw new Error(await r.text());
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
       const reader = r.body.getReader();
       const t0 = performance.now(); let bytes = 0;
       while (true) {
@@ -301,9 +343,8 @@ $("#tts-go").addEventListener("click", async () => {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(Object.assign({}, payload, { stream: false, format: "wav" })),
       });
-      if (!r.ok) throw new Error(await r.text());
-      const blob = await r.blob();
-      $("#tts-player").src = URL.createObjectURL(blob);
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      $("#tts-player").src = URL.createObjectURL(await r.blob());
       $("#tts-status").textContent = t("status.done");
     } catch (e) {
       $("#tts-status").textContent = t("status.error");
@@ -313,52 +354,336 @@ $("#tts-go").addEventListener("click", async () => {
   refreshStatus();
 });
 
-// ------------------------------------------------------------------ STT tab
-let micCtx = null, micStream = null, micNode = null, sttSocket = null;
-let sttFinal = "";
-let sttPartial = "";
-let micDeviceId = "";
+// ------------------------------------------------------------------ avatars
+async function loadAvatars() {
+  try {
+    const data = await getJSON("/api/avatars");
+    avatars = data.avatars || [];
+  } catch (e) {
+    avatars = [];
+  }
+  renderAvatars();
+}
 
+function renderAvatars() {
+  const list = $("#avatars-list");
+  list.innerHTML = "";
+  if (!avatars.length) {
+    const p = document.createElement("div");
+    p.className = "muted";
+    p.textContent = t("avatars.empty");
+    list.appendChild(p);
+    return;
+  }
+  avatars.forEach((a) => {
+    const card = document.createElement("div");
+    card.className = "avatar";
+    const img = document.createElement("div");
+    img.className = "avatar-photo";
+    if (a.has_photo) img.style.backgroundImage = `url('/api/avatars/${encodeURIComponent(a.id)}/photo')`;
+    card.appendChild(img);
+
+    const info = document.createElement("div");
+    info.className = "avatar-info";
+    const nm = document.createElement("strong");
+    nm.textContent = a.name;
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = a.kind === "clone" ? t("avatars.kindClone") : t("avatars.kindDesign");
+    info.appendChild(nm); info.appendChild(meta);
+    card.appendChild(info);
+
+    const actions = document.createElement("div");
+    actions.className = "avatar-actions";
+    const mk = (label, cls, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label; if (cls) b.className = cls;
+      b.addEventListener("click", fn);
+      return b;
+    };
+    actions.appendChild(mk(t("avatars.use"), "primary", () => {
+      buildChatVoiceSelect(a.id);
+      switchTab("chat");
+    }));
+    actions.appendChild(mk(t("avatars.preview"), "", () => window.open(`/api/avatars/${encodeURIComponent(a.id)}/audio`, "_blank")));
+    if (a.kind === "design") {
+      actions.appendChild(mk(t("avatars.editPrompt"), "", async () => {
+        const prompt = window.prompt(t("avatars.prompt"), a.prompt || "");
+        if (prompt === null) return;
+        const fd = new FormData(); fd.append("prompt", prompt),
+        fd.append("language", a.language || "English");
+        await apiFetch(`/api/avatars/${encodeURIComponent(a.id)}`, { method: "PUT", body: fd });
+        await regenerateAvatar(a.id);
+      }));
+      actions.appendChild(mk(t("avatars.regenerate"), "", () => regenerateAvatar(a.id)));
+    }
+    actions.appendChild(mk(t("avatars.rename"), "", async () => {
+      const name = window.prompt(t("avatars.name"), a.name);
+      if (!name) return;
+      const fd = new FormData(); fd.append("name", name);
+      await apiFetch(`/api/avatars/${encodeURIComponent(a.id)}`, { method: "PUT", body: fd });
+      await loadAvatars();
+    }));
+    actions.appendChild(mk(t("avatars.delete"), "", async () => {
+      if (!window.confirm(`${t("avatars.delete")} "${a.name}"?`)) return;
+      await apiFetch(`/api/avatars/${encodeURIComponent(a.id)}`, { method: "DELETE" });
+      await loadAvatars(); await buildChatVoiceSelect(); buildStartupVoiceSelect();
+    }));
+    card.appendChild(actions);
+    list.appendChild(card);
+  });
+}
+
+async function regenerateAvatar(id) {
+  $("#av-status").textContent = "…";
+  try {
+    const r = await apiFetch(`/api/avatars/${encodeURIComponent(id)}/regenerate`, { method: "POST" });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+    $("#av-status").textContent = t("status.done");
+    await loadAvatars();
+  } catch (e) {
+    $("#av-status").textContent = `${t("status.error")} ${e}`;
+  }
+}
+
+$("#av-kind").addEventListener("change", () => {
+  const clone = $("#av-kind").value === "clone";
+  $("#av-design-box").hidden = clone;
+  $("#av-clone-box").hidden = !clone;
+});
+
+$("#av-create").addEventListener("click", async () => {
+  const name = $("#av-name").value.trim();
+  if (!name) { $("#av-status").textContent = t("avatars.name"); return; }
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("kind", $("#av-kind").value);
+  fd.append("language", $("#av-lang").value);
+  fd.append("prompt", $("#av-prompt").value);
+  fd.append("ref_text", $("#av-reftext").value);
+  if ($("#av-ref").files[0]) fd.append("ref_audio", $("#av-ref").files[0]);
+  if ($("#av-photo").files[0]) fd.append("image", $("#av-photo").files[0]);
+
+  const btn = $("#av-create");
+  btn.disabled = true;
+  $("#av-status").textContent = t("models.loading");
+  try {
+    const r = await apiFetch("/api/avatars", { method: "POST", body: fd });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text;
+      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    $("#av-status").textContent = t("status.saved");
+    $("#av-name").value = ""; $("#av-prompt").value = ""; $("#av-reftext").value = "";
+    $("#av-ref").value = ""; $("#av-photo").value = "";
+    await loadAvatars();
+    buildStartupVoiceSelect();
+  } catch (e) {
+    $("#av-status").textContent = `${t("status.error")} ${e}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// --------------------------------------------------- chat voice/STT selectors
+function voiceLabel(a) {
+  return a.kind === "clone" ? `${a.name}` : a.name;
+}
+
+async function buildChatVoiceSelect(preferAvatar) {
+  try { speakers = (await getJSON("/api/voices?family=custom_voice")).speakers || []; } catch (e) { /* ignore */ }
+  try { avatars = (await getJSON("/api/avatars")).avatars || []; } catch (e) { /* ignore */ }
+  const sel = $("#chat-voice");
+  const prev = preferAvatar ? `av:${preferAvatar}` : sel.value;
+  sel.innerHTML = "";
+  const add = (value, label) => {
+    const o = document.createElement("option"); o.value = value; o.textContent = label; sel.appendChild(o);
+  };
+  add("cv:", t("chat.voiceDefault"));
+  speakers.forEach((s) => add(`cv:${s}`, `${t("chat.voicePreset")}: ${s}`));
+  avatars.forEach((a) => add(`av:${a.id}`, `${t("avatars.voicePrefix")}: ${voiceLabel(a)}`));
+  add("vd:", t("chat.voiceDesign"));
+  if (prev) sel.value = prev;
+  if (!sel.value) sel.value = "cv:";
+  renderAvatars();
+}
+
+function voiceConfig() {
+  const v = $("#chat-voice").value || "cv:";
+  if (v.startsWith("av:")) return { avatar: v.slice(3) };
+  if (v.startsWith("vd:")) return { family: "voice_design", instruct: $("#tts-instruct").value || undefined };
+  if (v.startsWith("cv:")) return { family: "custom_voice", speaker: v.slice(3) || undefined };
+  return { family: "custom_voice" };
+}
+
+async function buildChatSttSelect() {
+  const sel = $("#chat-stt");
+  sel.innerHTML = "";
+  const o = document.createElement("option");
+  o.value = "";
+  o.textContent = sttModels.length ? "—" : t("stt.indexUnavailable");
+  sel.appendChild(o);
+  sttModels.forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m.repo;
+    opt.textContent = `${m.filename || m.repo}${m.cached ? "" : ` (${fmtMB(m.size)} ${t("stt.sizeMb")})`}`;
+    sel.appendChild(opt);
+  });
+}
+$("#chat-stt").addEventListener("change", async (e) => {
+  const repo = e.target.value;
+  if (!repo) return;
+  await downloadSttModel(repo);
+});
+
+$("#chat-voice-refresh").addEventListener("click", () => buildChatVoiceSelect());
+
+// ------------------------------------------------------------------ STT tab
+async function loadSttModels() {
+  const status = $("#stt-model-status");
+  const sel = $("#stt-model-select");
+  try {
+    const data = await getJSON("/api/stt/models");
+    if (!data.available) {
+      sel.innerHTML = "";
+      status.textContent = t("stt.indexUnavailable");
+      await buildChatSttSelect();
+      return;
+    }
+    sttModels = data.models || [];
+    sel.innerHTML = "";
+    sttModels.forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.repo;
+      const tag = m.cached ? t("stt.cached") : t("stt.notCached");
+      o.textContent = `${m.repo} — ${fmtMB(m.size)} ${t("stt.sizeMb")} [${tag}]`;
+      sel.appendChild(o);
+    });
+    updateSttModelDesc();
+    updateSttButtonLabel();
+    await buildChatSttSelect();
+    buildStartupSttSelect();
+    await refreshSttServiceStatus();
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+}
+
+function updateSttButtonLabel() {
+  const repo = $("#stt-model-select").value;
+  const m = sttModels.find((x) => x.repo === repo);
+  $("#stt-model-download").textContent = m && m.cached ? t("stt.load") : t("stt.download");
+}
+
+function sttModelDesc(m) {
+  const id = `${m.repo} ${(m.aliases || []).join(" ")}`.toLowerCase();
+  if (id.includes("nemotron-3.5")) return t("stt.desc.nemotron3_5");
+  if (id.includes("parakeet-tdt")) return t("stt.desc.parakeet_v3");
+  if (id.includes("nemotron-speech-streaming-en")) return t("stt.desc.nemotron_en");
+  return t("stt.desc.generic");
+}
+
+function updateSttModelDesc() {
+  const repo = $("#stt-model-select").value;
+  const m = sttModels.find((x) => x.repo === repo);
+  $("#stt-model-desc").textContent = m ? sttModelDesc(m) : "";
+}
+
+$("#stt-model-select").addEventListener("change", () => { updateSttModelDesc(); updateSttButtonLabel(); });
+
+async function refreshSttServiceStatus() {
+  const status = $("#stt-model-status");
+  try {
+    const h = await getJSON("/api/stt/health");
+    if (h.enabled && h.error) status.textContent = t("stt.serviceNotReady");
+  } catch (e) {
+    status.textContent = t("stt.serviceNotReady");
+  }
+}
+
+let sttDownloadAbort = null;
+
+async function downloadSttModel(repo) {
+  const status = $("#stt-model-status");
+  const bar = $("#stt-model-progress");
+  const dlBtn = $("#stt-model-download");
+  const stopBtn = $("#stt-model-stop");
+  bar.hidden = false; bar.value = 0;
+  status.textContent = `${t("stt.downloading")}…`;
+  sttDownloadAbort = new AbortController();
+  dlBtn.disabled = true; stopBtn.hidden = false;
+  try {
+    const r = await apiFetch("/api/stt/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: repo }),
+      signal: sttDownloadAbort.signal,
+    });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data:\s*/, "").trim();
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+        if (ev.status === "downloading" || ev.status === "cached") {
+          if (ev.total) bar.value = Math.round((ev.downloaded / ev.total) * 100);
+          status.textContent = `${t("stt.downloading")} ${fmtMB(ev.downloaded)} / ${fmtMB(ev.total)} ${t("stt.sizeMb")}`;
+        } else if (ev.status === "done") {
+          bar.value = 100; status.textContent = t("stt.downloadedMsg");
+        } else if (ev.status === "error") {
+          status.textContent = `${t("status.error")} ${ev.message}`;
+        }
+      }
+    }
+    await loadSttModels();
+  } catch (e) {
+    status.textContent = e.name === "AbortError" ? t("stt.cancelled") : `${t("status.error")} ${e}`;
+  } finally {
+    sttDownloadAbort = null; dlBtn.disabled = false; stopBtn.hidden = true;
+  }
+}
+
+$("#stt-model-download").addEventListener("click", () => {
+  const repo = $("#stt-model-select").value;
+  if (repo) downloadSttModel(repo);
+});
+$("#stt-model-stop").addEventListener("click", () => { if (sttDownloadAbort) sttDownloadAbort.abort(); });
+$("#stt-model-refresh").addEventListener("click", loadSttModels);
+
+// mic device
 async function loadMicDevices() {
   const sel = $("#stt-mic-device");
   if (!sel) return;
   const keep = sel.value || micDeviceId;
   sel.innerHTML = "";
   const def = document.createElement("option");
-  def.value = "";
-  def.textContent = t("stt.defaultMic");
-  sel.appendChild(def);
+  def.value = ""; def.textContent = t("stt.defaultMic"); sel.appendChild(def);
   if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      devices
-        .filter((d) => d.kind === "audioinput")
-        .forEach((d, i) => {
-          const o = document.createElement("option");
-          o.value = d.deviceId;
-          o.textContent = d.label || `Microphone ${i + 1}`;
-          sel.appendChild(o);
-        });
-    } catch (e) { /* permission not granted yet */ }
+      devices.filter((d) => d.kind === "audioinput").forEach((d, i) => {
+        const o = document.createElement("option");
+        o.value = d.deviceId; o.textContent = d.label || `Microphone ${i + 1}`; sel.appendChild(o);
+      });
+    } catch (e) { /* permission not granted */ }
   }
   sel.value = keep || "";
   micDeviceId = sel.value;
 }
+$("#stt-mic-device").addEventListener("change", (e) => { micDeviceId = e.target.value; });
 
-$("#stt-mic-device").addEventListener("change", (e) => {
-  micDeviceId = e.target.value;
-});
-
-function downsampleTo16k(input, inRate) {
-  const ratio = inRate / 16000;
-  const outLen = Math.round(input.length / ratio);
-  const out = new Int16Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const v = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)] || 0));
-    out[i] = v * 32767;
-  }
-  return out;
-}
+// STT microphone
+let micCtx = null, micStream = null, micNode = null, sttSocket = null, sttFinal = "", sttPartial = "";
 
 $("#stt-record").addEventListener("click", async () => {
   const btn = $("#stt-record");
@@ -370,7 +695,7 @@ $("#stt-record").addEventListener("click", async () => {
   try {
     const audio = micDeviceId ? { deviceId: { exact: micDeviceId } } : true;
     micStream = await navigator.mediaDevices.getUserMedia({ audio });
-    loadMicDevices();  // labels become available once permission is granted
+    loadMicDevices();
     micCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = micCtx.createMediaStreamSource(micStream);
     micNode = micCtx.createScriptProcessor(4096, 1, 1);
@@ -382,8 +707,7 @@ $("#stt-record").addEventListener("click", async () => {
     sttSocket.onopen = () => {
       sttSocket.send(JSON.stringify({
         type: "session.update",
-        session: { sample_rate: 16000, language: $("#stt-lang").value || undefined,
-                   automatic_punctuation: true },
+        session: { sample_rate: 16000, language: $("#stt-lang").value || undefined, automatic_punctuation: true },
       }));
       $("#stt-status").textContent = t("stt.recording");
       btn.textContent = t("stt.stop");
@@ -393,8 +717,6 @@ $("#stt-record").addEventListener("click", async () => {
       if (typeof ev.data !== "string") return;
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.type && msg.type.includes("delta")) {
-        // Upstream 'delta' is incremental -> accumulate; otherwise each partial
-        // (often a single word) would replace the previous one on screen.
         sttPartial += (msg.delta || "");
         $("#stt-text").textContent = sttFinal + sttPartial;
       } else if (msg.type && msg.type.includes("completed")) {
@@ -408,15 +730,11 @@ $("#stt-record").addEventListener("click", async () => {
     sttSocket.onerror = () => { $("#stt-status").textContent = t("stt.serviceNotReady"); };
     sttSocket.onclose = (ev) => {
       stopMic();
-      if (ev && ev.code !== 1000 && ev.code !== 4401) {
-        $("#stt-status").textContent = t("stt.serviceNotReady");
-      }
+      if (ev && ev.code !== 1000 && ev.code !== 4401) $("#stt-status").textContent = t("stt.serviceNotReady");
     };
-
     micNode.onaudioprocess = (e) => {
       if (!sttSocket || sttSocket.readyState !== 1) return;
-      const pcm = downsampleTo16k(e.inputBuffer.getChannelData(0), micCtx.sampleRate);
-      sttSocket.send(pcm.buffer);
+      sttSocket.send(downsampleTo16k(e.inputBuffer.getChannelData(0), micCtx.sampleRate).buffer);
     };
     source.connect(micNode);
     micNode.connect(micCtx.destination);
@@ -448,138 +766,16 @@ $("#stt-upload").addEventListener("click", async () => {
   try {
     const r = await apiFetch("/v1/audio/transcriptions", { method: "POST", body: fd });
     const text = await r.text();
-    let data;
+    let data = null;
     try { data = JSON.parse(text); } catch (e) { data = null; }
     if (!r.ok || data === null) {
       $("#stt-file-out").textContent = `${t("status.error")} ${(data && data.detail) || text || r.status}`;
       return;
     }
-    $("#stt-file-out").textContent = JSON.stringify(
-      data.words ? { text: data.text, words: data.words } : data, null, 2);
+    $("#stt-file-out").textContent = JSON.stringify(data.words ? { text: data.text, words: data.words } : data, null, 2);
   } catch (e) {
     $("#stt-file-out").textContent = `${t("status.error")} ${e}`;
   }
-});
-
-// STT models (on demand download)
-let sttModels = [];
-const fmtMB = (bytes) => ((bytes || 0) / (1024 * 1024)).toFixed(0);
-
-function sttModelDesc(m) {
-  const id = `${m.repo} ${(m.aliases || []).join(" ")}`.toLowerCase();
-  if (id.includes("nemotron-3.5")) return t("stt.desc.nemotron3_5");
-  if (id.includes("parakeet-tdt")) return t("stt.desc.parakeet_v3");
-  if (id.includes("nemotron-speech-streaming-en")) return t("stt.desc.nemotron_en");
-  return t("stt.desc.generic");
-}
-
-function updateSttModelDesc() {
-  const repo = $("#stt-model-select").value;
-  const m = sttModels.find((x) => x.repo === repo);
-  $("#stt-model-desc").textContent = m ? sttModelDesc(m) : "";
-}
-
-$("#stt-model-select").addEventListener("change", updateSttModelDesc);
-
-async function loadSttModels() {
-  const status = $("#stt-model-status");
-  const sel = $("#stt-model-select");
-  try {
-    const data = await getJSON("/api/stt/models");
-    if (!data.available) {
-      sel.innerHTML = "";
-      status.textContent = t("stt.indexUnavailable");
-      return;
-    }
-    sttModels = data.models || [];
-    sel.innerHTML = "";
-    sttModels.forEach((m) => {
-      const o = document.createElement("option");
-      o.value = m.repo;
-      const tag = m.cached ? t("stt.cached") : t("stt.notCached");
-      o.textContent = `${m.repo} — ${fmtMB(m.size)} ${t("stt.sizeMb")} [${tag}]`;
-      sel.appendChild(o);
-    });
-    updateSttModelDesc();
-    await refreshSttServiceStatus();
-  } catch (e) {
-    status.textContent = `${t("status.error")} ${e}`;
-  }
-}
-
-async function refreshSttServiceStatus() {
-  const status = $("#stt-model-status");
-  try {
-    const h = await getJSON("/api/stt/health");
-    if (h.enabled && h.error) status.textContent = t("stt.serviceNotReady");
-  } catch (e) {
-    status.textContent = t("stt.serviceNotReady");
-  }
-}
-
-$("#stt-model-refresh").addEventListener("click", loadSttModels);
-
-let sttDownloadAbort = null;
-
-$("#stt-model-download").addEventListener("click", async () => {
-  const repo = $("#stt-model-select").value;
-  if (!repo) return;
-  const status = $("#stt-model-status");
-  const bar = $("#stt-model-progress");
-  const dlBtn = $("#stt-model-download");
-  const stopBtn = $("#stt-model-stop");
-  bar.hidden = false;
-  bar.value = 0;
-  status.textContent = `${t("stt.downloading")}…`;
-  sttDownloadAbort = new AbortController();
-  dlBtn.disabled = true;
-  stopBtn.hidden = false;
-  try {
-    const r = await apiFetch("/api/stt/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: repo }),
-      signal: sttDownloadAbort.signal,
-    });
-    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const parts = buf.split("\n\n");
-      buf = parts.pop();
-      for (const part of parts) {
-        const line = part.replace(/^data:\s*/, "").trim();
-        if (!line) continue;
-        let ev;
-        try { ev = JSON.parse(line); } catch (e) { continue; }
-        if (ev.status === "downloading" || ev.status === "cached") {
-          if (ev.total) bar.value = Math.round((ev.downloaded / ev.total) * 100);
-          status.textContent =
-            `${t("stt.downloading")} ${fmtMB(ev.downloaded)} / ${fmtMB(ev.total)} ${t("stt.sizeMb")}`;
-        } else if (ev.status === "done") {
-          bar.value = 100;
-          status.textContent = t("stt.downloadedMsg");
-        } else if (ev.status === "error") {
-          status.textContent = `${t("status.error")} ${ev.message}`;
-        }
-      }
-    }
-    await loadSttModels();
-  } catch (e) {
-    status.textContent = e.name === "AbortError" ? t("stt.cancelled") : `${t("status.error")} ${e}`;
-  } finally {
-    sttDownloadAbort = null;
-    dlBtn.disabled = false;
-    stopBtn.hidden = true;
-  }
-});
-
-$("#stt-model-stop").addEventListener("click", () => {
-  if (sttDownloadAbort) sttDownloadAbort.abort();
 });
 
 // ----------------------------------------------------------------- chat tab
@@ -602,13 +798,11 @@ function chatConfig() {
   return {
     type: "session.config",
     speak: $("#chat-speak").checked,
-    tts: {
-      family: $("#tts-family").value,
+    tts: Object.assign({
       language: $("#tts-language").value,
-      speaker: $("#tts-speaker").value,
       format: "pcm",
       chunking: true,
-    },
+    }, voiceConfig()),
   };
 }
 
@@ -617,11 +811,7 @@ function ensureChatSocket() {
   return new Promise((resolve, reject) => {
     const sock = new WebSocket(wsURL("/ws/chat"));
     sock.binaryType = "arraybuffer";
-    sock.onopen = () => {
-      chatSocket = sock;
-      sock.send(JSON.stringify(chatConfig()));
-      resolve(sock);
-    };
+    sock.onopen = () => { chatSocket = sock; sock.send(JSON.stringify(chatConfig())); resolve(sock); };
     sock.onerror = () => reject(new Error("connection failed"));
     sock.onclose = () => { chatSocket = null; };
   });
@@ -634,6 +824,7 @@ async function chatSend() {
   input.value = "";
   appendTurn("user", text);
   currentAssistant = appendTurn("assistant", "");
+  $("#chat-status").textContent = "";
   try {
     const sock = await ensureChatSocket();
     sock.onmessage = (ev) => {
@@ -641,41 +832,38 @@ async function chatSend() {
         if (chatPlayer && $("#chat-speak").checked) chatPlayer.pushBytes(new Uint8Array(ev.data));
         return;
       }
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.type === "llm.delta") {
         if (currentAssistant) currentAssistant.textContent += msg.text;
       } else if (msg.type === "audio.start") {
-        // Do NOT reset here: the player queues sentences back-to-back. Resetting
-        // per sentence made them restart at "now", overlapping each other.
         if (!chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
       } else if (msg.type === "llm.done") {
         currentAssistant = null;
       } else if (msg.type === "error") {
         if (currentAssistant) currentAssistant.textContent += ` [error: ${msg.message}]`;
+        $("#chat-status").textContent = msg.message;
       }
     };
-    sock.send(JSON.stringify(chatConfig()));  // keep speak/voice up to date
+    sock.send(JSON.stringify(chatConfig()));
     sock.send(JSON.stringify({ type: "input.text", text }));
   } catch (e) {
     currentAssistant.textContent = `${t("status.error")} ${e}`;
     currentAssistant = null;
+    $("#chat-status").textContent = `${t("status.error")} ${e}`;
   }
 }
 
 $("#chat-send").addEventListener("click", chatSend);
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") chatSend(); });
-$("#chat-stop").addEventListener("click", () => {
-  if (chatPlayer) { chatPlayer.stop(); chatPlayer = null; }
-});
+$("#chat-stop").addEventListener("click", () => { if (chatPlayer) { chatPlayer.stop(); chatPlayer = null; } });
 
-// Chat dictation: microphone -> STT -> chat input (uses the STT tab microphone).
+// Chat dictation
 let dictateActive = false, dictateCtx = null, dictateStream = null, dictateNode = null;
 let dictateSocket = null, dictateText = "", dictatePartial = "", dictateTimer = null;
 
 async function startDictation() {
   if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    appendTurn("assistant", t("stt.micInsecure"));
+    $("#chat-status").textContent = t("stt.micInsecure");
     return;
   }
   try {
@@ -686,27 +874,18 @@ async function startDictation() {
     dictateNode = dictateCtx.createScriptProcessor(4096, 1, 1);
     dictateSocket = new WebSocket(wsURL("/ws/stt"));
     dictateSocket.binaryType = "arraybuffer";
-    dictateText = "";
-    dictatePartial = "";
+    dictateText = ""; dictatePartial = "";
     dictateSocket.onopen = () => {
       dictateSocket.send(JSON.stringify({
         type: "session.update",
-        session: {
-          sample_rate: 16000,
-          language: $("#stt-lang").value || undefined,
-          automatic_punctuation: true,
-        },
+        session: { sample_rate: 16000, language: $("#stt-lang").value || undefined, automatic_punctuation: true },
       }));
     };
     dictateSocket.onmessage = (ev) => {
       if (typeof ev.data !== "string") return;
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      if (msg.type && msg.type.includes("delta")) {
-        dictatePartial += (msg.delta || "");
-      } else if (msg.type && msg.type.includes("completed")) {
-        dictateText += (msg.transcript || "") + " ";
-        dictatePartial = "";
-      }
+      if (msg.type && msg.type.includes("delta")) dictatePartial += (msg.delta || "");
+      else if (msg.type && msg.type.includes("completed")) { dictateText += (msg.transcript || "") + " "; dictatePartial = ""; }
     };
     dictateSocket.onclose = () => { if (dictateActive) finishDictation(); };
     dictateNode.onaudioprocess = (e) => {
@@ -718,7 +897,7 @@ async function startDictation() {
     dictateActive = true;
     $("#chat-mic").textContent = "⏹";
   } catch (e) {
-    appendTurn("assistant", `${t("status.error")} ${e}`);
+    $("#chat-status").textContent = `${t("status.error")} ${e}`;
   }
 }
 
@@ -730,26 +909,68 @@ function finishDictation() {
   dictateActive = false;
   $("#chat-mic").textContent = "🎤";
   const text = (dictateText + dictatePartial).trim();
-  if (text) {
-    $("#chat-input").value = text;
-    chatSend();
-  }
+  if (text) { $("#chat-input").value = text; chatSend(); }
 }
 
 function stopDictation() {
   if (dictateSocket && dictateSocket.readyState === 1) {
     try { dictateSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" })); } catch (e) { /* ignore */ }
   }
-  // Let the server emit the final transcript, then finish.
   clearTimeout(dictateTimer);
   dictateTimer = setTimeout(finishDictation, 900);
 }
 
-$("#chat-mic").addEventListener("click", () => {
-  if (dictateActive) stopDictation(); else startDictation();
-});
+$("#chat-mic").addEventListener("click", () => { if (dictateActive) stopDictation(); else startDictation(); });
 
 // ------------------------------------------------------------- settings tab
+function buildStartupVoiceSelect() {
+  const sel = $("#set-startup-voice");
+  if (!sel) return;
+  const current = sel.value || (CONFIG ? CONFIG.startup.voice : "");
+  sel.innerHTML = "";
+  const add = (value, label) => {
+    const o = document.createElement("option"); o.value = value; o.textContent = label; sel.appendChild(o);
+  };
+  add("", "—");
+  add("custom_voice", ttsName("custom_voice"));
+  add("voice_design", ttsName("voice_design"));
+  add("base", ttsName("base"));
+  avatars.forEach((a) => add(`avatar:${a.id}`, `${t("avatars.voicePrefix")}: ${a.name}`));
+  sel.value = current || "";
+}
+
+function buildStartupSttSelect() {
+  const sel = $("#set-startup-stt");
+  if (!sel) return;
+  const current = sel.value || (CONFIG ? CONFIG.startup.stt_model : "");
+  sel.innerHTML = "";
+  const add = (value, label) => {
+    const o = document.createElement("option"); o.value = value; o.textContent = label; sel.appendChild(o);
+  };
+  add("", "—");
+  sttModels.forEach((m) => add(m.filename || m.repo, m.filename || m.repo));
+  sel.value = current || "";
+}
+
+$("#set-startup-save").addEventListener("click", async () => {
+  $("#set-startup-status").textContent = "…";
+  try {
+    const r = await apiFetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startup: { stt_model: $("#set-startup-stt").value, voice: $("#set-startup-voice").value } }),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    $("#set-startup-status").textContent = t("status.saved");
+  } catch (e) {
+    $("#set-startup-status").textContent = `${t("status.error")} ${e}`;
+  }
+});
+
 async function saveSettings() {
   const num = (sel, parse) => {
     const v = parse($(sel).value);
@@ -762,7 +983,6 @@ async function saveSettings() {
   };
   const key = $("#set-llm-key").value;
   if (key) llm.api_key = key;
-
   const payload = { llm, generation: {}, chunking: {} };
   const temp = num("#set-temp", parseFloat);
   if (temp !== undefined) payload.generation.temperature = temp;
@@ -770,25 +990,18 @@ async function saveSettings() {
   if (batch !== undefined) payload.generation.batch_size = batch;
   const maxc = num("#set-maxchars", (v) => parseInt(v, 10));
   if (maxc !== undefined) payload.chunking.max_chars = maxc;
-
   try {
     const r = await apiFetch("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text;
-      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep text */ }
+      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
       return { ok: false, detail };
     }
-    let cfg = null;
-    try { cfg = JSON.parse(text); } catch (e) { /* ignore */ }
+    let cfg = null; try { cfg = JSON.parse(text); } catch (e) { /* ignore */ }
     if (cfg && cfg.llm) {
-      CONFIG = Object.assign({}, CONFIG, {
-        llm: cfg.llm, generation: cfg.generation, chunking: cfg.chunking,
-      });
+      CONFIG = Object.assign({}, CONFIG, { llm: cfg.llm, generation: cfg.generation, chunking: cfg.chunking });
       $("#set-llm-url").value = cfg.llm.base_url || "";
       $("#set-llm-model").value = cfg.llm.model || "";
       $("#set-llm-system").value = cfg.llm.system_prompt || "";
@@ -803,18 +1016,13 @@ async function saveSettings() {
 $("#set-save").addEventListener("click", async () => {
   $("#set-save-status").textContent = "…";
   const res = await saveSettings();
-  $("#set-save-status").textContent = res.ok
-    ? t("status.saved")
-    : `${t("status.error")} ${res.detail}`;
+  $("#set-save-status").textContent = res.ok ? t("status.saved") : `${t("status.error")} ${res.detail}`;
 });
 
 $("#set-llm-ping").addEventListener("click", async () => {
   $("#set-llm-status").textContent = t("status.testing");
   const res = await saveSettings();
-  if (!res.ok) {
-    $("#set-llm-status").textContent = `${t("status.error")} ${res.detail}`;
-    return;
-  }
+  if (!res.ok) { $("#set-llm-status").textContent = `${t("status.error")} ${res.detail}`; return; }
   try {
     const r = await getJSON("/api/llm/ping");
     $("#set-llm-status").textContent = r.ok ? `OK (${r.url})` : `${t("status.error")} ${r.error || r.status}`;
