@@ -640,8 +640,9 @@ async function chatSend() {
       if (msg.type === "llm.delta") {
         if (currentAssistant) currentAssistant.textContent += msg.text;
       } else if (msg.type === "audio.start") {
+        // Do NOT reset here: the player queues sentences back-to-back. Resetting
+        // per sentence made them restart at "now", overlapping each other.
         if (!chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
-        chatPlayer.reset();
       } else if (msg.type === "llm.done") {
         currentAssistant = null;
       } else if (msg.type === "error") {

@@ -587,41 +587,63 @@ async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages, 
 
     req = TTSRequest(**{k: v for k, v in (tts_config or {}).items() if k in TTSRequest.model_fields})
     sentence_re = re.compile(r"(?<=[.!?…])\s+")
-    buffer = ""
+    send_lock = asyncio.Lock()
+    queue: asyncio.Queue = asyncio.Queue()
     reply = ""
+    buffer = ""
     index = 0
 
-    async def flush(sentence: str) -> None:
-        nonlocal index
-        sentence = sentence.strip()
-        if not speak or not sentence:
-            return
-        try:
-            async for _, pcm, sr in _stream_pcm(settings, scheduler, req, sentence):
-                await websocket.send_json({
-                    "type": "audio.start", "sentence_index": index,
-                    "sentence_text": sentence, "format": "pcm", "sample_rate": sr,
-                })
-                await websocket.send_bytes(pcm)
-                await websocket.send_json({
-                    "type": "audio.done", "sentence_index": index, "total_bytes": len(pcm),
-                })
-                index += 1
-        except Exception as exc:  # TTS failure must not break the text conversation
-            await websocket.send_json({"type": "error", "message": f"TTS: {exc}"})
+    async def send_json(obj: Dict[str, Any]) -> None:
+        async with send_lock:
+            await websocket.send_json(obj)
 
-    async for token in llm.stream(messages):
-        reply += token
-        await websocket.send_json({"type": "llm.delta", "text": token})
-        if speak:
-            buffer += token
-            parts = sentence_re.split(buffer)
-            if len(parts) > 1:
-                buffer = parts[-1]
-                for sentence in parts[:-1]:
-                    await flush(sentence)
-    if speak and buffer.strip():
-        await flush(buffer)
+    async def tts_worker() -> None:
+        """Synthesize queued sentences without blocking the LLM token stream."""
+        nonlocal index
+        while True:
+            sentence = await queue.get()
+            if sentence is None:
+                return
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            try:
+                async for _, pcm, sr in _stream_pcm(settings, scheduler, req, sentence):
+                    # Keep start/pcm/done atomic so concurrent deltas cannot interleave.
+                    async with send_lock:
+                        await websocket.send_json({
+                            "type": "audio.start", "sentence_index": index,
+                            "sentence_text": sentence, "format": "pcm", "sample_rate": sr,
+                        })
+                        await websocket.send_bytes(pcm)
+                        await websocket.send_json({
+                            "type": "audio.done", "sentence_index": index, "total_bytes": len(pcm),
+                        })
+                    index += 1
+            except Exception as exc:  # TTS failure must not break the text conversation
+                await send_json({"type": "error", "message": f"TTS: {exc}"})
+
+    worker = asyncio.create_task(tts_worker()) if speak else None
+    try:
+        async for token in llm.stream(messages):
+            reply += token
+            await send_json({"type": "llm.delta", "text": token})
+            if speak:
+                buffer += token
+                parts = sentence_re.split(buffer)
+                if len(parts) > 1:
+                    buffer = parts[-1]
+                    for sentence in parts[:-1]:
+                        await queue.put(sentence)
+        if speak and worker is not None:
+            if buffer.strip():
+                await queue.put(buffer)
+            await queue.put(None)
+            await worker
+    except Exception:
+        if worker is not None and not worker.done():
+            worker.cancel()
+        raise
     return reply
 
 

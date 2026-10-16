@@ -1,35 +1,27 @@
-## Runtime configuration for the AiUdio Server.
-## Mounted into the container (/app/config.yaml) and editable from the UI.
-## Environment variables documented in .env.example can override some fields at
-## startup (see app/config.py).
-
 server:
   host: 0.0.0.0
   port: 8004
-  cors_origins: ["*"]
+  cors_origins:
+  - '*'
   log_level: info
-
 paths:
   output: outputs
   voices: voices
   reference_audio: reference_audio
   logs: logs
-
 models:
-  # Registry: family -> Hugging Face repo (or local path).
   registry:
     custom_voice: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
     voice_design: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
     base: Qwen/Qwen3-TTS-12Hz-1.7B-Base
   default_family: custom_voice
-  # single = one model in VRAM (hot-swap); multi = keep `resident` loaded.
   residency: single
-  resident: [custom_voice]
-  device: auto                 # auto | cuda:0 | cpu ...
-  dtype: bfloat16              # bfloat16 | float16 | float32
-  attn_implementation: sdpa    # sdpa | flash_attention_2
+  resident:
+  - custom_voice
+  device: auto
+  dtype: bfloat16
+  attn_implementation: sdpa
   hf_home: /app/hf_cache
-
 generation:
   temperature: 0.9
   top_k: 50
@@ -39,52 +31,48 @@ generation:
   subtalker_temperature: 0.9
   subtalker_top_k: 50
   subtalker_top_p: 1.0
-  # Micro-batching (throughput): requests grouped by family within a short window.
   batch_size: 4
   batch_window_ms: 25
-
 chunking:
   enabled: true
   max_chars: 240
   silence_ms: 120
-
 audio:
-  format: wav                  # wav | pcm
+  format: wav
   sample_rate: 24000
-  # Reference-audio security (voice cloning). Keep false unless you trust all
-  # API clients: true enables remote URLs (SSRF) / local filesystem paths.
   allow_remote_media: false
   allow_local_ref_paths: false
-
 stt:
   enabled: true
   base_url: http://stt:8080
   transcribe_path: /v1/audio/transcriptions
   realtime_path: /v1/audio/transcriptions/realtime
   diarize_path: /v1/audio/diarizations
-  api_key: ""
-  # On-demand model management (paths are inside the shared 'hf_cache' volume).
-  # model_index defaults to the vendored app/data/nemo-speech-model-index.json.
+  api_key: ''
+  model_index: /app/app/data/nemo-speech-model-index.json
   models_dir: /app/hf_cache/nemo-speech/models
   hf_base_url: https://huggingface.co
-
 llm:
-  base_url: http://host.docker.internal:8080/v1
-  api_key: ""
-  model: ""
-  system_prompt: >-
-    You are a helpful voice assistant. Answer concisely, in complete
+  base_url: http://llama.desk.home/v1
+  api_key: testing
+  model: Qwen3.8-27B-GSQ-RCO-IQ3_S
+  system_prompt: You are a helpful voice assistant. Answer concisely, in complete
     sentences, in the language of the user.
   temperature: 0.7
   max_tokens: -1
   history_turns: 12
-
 vllm:
-  # Alternative engine (native PCM streaming) served by the official vLLM-Omni image.
   enabled: false
   base_url: http://tts-vllm:8091
-
 ui:
   title: AiUdio Server
   show_stt_tab: true
   show_chat_tab: true
+auth:
+  enabled: false
+  username: admin
+  password: ''
+  api_keys: []
+  exempt_paths:
+  - /health
+  - /ready
