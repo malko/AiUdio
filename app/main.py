@@ -202,7 +202,10 @@ def create_app(
         sections = {k: v for k, v in payload.items() if k in allowed}
         if not sections:
             raise HTTPException(400, "No editable section provided")
-        updated = store.update(**sections)
+        try:
+            updated = store.update(**sections)
+        except Exception as exc:
+            raise HTTPException(400, f"Invalid settings: {exc}") from exc
         app.state.settings = updated
         app.state.llm = LLMClient(updated.llm)
         return _public_config(updated, engine)

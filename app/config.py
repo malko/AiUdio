@@ -207,11 +207,21 @@ class ConfigStore:
         )
 
     def update(self, **sections) -> Settings:
+        """Merge partial sections (nested dicts are merged, not replaced)."""
         data = self.settings.model_dump()
         for key, value in sections.items():
-            if value is not None:
+            if value is None:
+                continue
+            if isinstance(value, dict) and isinstance(data.get(key), dict):
+                data[key].update({k: v for k, v in value.items() if v is not None})
+            else:
                 data[key] = value
-        self.save(Settings.model_validate(data))
+        from pydantic import ValidationError
+
+        try:
+            self.save(Settings.model_validate(data))
+        except ValidationError as exc:
+            raise ValueError(str(exc)) from exc
         return self.settings
 
 

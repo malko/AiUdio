@@ -30,3 +30,25 @@ def test_update_section(tmp_path):
     assert store.settings.chunking.max_chars == 321
     # persisted to disk
     assert ConfigStore(tmp_path / "config.yaml").settings.chunking.max_chars == 321
+
+
+def test_update_nested_section_preserves_other_fields(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.settings.llm.api_key = "secret"
+    store.settings.llm.temperature = 0.42
+    store.save()
+
+    store.update(llm={"base_url": "http://llm.local/v1"})
+
+    assert store.settings.llm.base_url == "http://llm.local/v1"
+    assert store.settings.llm.api_key == "secret"        # not reset
+    assert store.settings.llm.temperature == 0.42        # not reset
+
+
+def test_update_invalid_section_raises(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    try:
+        store.update(generation={"temperature": "not-a-number"})
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for invalid settings")

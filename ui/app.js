@@ -663,31 +663,77 @@ $("#chat-stop").addEventListener("click", () => {
 });
 
 // ------------------------------------------------------------- settings tab
+async function saveSettings() {
+  const num = (sel, parse) => {
+    const v = parse($(sel).value);
+    return Number.isFinite(v) ? v : undefined;
+  };
+  const llm = {
+    base_url: $("#set-llm-url").value.trim(),
+    model: $("#set-llm-model").value.trim(),
+    system_prompt: $("#set-llm-system").value,
+  };
+  const key = $("#set-llm-key").value;
+  if (key) llm.api_key = key;
+
+  const payload = { llm, generation: {}, chunking: {} };
+  const temp = num("#set-temp", parseFloat);
+  if (temp !== undefined) payload.generation.temperature = temp;
+  const batch = num("#set-batch", (v) => parseInt(v, 10));
+  if (batch !== undefined) payload.generation.batch_size = batch;
+  const maxc = num("#set-maxchars", (v) => parseInt(v, 10));
+  if (maxc !== undefined) payload.chunking.max_chars = maxc;
+
+  try {
+    const r = await apiFetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text;
+      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep text */ }
+      return { ok: false, detail };
+    }
+    let cfg = null;
+    try { cfg = JSON.parse(text); } catch (e) { /* ignore */ }
+    if (cfg && cfg.llm) {
+      CONFIG = Object.assign({}, CONFIG, {
+        llm: cfg.llm, generation: cfg.generation, chunking: cfg.chunking,
+      });
+      $("#set-llm-url").value = cfg.llm.base_url || "";
+      $("#set-llm-model").value = cfg.llm.model || "";
+      $("#set-llm-system").value = cfg.llm.system_prompt || "";
+    }
+    $("#set-llm-key").value = "";
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, detail: String(e) };
+  }
+}
+
+$("#set-save").addEventListener("click", async () => {
+  $("#set-save-status").textContent = "…";
+  const res = await saveSettings();
+  $("#set-save-status").textContent = res.ok
+    ? t("status.saved")
+    : `${t("status.error")} ${res.detail}`;
+});
+
 $("#set-llm-ping").addEventListener("click", async () => {
   $("#set-llm-status").textContent = t("status.testing");
+  const res = await saveSettings();
+  if (!res.ok) {
+    $("#set-llm-status").textContent = `${t("status.error")} ${res.detail}`;
+    return;
+  }
   try {
     const r = await getJSON("/api/llm/ping");
     $("#set-llm-status").textContent = r.ok ? `OK (${r.url})` : `${t("status.error")} ${r.error || r.status}`;
-  } catch (e) { $("#set-llm-status").textContent = `${t("status.error")} ${e}`; }
-});
-
-$("#set-save").addEventListener("click", async () => {
-  const payload = {
-    llm: {
-      base_url: $("#set-llm-url").value,
-      model: $("#set-llm-model").value,
-      api_key: $("#set-llm-key").value || undefined,
-      system_prompt: $("#set-llm-system").value,
-    },
-    generation: { temperature: parseFloat($("#set-temp").value), batch_size: parseInt($("#set-batch").value, 10) },
-    chunking: { max_chars: parseInt($("#set-maxchars").value, 10) },
-  };
-  try {
-    await apiFetch("/api/settings", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    });
-    $("#set-save-status").textContent = t("status.saved");
-  } catch (e) { $("#set-save-status").textContent = `${t("status.error")} ${e}`; }
+  } catch (e) {
+    $("#set-llm-status").textContent = `${t("status.error")} ${e}`;
+  }
 });
 
 $("#set-apikey-save").addEventListener("click", () => {

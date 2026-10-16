@@ -61,6 +61,20 @@ def test_auth_blocks_and_allows(auth_client):
     assert r.status_code == 200
 
 
+def test_settings_update_partial_and_validation(client):
+    store = client.app.state.store
+    store.settings.llm.api_key = "secret"
+
+    r = client.put("/api/settings", json={"llm": {"base_url": "http://x/v1"}})
+    assert r.status_code == 200
+    assert store.settings.llm.base_url == "http://x/v1"
+    assert store.settings.llm.api_key == "secret"  # not reset by a partial update
+
+    assert client.put(
+        "/api/settings", json={"generation": {"temperature": "abc"}}
+    ).status_code == 400
+
+
 def _clone_body(ref_audio):
     return {"text": "hello", "family": "base", "ref_audio": ref_audio}
 
