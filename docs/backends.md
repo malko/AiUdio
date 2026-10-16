@@ -18,6 +18,42 @@
   official base) and STT (`docker/stt.Dockerfile`, from official NeMo-Speech.cpp sources,
   since NVIDIA does not publish a registry image).
 
+## Mixing backends
+
+The TTS gateway and the STT service are **independent containers**, so their backends can be
+mixed freely. Selection is driven by environment variables (see `.env.example`):
+
+| Service | Variable | Values |
+|---|---|---|
+| TTS | `TTS_DOCKERFILE` | `docker/tts.Dockerfile` (CUDA), `docker/tts.cpu.Dockerfile`, `docker/tts.rocm.Dockerfile` |
+| TTS | `TTS_BASE_IMAGE`, `TTS_TORCH_VERSION`, `TTS_TORCH_INDEX_URL` | base image / torch pinning |
+| STT | `STT_BACKEND` | `cuda` (default), `cpu`, `vulkan` |
+| STT | `NEMO_SPEECH_REF` | upstream NeMo-Speech.cpp branch/tag |
+
+A ready-made example (CUDA TTS + CPU STT) is provided:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mixed.yml up -d --build
+```
+
+Or pick backends directly via `.env` with the base compose file:
+
+```bash
+TTS_DOCKERFILE=docker/tts.Dockerfile
+STT_BACKEND=cpu
+docker compose up -d --build
+```
+
+Any combination of {CUDA, ROCm, CPU} TTS × {CUDA, CPU, Vulkan} STT is valid. Caveats:
+
+- The base file reserves the GPU for **both** services. When one side is CPU-only, clear its
+  reservation (the `mixed`/`cpu`/`rocm`/`vulkan` overrides already do this) so it does not
+  request an unused GPU.
+- A `vulkan` STT needs `/dev/dri` and the `render` group; a `cuda` STT needs the NVIDIA
+  runtime.
+- Independently of the compute backend, the two services always communicate over the
+  `aiudio-net` Docker network.
+
 ## Backend notes
 
 ### CUDA

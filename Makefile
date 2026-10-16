@@ -4,7 +4,7 @@ CONFIG ?= config.yaml
 
 .DEFAULT_GOAL := help
 
-.PHONY: help hooks venv deps test lint run up up-vllm down logs pull models clean
+.PHONY: help hooks venv deps test lint run up up-vllm up-mixed down logs pull models clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -35,6 +35,9 @@ up: ## Start the stack (CUDA)
 
 up-vllm: ## Start the stack with the vLLM-Omni service (experimental streaming)
 	$(COMPOSE) --profile vllm up -d --build
+
+up-mixed: ## Start with mixed backends (CUDA TTS + CPU STT)
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.mixed.yml up -d --build
 
 down: ## Stop the stack
 	$(COMPOSE) down

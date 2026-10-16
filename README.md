@@ -9,6 +9,12 @@ pluggable into an external OpenAI-compatible LLM. Everything is served by a sing
 > Status: functional skeleton (API, UI, engines, compose, tests). Hardware validation
 > (GPU, model weights) must be done on the target machine.
 
+> [!NOTE]
+> - **Tested on Linux only** by the maintainer. Windows/macOS are not validated (only the
+>   Linux Docker workflows are exercised).
+> - **Vibe-coded** with [opencode](https://opencode.ai) and **DeepSeek V4.1 Flash**. Review
+>   the code and pin versions before any production use.
+
 ## Contents
 
 - [Features](#features)
@@ -112,11 +118,38 @@ curl -s localhost:8004/health | jq
 | **AMD ROCm** | `docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build` |
 | **CPU** | `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build` |
 | **Vulkan** (STT) | `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build` |
+| **Mixed** (e.g. CUDA TTS + CPU STT) | `docker compose -f docker-compose.yml -f docker-compose.mixed.yml up -d --build` |
 | **vLLM-Omni** (experimental) | `docker compose --profile vllm up -d` |
 
 Notes: **TTS has no Vulkan backend** (PyTorch/vLLM); under Vulkan the TTS falls back to the
 CPU image (or point it to a remote service). On **ROCm**, FlashAttention 2 is not available
 → `sdpa` attention. See [`docs/backends.md`](docs/backends.md).
+
+### Mixing backends (TTS and STT are independent)
+
+Yes — the TTS gateway and the STT service are **separate containers**, so each can use a
+different backend. For example, run **TTS on CUDA** (fast) and **STT on CPU** (no extra VRAM)
+on the same host:
+
+```bash
+# Option A: the ready-made mixed override (CUDA TTS + CPU STT)
+docker compose -f docker-compose.yml -f docker-compose.mixed.yml up -d --build
+```
+
+```bash
+# Option B: pick backends independently via .env (no override file)
+#   TTS backend  -> TTS_DOCKERFILE (docker/tts.Dockerfile, docker/tts.cpu.Dockerfile,
+#                   docker/tts.rocm.Dockerfile) + TTS_BASE_IMAGE / TTS_TORCH_* args
+#   STT backend  -> STT_BACKEND (cuda | cpu | vulkan)
+TTS_DOCKERFILE=docker/tts.Dockerfile
+STT_BACKEND=cpu
+docker compose up -d --build
+```
+
+Valid combinations: any of {CUDA, ROCm, CPU} × {CUDA, CPU, Vulkan}. Constraints to remember:
+the STT `cuda` and `vulkan` backends need the matching device (`deploy.resources` GPU
+reservation, or `/dev/dri` for Vulkan) — the mixed override clears the GPU reservation for a
+CPU STT. Full details: [`docs/backends.md`](docs/backends.md#mixing-backends).
 
 ## Models
 

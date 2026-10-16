@@ -1,0 +1,23 @@
+# Mixed-backend example: CUDA for TTS, CPU for STT.
+# The two services are independent containers, so each can use a different
+# backend. Use this override with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.mixed.yml up -d --build
+#
+# Other useful combinations:
+#   - CUDA TTS + Vulkan STT: set STT_BACKEND=vulkan and keep the /dev/dri device.
+#   - ROCm TTS + CPU STT:   start from docker-compose.rocm.yml instead.
+services:
+  # TTS stays on the default CUDA image (built from docker/tts.Dockerfile).
+  aiudio:
+    build:
+      dockerfile: ${TTS_DOCKERFILE:-docker/tts.Dockerfile}
+
+  # STT is compiled for CPU and does not reserve a GPU.
+  stt:
+    build:
+      args:
+        BACKEND: cpu
+    deploy:
+      resources:
+        reservations:
+          devices: []
