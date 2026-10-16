@@ -164,7 +164,9 @@ class TTSEngine:
         if attn and attn != "eager":
             kwargs["attn_implementation"] = attn
         log.info("Loading %s (%s) on %s [%s]", family, repo, device, attn)
+        started = time.perf_counter()
         model = Qwen3TTSModel.from_pretrained(repo, **kwargs)
+        log.info("Loaded %s in %.2fs", family, time.perf_counter() - started)
         return ModelHandle(family=family, repo_id=repo, model=model)
 
     # -------------------------------------------------------------- inference
@@ -172,6 +174,9 @@ class TTSEngine:
         """Generate a batch of items of the same family. Returns [(wav, sr), ...]."""
         if not items:
             return []
+
+        requested_family = family
+        t_start = time.perf_counter()
 
         # VoiceDesign has no fixed speaker: the voice changes on every generation.
         # Render a reference clip once per (instruct, language) and clone it so the
@@ -187,6 +192,7 @@ class TTSEngine:
         gen = dict(self._generation_defaults())
         gen.update(items[0].get("generation") or {})
 
+        t_gen = time.perf_counter()
         with self._lock:
             if family == "custom_voice":
                 # A missing speaker would let the model pick a different voice per
@@ -231,7 +237,19 @@ class TTSEngine:
             else:
                 raise ValueError(f"Unknown model family: {family}")
 
-        return [(np.asarray(w, dtype=np.float32), int(sr)) for w in wavs]
+        results = [(np.asarray(w, dtype=np.float32), int(sr)) for w in wavs]
+        gen_s = time.perf_counter() - t_gen
+        total_s = time.perf_counter() - t_start
+        audio_s = sum(len(w) / float(s) for w, s in results) if results else 0.0
+        chars = sum(len(i.get("text") or "") for i in items)
+        log.info(
+            "TTS family=%s->%s n=%d chars=%d audio=%.2fs gen=%.2fs total=%.2fs "
+            "rtf=%.2f%s",
+            requested_family, family, len(items), chars, audio_s, gen_s, total_s,
+            (gen_s / audio_s if audio_s else 0.0),
+            "" if requested_family == family else " (incl. stabilize)",
+        )
+        return results
 
     def synthesize_one(self, item: Dict[str, Any]) -> Tuple[np.ndarray, int]:
         return self.synthesize_batch(item["family"], [item])[0]
@@ -252,10 +270,12 @@ class TTSEngine:
         handle = self.ensure("voice_design")
         ref_text = _design_ref_text(language)
         gen = self._generation_defaults()
+        started = time.perf_counter()
         with self._lock:
             wavs, sr = handle.model.generate_voice_design(
                 text=ref_text, language=language or "Auto", instruct=instruct, **gen
             )
+        log.info("Design reference rendered in %.2fs", time.perf_counter() - started)
         return np.asarray(wavs[0], dtype=np.float32), int(sr)
 
     def clear_clone_prompts(self) -> None:
@@ -268,11 +288,13 @@ class TTSEngine:
         with self._lock:
             if key in self._clone_prompts:
                 return self._clone_prompts[key]
+            started = time.perf_counter()
             items = handle.model.create_voice_clone_prompt(
                 ref_audio=ref_audio,
                 ref_text=ref_text,
                 x_vector_only_mode=bool(x_vector_only),
             )
+            log.info("Built clone prompt (x_vector=%s) in %.2fs", bool(x_vector_only), time.perf_counter() - started)
             if len(self._clone_prompts) >= 8:
                 self._clone_prompts.clear()
             self._clone_prompts[key] = items
@@ -290,8 +312,10 @@ class TTSEngine:
         key = f"vd:{instruct}\x00{language or ''}"
         with self._lock:
             if key in self._clone_prompts:
+                log.info("Stabilized VoiceDesign voice (lang=%s): cache hit", language)
                 return self._clone_prompts[key]
 
+            started = time.perf_counter()
             design = self.ensure("voice_design")
             ref_text = _design_ref_text(language)
             gen = self._generation_defaults()
@@ -303,6 +327,10 @@ class TTSEngine:
             base = self.ensure("base")
             items = base.model.create_voice_clone_prompt(
                 ref_audio=(ref_wav, int(sr)), ref_text=ref_text
+            )
+            log.info(
+                "Stabilized VoiceDesign voice (lang=%s) in %.2fs (model loads included)",
+                language, time.perf_counter() - started,
             )
 
             if len(self._clone_prompts) >= 4:  # keep a small bounded cache
