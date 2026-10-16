@@ -247,6 +247,11 @@ curl -s localhost:8004/api/stt/diarize -F file=@meeting.wav
 Config (`config.yaml` / `.env`): `STT_ASR_MODEL` (default `nemotron-3.5`, or
 `parakeet-tdt-0.6b-v3`), `STT_MODELS_DIR` (GGUF cache mounted at `/models`).
 
+On first start, the STT service downloads the ASR model (≈0.74 GB for Nemotron 3.5) into the
+`STT_MODELS_DIR` volume, using the model index embedded in the image
+(`share/nemo-speech/model-index.json`, override with `NEMO_SPEECH_MODEL_INDEX`). To pre-fetch
+without starting the server: `docker compose run --rm stt nemo-speech pull nemotron-3.5`.
+
 ## Conversation with an external LLM
 
 **The LLM is not served by this compose stack.** Point it at an OpenAI-compatible endpoint
