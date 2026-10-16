@@ -165,6 +165,12 @@ The **web UI (Synthesis tab)** exposes a model selector with plain-language desc
 **Load** button (models load lazily on first use anyway). The **Transcription tab** lists the
 downloadable STT models with descriptions, sizes and cache status.
 
+**VoiceDesign voice stability**: the VoiceDesign model has no fixed speaker, so its voice would
+otherwise change on every generation. With `models.stabilize_voice_design: true` (default),
+AiUdio renders a short reference clip once per (description, language) and clones it with the
+**Base** model — the voice stays identical until you change the description. This uses the
+Base model (it is downloaded/loaded on first VoiceDesign use).
+
 ## API
 
 Quick examples (full reference: [`docs/api.md`](docs/api.md)):

@@ -37,6 +37,10 @@ class ModelsConfig(BaseModel):
     default_family: str = "custom_voice"
     residency: str = "single"  # single | multi
     resident: List[str] = Field(default_factory=lambda: ["custom_voice"])
+    # VoiceDesign has no fixed speaker: when true, render a reference clip once per
+    # (instruct, language) and clone it (Base model) so the voice stays stable until
+    # the voice definition changes.
+    stabilize_voice_design: bool = True
     device: str = "auto"
     dtype: str = "bfloat16"
     attn_implementation: str = "sdpa"

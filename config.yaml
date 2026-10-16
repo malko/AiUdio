@@ -18,6 +18,10 @@ models:
   residency: single
   resident:
   - custom_voice
+  # VoiceDesign has no fixed speaker (voice changes every generation). When true,
+  # render a reference clip once per (instruct, language) and clone it with the
+  # Base model: the voice stays identical until the description changes.
+  stabilize_voice_design: true
   device: auto
   dtype: bfloat16
   attn_implementation: sdpa

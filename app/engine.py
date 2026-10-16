@@ -18,6 +18,25 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+# Fixed sentences used to render a VoiceDesign reference clip (one per language),
+# which is then cloned to keep the voice stable across generations.
+_DESIGN_REF_TEXTS = {
+    "english": "Hello, this is a short sample of my voice.",
+    "french": "Bonjour, ceci est un court échantillon de ma voix.",
+    "german": "Hallo, dies ist eine kurze Aufnahme meiner Stimme.",
+    "spanish": "Hola, esta es una breve muestra de mi voz.",
+    "italian": "Ciao, questo è un breve esempio della mia voce.",
+    "portuguese": "Olá, esta é uma pequena amostra da minha voz.",
+    "russian": "Привет, это короткий образец моего голоса.",
+    "japanese": "こんにちは、これは私の声の短いサンプルです。",
+    "korean": "안녕하세요, 이것은 제 목소리의 짧은 샘플입니다.",
+    "chinese": "你好，这是我声音的简短样本。",
+}
+
+
+def _design_ref_text(language: Optional[str]) -> str:
+    return _DESIGN_REF_TEXTS.get((language or "english").lower(), _DESIGN_REF_TEXTS["english"])
+
 
 @dataclass
 class ModelHandle:
@@ -148,6 +167,17 @@ class TTSEngine:
         """Generate a batch of items of the same family. Returns [(wav, sr), ...]."""
         if not items:
             return []
+
+        # VoiceDesign has no fixed speaker: the voice changes on every generation.
+        # Render a reference clip once per (instruct, language) and clone it so the
+        # voice stays identical until the voice definition changes.
+        if family == "voice_design" and self.settings.models.stabilize_voice_design:
+            prompt = self._design_clone_prompt(
+                items[0].get("instruct") or "", items[0].get("language")
+            )
+            items = [{**it, "family": "base", "voice_clone_prompt": prompt} for it in items]
+            family = "base"
+
         handle = self.ensure(family)
         gen = dict(self._generation_defaults())
         gen.update(items[0].get("generation") or {})
@@ -176,14 +206,23 @@ class TTSEngine:
                     **gen,
                 )
             elif family == "base":
-                wavs, sr = handle.model.generate_voice_clone(
-                    text=[i["text"] for i in items],
-                    language=[i.get("language") or "Auto" for i in items],
-                    ref_audio=[i.get("ref_audio") for i in items],
-                    ref_text=[i.get("ref_text") for i in items],
-                    x_vector_only_mode=[bool(i.get("x_vector_only_mode")) for i in items],
-                    **gen,
-                )
+                prompt = items[0].get("voice_clone_prompt")
+                if prompt is not None:
+                    wavs, sr = handle.model.generate_voice_clone(
+                        text=[i["text"] for i in items],
+                        language=[i.get("language") or "Auto" for i in items],
+                        voice_clone_prompt=prompt,
+                        **gen,
+                    )
+                else:
+                    wavs, sr = handle.model.generate_voice_clone(
+                        text=[i["text"] for i in items],
+                        language=[i.get("language") or "Auto" for i in items],
+                        ref_audio=[i.get("ref_audio") for i in items],
+                        ref_text=[i.get("ref_text") for i in items],
+                        x_vector_only_mode=[bool(i.get("x_vector_only_mode")) for i in items],
+                        **gen,
+                    )
             else:
                 raise ValueError(f"Unknown model family: {family}")
 
@@ -202,6 +241,38 @@ class TTSEngine:
             speakers = []
         handle.default_speaker = speakers[0] if speakers else ""
         return handle.default_speaker
+
+    def _design_clone_prompt(self, instruct: str, language) -> Any:
+        """Cached voice-clone prompt built once from a VoiceDesign reference clip.
+
+        VoiceDesign has no fixed speaker, so a raw VoiceDesign generation gives a
+        different voice each time. We render a short reference clip for the current
+        description, build a clone prompt with the Base model, and reuse it. The
+        cache key includes the description, so editing the voice definition produces
+        a new prompt (and thus a new voice), while keeping it stable otherwise.
+        """
+        key = f"vd:{instruct}\x00{language or ''}"
+        with self._lock:
+            if key in self._clone_prompts:
+                return self._clone_prompts[key]
+
+            design = self.ensure("voice_design")
+            ref_text = _design_ref_text(language)
+            gen = self._generation_defaults()
+            wavs, sr = design.model.generate_voice_design(
+                text=ref_text, language=language or "Auto", instruct=instruct, **gen
+            )
+            ref_wav = np.asarray(wavs[0], dtype=np.float32)
+
+            base = self.ensure("base")
+            items = base.model.create_voice_clone_prompt(
+                ref_audio=(ref_wav, int(sr)), ref_text=ref_text
+            )
+
+            if len(self._clone_prompts) >= 4:  # keep a small bounded cache
+                self._clone_prompts.clear()
+            self._clone_prompts[key] = items
+            return items
 
     def _generation_defaults(self) -> Dict[str, Any]:
         g = self.settings.generation
