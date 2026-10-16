@@ -83,7 +83,14 @@ function downsampleTo16k(input, inRate) {
 let CONFIG = null;
 const TTS_SESSION = { format: "pcm", sample_rate: 24000 };
 let sttModels = [];
+let sttActive = "";
+let sttService = { enabled: true, ready: false, error: "" };
+const sttPickers = [];
+let sttDownload = null;
+let sttDownloadAbort = null;
 let avatars = [];
+let voiceEntries = [];
+let selectedVoiceId = localStorage.getItem("chatVoice") || "";
 let speakers = [];
 let micDeviceId = "";
 
@@ -106,10 +113,10 @@ $("#lang-select").addEventListener("change", (e) => {
   window.I18N.setLang(e.target.value);
   if (CONFIG) {
     buildTtsFamilySelect();
-    buildChatVoiceSelect();
     buildStartupVoiceSelect();
-    updateSttModelDesc();
+    renderSttPickers();
     renderAvatars();
+    renderVoiceList();
     loadMicDevices();
   }
 });
@@ -145,12 +152,14 @@ async function init() {
 
   applySettingsFields(CONFIG);
 
+  mountSttPickers();
   await loadVoices();
   await loadSttModels();
   await loadAvatars();
-  await buildChatVoiceSelect();
+  await loadConversationVoices();
+  const preload = selectedVoice();
+  if (preload) loadVoiceModel(preload);
   buildStartupVoiceSelect();
-  buildStartupSttSelect();
   await loadMicDevices();
   refreshConfigModels();
   refreshStatus();
@@ -228,7 +237,7 @@ $("#tts-load").addEventListener("click", async () => {
     btn.disabled = false;
     await refreshConfigModels();
     await loadVoices();
-    await buildChatVoiceSelect();
+    await loadConversationVoices();
   }
 });
 
@@ -402,7 +411,12 @@ function renderAvatars() {
       return b;
     };
     actions.appendChild(mk(t("avatars.use"), "primary", () => {
-      buildChatVoiceSelect(a.id);
+      const entry = voiceEntries.find((v) => v.avatarId === a.id);
+      if (entry) selectConversationVoice(entry);
+      else loadConversationVoices().then(() => {
+        const e2 = voiceEntries.find((v) => v.avatarId === a.id);
+        if (e2) selectConversationVoice(e2);
+      });
       switchTab("chat");
     }));
     actions.appendChild(mk(t("avatars.preview"), "", () => window.open(`/api/avatars/${encodeURIComponent(a.id)}/audio`, "_blank")));
@@ -424,10 +438,17 @@ function renderAvatars() {
       await apiFetch(`/api/avatars/${encodeURIComponent(a.id)}`, { method: "PUT", body: fd });
       await loadAvatars();
     }));
+    actions.appendChild(mk(t("avatars.personality"), "", async () => {
+      const personality = window.prompt(t("avatars.personality"), a.personality || "");
+      if (personality === null) return;
+      const fd = new FormData(); fd.append("personality", personality);
+      await apiFetch(`/api/avatars/${encodeURIComponent(a.id)}`, { method: "PUT", body: fd });
+      await loadAvatars(); await loadConversationVoices();
+    }));
     actions.appendChild(mk(t("avatars.delete"), "", async () => {
       if (!window.confirm(`${t("avatars.delete")} "${a.name}"?`)) return;
       await apiFetch(`/api/avatars/${encodeURIComponent(a.id)}`, { method: "DELETE" });
-      await loadAvatars(); await buildChatVoiceSelect(); buildStartupVoiceSelect();
+      await loadAvatars(); await loadConversationVoices(); buildStartupVoiceSelect();
     }));
     card.appendChild(actions);
     list.appendChild(card);
@@ -461,6 +482,7 @@ $("#av-create").addEventListener("click", async () => {
   fd.append("language", $("#av-lang").value);
   fd.append("prompt", $("#av-prompt").value);
   fd.append("ref_text", $("#av-reftext").value);
+  fd.append("personality", $("#av-personality").value);
   if ($("#av-ref").files[0]) fd.append("ref_audio", $("#av-ref").files[0]);
   if ($("#av-photo").files[0]) fd.append("image", $("#av-photo").files[0]);
 
@@ -477,8 +499,10 @@ $("#av-create").addEventListener("click", async () => {
     }
     $("#av-status").textContent = t("status.saved");
     $("#av-name").value = ""; $("#av-prompt").value = ""; $("#av-reftext").value = "";
+    $("#av-personality").value = "";
     $("#av-ref").value = ""; $("#av-photo").value = "";
     await loadAvatars();
+    await loadConversationVoices();
     buildStartupVoiceSelect();
   } catch (e) {
     $("#av-status").textContent = `${t("status.error")} ${e}`;
@@ -487,96 +511,122 @@ $("#av-create").addEventListener("click", async () => {
   }
 });
 
-// --------------------------------------------------- chat voice/STT selectors
-function voiceLabel(a) {
-  return a.kind === "clone" ? `${a.name}` : a.name;
+// ------------------------------------------------ conversation voice selector
+function colorFor(name) {
+  let h = 0;
+  const s = name || "?";
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return `hsl(${h}, 55%, 45%)`;
 }
 
-async function buildChatVoiceSelect(preferAvatar) {
-  try { speakers = (await getJSON("/api/voices?family=custom_voice")).speakers || []; } catch (e) { /* ignore */ }
+function initialOf(name) { return (name || "?").trim().charAt(0).toUpperCase() || "?"; }
+
+async function loadConversationVoices() {
   try { avatars = (await getJSON("/api/avatars")).avatars || []; } catch (e) { /* ignore */ }
-  const sel = $("#chat-voice");
-  const prev = preferAvatar ? `av:${preferAvatar}` : sel.value;
-  sel.innerHTML = "";
-  const add = (value, label) => {
-    const o = document.createElement("option"); o.value = value; o.textContent = label; sel.appendChild(o);
-  };
-  add("cv:", t("chat.voiceDefault"));
-  speakers.forEach((s) => add(`cv:${s}`, `${t("chat.voicePreset")}: ${s}`));
-  avatars.forEach((a) => add(`av:${a.id}`, `${t("avatars.voicePrefix")}: ${voiceLabel(a)}`));
-  add("vd:", t("chat.voiceDesign"));
-  if (prev) sel.value = prev;
-  if (!sel.value) sel.value = "cv:";
-  renderAvatars();
+  let presets = [];
+  try { presets = (await getJSON("/api/voices?family=custom_voice")).speakers || []; } catch (e) { /* ignore */ }
+  voiceEntries = [
+    ...avatars.map((a) => ({
+      id: `av:${a.id}`, kind: "avatar", avatarId: a.id,
+      name: a.name, has_photo: a.has_photo, personality: a.personality || "",
+    })),
+    ...presets.map((s) => ({ id: `cv:${s}`, kind: "preset", speaker: s, name: s, personality: "" })),
+  ];
+  if (!voiceEntries.some((v) => v.id === selectedVoiceId)) {
+    selectedVoiceId = voiceEntries.length ? voiceEntries[0].id : "";
+  }
+  renderVoiceList();
 }
 
-function voiceConfig() {
-  const v = $("#chat-voice").value || "cv:";
-  if (v.startsWith("av:")) return { avatar: v.slice(3) };
-  if (v.startsWith("vd:")) return { family: "voice_design", instruct: $("#tts-instruct").value || undefined };
-  if (v.startsWith("cv:")) return { family: "custom_voice", speaker: v.slice(3) || undefined };
-  return { family: "custom_voice" };
-}
+function selectedVoice() { return voiceEntries.find((v) => v.id === selectedVoiceId) || null; }
 
-async function buildChatSttSelect() {
-  const sel = $("#chat-stt");
-  sel.innerHTML = "";
-  const o = document.createElement("option");
-  o.value = "";
-  o.textContent = sttModels.length ? "—" : t("stt.indexUnavailable");
-  sel.appendChild(o);
-  sttModels.forEach((m) => {
-    const opt = document.createElement("option");
-    opt.value = m.repo;
-    opt.textContent = `${m.filename || m.repo}${m.cached ? "" : ` (${fmtMB(m.size)} ${t("stt.sizeMb")})`}`;
-    sel.appendChild(opt);
+const voiceLoad = { inFlight: "", loaded: "" };
+const voiceCache = new Set();
+
+function renderVoiceList() {
+  const list = $("#chat-voice-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!voiceEntries.length) {
+    const p = document.createElement("div");
+    p.className = "muted"; p.textContent = t("avatars.empty");
+    list.appendChild(p);
+    return;
+  }
+  voiceEntries.forEach((v) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "voice-item" + (v.id === selectedVoiceId ? " selected" : "");
+    const icon = document.createElement("span");
+    icon.className = "voice-icon";
+    if (v.has_photo) icon.style.backgroundImage = `url('/api/avatars/${encodeURIComponent(v.avatarId)}/photo')`;
+    else { icon.style.background = colorFor(v.name); icon.textContent = initialOf(v.name); }
+    item.appendChild(icon);
+    const meta = document.createElement("span");
+    meta.className = "voice-meta";
+    const nm = document.createElement("strong"); nm.textContent = v.name; meta.appendChild(nm);
+    const sub = document.createElement("small"); sub.className = "muted";
+    sub.textContent = v.kind === "avatar" ? t("chat.voiceAvatar") : t("chat.voicePresetName");
+    meta.appendChild(sub);
+    item.appendChild(meta);
+    if (voiceLoad.inFlight === v.id) {
+      const sp = document.createElement("span"); sp.className = "spinner"; item.appendChild(sp);
+    } else if (voiceLoad.loaded === v.id) {
+      const ok = document.createElement("span"); ok.className = "voice-ok"; ok.textContent = "✓"; item.appendChild(ok);
+    }
+    item.addEventListener("click", () => selectConversationVoice(v));
+    list.appendChild(item);
   });
 }
-$("#chat-stt").addEventListener("change", async (e) => {
-  const repo = e.target.value;
-  if (!repo) return;
-  await downloadSttModel(repo);
-});
 
-$("#chat-voice-refresh").addEventListener("click", () => buildChatVoiceSelect());
+function voiceLoadBody(v) {
+  return v.kind === "avatar" ? { avatar: v.avatarId } : { family: "custom_voice" };
+}
 
-// ------------------------------------------------------------------ STT tab
-async function loadSttModels() {
-  const status = $("#stt-model-status");
-  const sel = $("#stt-model-select");
+async function selectConversationVoice(v) {
+  selectedVoiceId = v.id;
+  localStorage.setItem("chatVoice", selectedVoiceId);
+  renderVoiceList();
+  sendChatConfig();
+  await loadVoiceModel(v);
+}
+
+async function loadVoiceModel(v) {
+  if (voiceCache.has(v.id)) { voiceLoad.loaded = v.id; renderVoiceList(); return; }
+  voiceLoad.inFlight = v.id;
+  voiceLoad.loaded = "";
+  renderVoiceList();
+  if ($("#chat-status")) $("#chat-status").textContent = t("chat.loadingVoice");
   try {
-    const data = await getJSON("/api/stt/models");
-    if (!data.available) {
-      sel.innerHTML = "";
-      status.textContent = t("stt.indexUnavailable");
-      await buildChatSttSelect();
-      return;
-    }
-    sttModels = data.models || [];
-    sel.innerHTML = "";
-    sttModels.forEach((m) => {
-      const o = document.createElement("option");
-      o.value = m.repo;
-      const tag = m.cached ? t("stt.cached") : t("stt.notCached");
-      o.textContent = `${m.repo} — ${fmtMB(m.size)} ${t("stt.sizeMb")} [${tag}]`;
-      sel.appendChild(o);
+    const r = await apiFetch("/api/voices/load", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(voiceLoadBody(v)),
     });
-    updateSttModelDesc();
-    updateSttButtonLabel();
-    await buildChatSttSelect();
-    buildStartupSttSelect();
-    await refreshSttServiceStatus();
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+    voiceCache.add(v.id);
+    voiceLoad.loaded = v.id;
+    if ($("#chat-status")) $("#chat-status").textContent = "";
   } catch (e) {
-    status.textContent = `${t("status.error")} ${e}`;
+    if ($("#chat-status")) $("#chat-status").textContent = `${t("status.error")} ${e}`;
+  } finally {
+    voiceLoad.inFlight = "";
+    renderVoiceList();
   }
 }
 
-function updateSttButtonLabel() {
-  const repo = $("#stt-model-select").value;
-  const m = sttModels.find((x) => x.repo === repo);
-  $("#stt-model-download").textContent = m && m.cached ? t("stt.load") : t("stt.download");
+function voiceConfig() {
+  const v = selectedVoice();
+  if (!v) return { family: "custom_voice" };
+  if (v.kind === "avatar") return { avatar: v.avatarId };
+  return { family: "custom_voice", speaker: v.speaker };
 }
 
+function chatPersonality() {
+  const v = selectedVoice();
+  return v && v.kind === "avatar" ? (v.personality || "") : "";
+}
+
+// ------------------------------------------------ reusable STT model picker
 function sttModelDesc(m) {
   const id = `${m.repo} ${(m.aliases || []).join(" ")}`.toLowerCase();
   if (id.includes("nemotron-3.5")) return t("stt.desc.nemotron3_5");
@@ -585,41 +635,168 @@ function sttModelDesc(m) {
   return t("stt.desc.generic");
 }
 
-function updateSttModelDesc() {
-  const repo = $("#stt-model-select").value;
-  const m = sttModels.find((x) => x.repo === repo);
-  $("#stt-model-desc").textContent = m ? sttModelDesc(m) : "";
+function sttModelState(m) {
+  if (!m) return "absent";
+  if (m.active && sttService.ready) return "loaded";
+  if (m.active) return "starting";
+  if (m.cached) return "cached";
+  return "absent";
 }
 
-$("#stt-model-select").addEventListener("change", () => { updateSttModelDesc(); updateSttButtonLabel(); });
+function sttStateLabel(state) { return t(`stt.state.${state}`); }
 
-async function refreshSttServiceStatus() {
-  const status = $("#stt-model-status");
-  try {
-    const h = await getJSON("/api/stt/health");
-    if (h.enabled && h.error) status.textContent = t("stt.serviceNotReady");
-  } catch (e) {
-    status.textContent = t("stt.serviceNotReady");
+class SttPicker {
+  constructor(root, opts = {}) {
+    this.root = root;
+    this.opts = Object.assign({ load: true, stop: true, refresh: true, desc: true, status: true, initial: null }, opts);
+    this.value = "";
+    this.touched = false;
+    this.build();
+    sttPickers.push(this);
+    this.populate();
+  }
+
+  build() {
+    this.root.classList.add("stt-picker");
+    this.root.innerHTML = "";
+    const row = document.createElement("div"); row.className = "row";
+    const label = document.createElement("label"); label.className = "grow";
+    this.labelSpan = document.createElement("span"); label.appendChild(this.labelSpan);
+    this.select = document.createElement("select"); label.appendChild(this.select);
+    row.appendChild(label);
+    this.root.appendChild(row);
+    if (this.opts.load) this.loadBtn = this.addButton(t("stt.load"), "primary", () => this.download());
+    if (this.opts.stop) {
+      this.stopBtn = this.addButton(t("stt.stop"), "", () => { if (sttDownloadAbort) sttDownloadAbort.abort(); });
+      this.stopBtn.hidden = true;
+    }
+    if (this.opts.refresh) this.addButton(t("stt.refresh"), "", () => loadSttModels());
+    if (this.opts.desc) { this.desc = document.createElement("div"); this.desc.className = "muted"; this.root.appendChild(this.desc); }
+    if (this.opts.load) { this.progress = document.createElement("progress"); this.progress.max = 100; this.progress.value = 0; this.progress.hidden = true; this.root.appendChild(this.progress); }
+    if (this.opts.status) { this.status = document.createElement("div"); this.status.className = "muted"; this.root.appendChild(this.status); }
+    this.select.addEventListener("change", () => { this.value = this.select.value; this.touched = true; this.update(); });
+  }
+
+  addButton(text, cls, fn) {
+    const b = document.createElement("button");
+    b.textContent = text; if (cls) b.className = cls;
+    b.addEventListener("click", fn);
+    this.root.querySelector(".row").appendChild(b);
+    return b;
+  }
+
+  resolveInitial() {
+    const want = this.opts.initial && this.opts.initial();
+    if (!want) return "";
+    const m = sttModels.find((x) => x.repo === want || x.filename === want);
+    return m ? m.repo : "";
+  }
+
+  populate() {
+    const prev = this.touched ? this.value : (this.resolveInitial() || this.value);
+    this.labelSpan.textContent = t("stt.model");
+    this.select.innerHTML = "";
+    if (!sttModels.length) {
+      const o = document.createElement("option"); o.value = ""; o.textContent = t("stt.indexUnavailable"); this.select.appendChild(o);
+    }
+    sttModels.forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.repo;
+      o.textContent = `${m.filename || m.repo} · ${sttStateLabel(sttModelState(m))} · ${fmtMB(m.size)} ${t("stt.sizeMb")}`;
+      this.select.appendChild(o);
+    });
+    if (prev && sttModels.some((m) => m.repo === prev)) this.select.value = prev;
+    else if (sttModels.length) this.select.value = sttActive || sttModels[0].repo;
+    this.value = this.select.value;
+    this.update();
+  }
+
+  current() { return sttModels.find((x) => x.repo === this.select.value) || null; }
+
+  update() {
+    const m = this.current();
+    const downloading = !!sttDownload && sttDownload.repo === this.select.value;
+    if (this.desc) this.desc.textContent = m ? sttModelDesc(m) : "";
+    if (this.loadBtn) {
+      this.loadBtn.textContent = m && m.cached ? t("stt.load") : t("stt.download");
+      this.loadBtn.disabled = !m || !!sttDownload || (m.active && sttService.ready);
+    }
+    if (this.stopBtn) this.stopBtn.hidden = !downloading;
+    if (this.progress) {
+      this.progress.hidden = !downloading;
+      if (downloading && sttDownload.total) this.progress.value = Math.round((sttDownload.downloaded / sttDownload.total) * 100);
+    }
+    if (this.status) this.status.textContent = this.statusText(m);
+  }
+
+  statusText(m) {
+    if (sttError && sttError.repo === this.select.value) return sttError.message;
+    if (sttDownload && sttDownload.repo === this.select.value) {
+      return `${t("stt.downloading")} ${fmtMB(sttDownload.downloaded)} / ${fmtMB(sttDownload.total)} ${t("stt.sizeMb")}`;
+    }
+    if (!m) return t("stt.indexUnavailable");
+    const state = sttModelState(m);
+    if (state === "loaded") return t("stt.state.loadedHint");
+    if (state === "starting") return t("stt.state.startingHint");
+    if (state === "cached") return t("stt.state.cachedHint");
+    return t("stt.state.absentHint");
+  }
+
+  download() { const repo = this.select.value; if (repo) downloadSttModel(repo); }
+}
+
+let sttError = null;
+let settingsSttPicker = null;
+
+function mountSttPickers() {
+  const sttRoot = $("#stt-picker");
+  if (sttRoot && !sttRoot.dataset.mounted) { sttRoot.dataset.mounted = "1"; new SttPicker(sttRoot); }
+  const chatRoot = $("#chat-stt-picker");
+  if (chatRoot && !chatRoot.dataset.mounted) {
+    chatRoot.dataset.mounted = "1";
+    new SttPicker(chatRoot, { load: true, stop: false, refresh: false, desc: false, status: false });
+  }
+  const setRoot = $("#set-startup-stt-picker");
+  if (setRoot && !setRoot.dataset.mounted) {
+    setRoot.dataset.mounted = "1";
+    settingsSttPicker = new SttPicker(setRoot, {
+      load: false, stop: false, refresh: false, desc: true, status: true,
+      initial: () => (CONFIG ? CONFIG.startup.stt_model : ""),
+    });
   }
 }
 
-let sttDownloadAbort = null;
+function renderSttPickers() { sttPickers.forEach((p) => p.populate()); }
+
+async function loadSttModels() {
+  try {
+    const data = await getJSON("/api/stt/models");
+    if (!data.available) { sttModels = []; sttActive = ""; }
+    else { sttModels = data.models || []; sttActive = data.active || ""; }
+  } catch (e) { sttModels = []; sttActive = ""; }
+  await refreshSttServiceStatus();
+  renderSttPickers();
+}
+
+async function refreshSttServiceStatus() {
+  try {
+    const h = await getJSON("/api/stt/health");
+    sttService = { enabled: h.enabled !== false, ready: h.enabled !== false && !h.error, error: h.error || "" };
+  } catch (e) {
+    sttService = { enabled: true, ready: false, error: String(e) };
+  }
+}
 
 async function downloadSttModel(repo) {
-  const status = $("#stt-model-status");
-  const bar = $("#stt-model-progress");
-  const dlBtn = $("#stt-model-download");
-  const stopBtn = $("#stt-model-stop");
-  bar.hidden = false; bar.value = 0;
-  status.textContent = `${t("stt.downloading")}…`;
+  if (!repo || sttDownload) return;
+  sttError = null;
+  sttDownload = { repo, downloaded: 0, total: 0 };
   sttDownloadAbort = new AbortController();
-  dlBtn.disabled = true; stopBtn.hidden = false;
+  renderSttPickers();
   try {
     const r = await apiFetch("/api/stt/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: repo }),
-      signal: sttDownloadAbort.signal,
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: repo }), signal: sttDownloadAbort.signal,
     });
     if (!r.ok) throw new Error((await r.text()).slice(0, 200));
     const reader = r.body.getReader();
@@ -636,29 +813,24 @@ async function downloadSttModel(repo) {
         if (!line) continue;
         let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
         if (ev.status === "downloading" || ev.status === "cached") {
-          if (ev.total) bar.value = Math.round((ev.downloaded / ev.total) * 100);
-          status.textContent = `${t("stt.downloading")} ${fmtMB(ev.downloaded)} / ${fmtMB(ev.total)} ${t("stt.sizeMb")}`;
+          sttDownload.downloaded = ev.downloaded || 0;
+          sttDownload.total = ev.total || sttDownload.total;
         } else if (ev.status === "done") {
-          bar.value = 100; status.textContent = t("stt.downloadedMsg");
+          sttDownload.downloaded = sttDownload.total || sttDownload.downloaded;
         } else if (ev.status === "error") {
-          status.textContent = `${t("status.error")} ${ev.message}`;
+          sttError = { repo, message: `${t("status.error")} ${ev.message}` };
         }
+        renderSttPickers();
       }
     }
     await loadSttModels();
   } catch (e) {
-    status.textContent = e.name === "AbortError" ? t("stt.cancelled") : `${t("status.error")} ${e}`;
+    sttError = { repo, message: e.name === "AbortError" ? t("stt.cancelled") : `${t("status.error")} ${e}` };
   } finally {
-    sttDownloadAbort = null; dlBtn.disabled = false; stopBtn.hidden = true;
+    sttDownload = null; sttDownloadAbort = null;
+    renderSttPickers();
   }
 }
-
-$("#stt-model-download").addEventListener("click", () => {
-  const repo = $("#stt-model-select").value;
-  if (repo) downloadSttModel(repo);
-});
-$("#stt-model-stop").addEventListener("click", () => { if (sttDownloadAbort) sttDownloadAbort.abort(); });
-$("#stt-model-refresh").addEventListener("click", loadSttModels);
 
 // mic device
 async function loadMicDevices() {
@@ -779,25 +951,33 @@ $("#stt-upload").addEventListener("click", async () => {
 });
 
 // ----------------------------------------------------------------- chat tab
-let chatSocket = null, chatPlayer = null, currentAssistant = null;
+let chatSocket = null, chatPlayer = null, currentAssistant = null, chatBusy = false;
 
-function appendTurn(role, text) {
-  const div = document.createElement("div");
-  div.className = "turn";
-  div.innerHTML = `<span class="speaker">${role}</span>`;
-  const span = document.createElement("span");
-  span.className = role === "user" ? "user" : "assistant";
-  span.textContent = text;
-  div.appendChild(span);
-  $("#chat-log").appendChild(div);
+function appendTurn(role, text, name) {
+  const row = document.createElement("div");
+  row.className = `bubble-row ${role}`;
+  if (role === "assistant") {
+    const icon = document.createElement("span");
+    icon.className = "bubble-icon";
+    const v = selectedVoice();
+    if (v && v.has_photo) icon.style.backgroundImage = `url('/api/avatars/${encodeURIComponent(v.avatarId)}/photo')`;
+    else { icon.style.background = colorFor(name || (v ? v.name : "AI")); icon.textContent = initialOf(name || (v ? v.name : "AI")); }
+    row.appendChild(icon);
+  }
+  const bubble = document.createElement("div");
+  bubble.className = `bubble ${role}`;
+  bubble.textContent = text;
+  row.appendChild(bubble);
+  $("#chat-log").appendChild(row);
   $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
-  return span;
+  return bubble;
 }
 
 function chatConfig() {
   return {
     type: "session.config",
     speak: $("#chat-speak").checked,
+    personality: chatPersonality(),
     tts: Object.assign({
       language: $("#tts-language").value,
       format: "pcm",
@@ -806,15 +986,50 @@ function chatConfig() {
   };
 }
 
+function sendChatConfig() {
+  if (chatSocket && chatSocket.readyState === 1) chatSocket.send(JSON.stringify(chatConfig()));
+}
+
 function ensureChatSocket() {
   if (chatSocket && chatSocket.readyState === 1) return Promise.resolve(chatSocket);
   return new Promise((resolve, reject) => {
     const sock = new WebSocket(wsURL("/ws/chat"));
     sock.binaryType = "arraybuffer";
-    sock.onopen = () => { chatSocket = sock; sock.send(JSON.stringify(chatConfig())); resolve(sock); };
+    sock.onopen = () => { chatSocket = sock; sock.onmessage = onChatMessage; sock.send(JSON.stringify(chatConfig())); resolve(sock); };
     sock.onerror = () => reject(new Error("connection failed"));
     sock.onclose = () => { chatSocket = null; };
   });
+}
+
+function resetChatAudio() {
+  if (chatPlayer) { chatPlayer.stop(); chatPlayer = null; }
+}
+
+function onChatMessage(ev) {
+  if (typeof ev.data !== "string") {
+    if (chatPlayer && $("#chat-speak").checked) chatPlayer.pushBytes(new Uint8Array(ev.data));
+    return;
+  }
+  let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+  if (msg.type === "llm.delta") {
+    if (currentAssistant) currentAssistant.textContent += msg.text;
+  } else if (msg.type === "audio.start") {
+    if (!chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
+  } else if (msg.type === "llm.done") {
+    if (currentAssistant && !currentAssistant.textContent) currentAssistant.textContent = msg.text || "";
+    currentAssistant = null;
+    chatBusy = false;
+  } else if (msg.type === "turn.cancelled") {
+    if (currentAssistant) currentAssistant.classList.add("cancelled");
+    currentAssistant = null;
+    chatBusy = false;
+    resetChatAudio();
+  } else if (msg.type === "error") {
+    if (currentAssistant) currentAssistant.textContent += ` [error: ${msg.message}]`;
+    currentAssistant = null;
+    chatBusy = false;
+    $("#chat-status").textContent = msg.message;
+  }
 }
 
 async function chatSend() {
@@ -825,37 +1040,28 @@ async function chatSend() {
   appendTurn("user", text);
   currentAssistant = appendTurn("assistant", "");
   $("#chat-status").textContent = "";
+  chatBusy = true;
   try {
     const sock = await ensureChatSocket();
-    sock.onmessage = (ev) => {
-      if (typeof ev.data !== "string") {
-        if (chatPlayer && $("#chat-speak").checked) chatPlayer.pushBytes(new Uint8Array(ev.data));
-        return;
-      }
-      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      if (msg.type === "llm.delta") {
-        if (currentAssistant) currentAssistant.textContent += msg.text;
-      } else if (msg.type === "audio.start") {
-        if (!chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
-      } else if (msg.type === "llm.done") {
-        currentAssistant = null;
-      } else if (msg.type === "error") {
-        if (currentAssistant) currentAssistant.textContent += ` [error: ${msg.message}]`;
-        $("#chat-status").textContent = msg.message;
-      }
-    };
     sock.send(JSON.stringify(chatConfig()));
     sock.send(JSON.stringify({ type: "input.text", text }));
   } catch (e) {
-    currentAssistant.textContent = `${t("status.error")} ${e}`;
+    if (currentAssistant) currentAssistant.textContent = `${t("status.error")} ${e}`;
     currentAssistant = null;
+    chatBusy = false;
     $("#chat-status").textContent = `${t("status.error")} ${e}`;
   }
 }
 
 $("#chat-send").addEventListener("click", chatSend);
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") chatSend(); });
-$("#chat-stop").addEventListener("click", () => { if (chatPlayer) { chatPlayer.stop(); chatPlayer = null; } });
+$("#chat-speak").addEventListener("change", sendChatConfig);
+$("#chat-stop").addEventListener("click", () => {
+  resetChatAudio();
+  if (chatSocket && chatSocket.readyState === 1) chatSocket.send(JSON.stringify({ type: "input.cancel" }));
+  if (currentAssistant) { currentAssistant.classList.add("cancelled"); currentAssistant = null; }
+  chatBusy = false;
+});
 
 // Chat dictation
 let dictateActive = false, dictateCtx = null, dictateStream = null, dictateNode = null;
@@ -939,26 +1145,13 @@ function buildStartupVoiceSelect() {
   sel.value = current || "";
 }
 
-function buildStartupSttSelect() {
-  const sel = $("#set-startup-stt");
-  if (!sel) return;
-  const current = sel.value || (CONFIG ? CONFIG.startup.stt_model : "");
-  sel.innerHTML = "";
-  const add = (value, label) => {
-    const o = document.createElement("option"); o.value = value; o.textContent = label; sel.appendChild(o);
-  };
-  add("", "—");
-  sttModels.forEach((m) => add(m.filename || m.repo, m.filename || m.repo));
-  sel.value = current || "";
-}
-
 $("#set-startup-save").addEventListener("click", async () => {
   $("#set-startup-status").textContent = "…";
   try {
     const r = await apiFetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startup: { stt_model: $("#set-startup-stt").value, voice: $("#set-startup-voice").value } }),
+      body: JSON.stringify({ startup: { stt_model: settingsSttPicker ? settingsSttPicker.value : "", voice: $("#set-startup-voice").value } }),
     });
     const text = await r.text();
     if (!r.ok) {

@@ -21,6 +21,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | POST | `/api/models/load` | `{"family": "custom_voice"}` — load (hot-swap) |
 | POST | `/api/models/unload` | `{"family": "..."}` or `{}` to unload everything |
 | GET | `/api/voices?family=custom_voice` | Speakers, languages, reference files |
+| POST | `/api/voices/load` | `{"avatar": "id"}` or `{"family": "custom_voice"}` — warm a conversation voice |
 | GET | `/v1/audio/voices` | OpenAI-compatible list |
 
 ## TTS
@@ -81,5 +82,8 @@ Tests the connection to the external LLM.
 `{"text": "...", "history": [{"role","content"}]}` → SSE stream `data: {"delta": "..."}` ... `[DONE]`.
 
 ### `WS /ws/chat`
-`{"type":"session.config","tts":{...}}` then `{"type":"input.text","text":"..."}`.
+`{"type":"session.config","speak":true,"personality":"...","tts":{...}}` then
+`{"type":"input.text","text":"..."}`. Send `{"type":"input.cancel"}` to stop the
+current turn (LLM stream + TTS synthesis); `personality` is appended to the system
+prompt for avatars that define one.
 Server events: `transcript`, `llm.delta`, `audio.start` / PCM / `audio.done`, `llm.done`.

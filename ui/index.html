@@ -28,26 +28,24 @@
 
   <!-- ------------------------------------------------------------- CHAT -->
   <section id="tab-chat" class="tab active">
-    <div class="grid">
-      <div class="card wide">
+    <div class="chat-layout">
+      <aside class="card chat-voices">
+        <h2 data-i18n="chat.voicesTitle">Talk with</h2>
+        <div id="chat-voice-list" class="voice-list"></div>
+      </aside>
+      <div class="card chat-main">
         <h2 data-i18n="chat.title">Conversation (external LLM)</h2>
-        <div class="row">
-          <label class="grow"><span data-i18n="chat.voice">Voice</span>
-            <select id="chat-voice"></select>
-          </label>
-          <label class="grow"><span data-i18n="chat.sttModel">STT model</span>
-            <select id="chat-stt"></select>
-          </label>
-          <button id="chat-voice-refresh" data-i18n="stt.refresh">Refresh</button>
+        <div class="chat-toolbar">
+          <div id="chat-stt-picker" class="stt-picker grow"></div>
+          <label class="inline"><input id="chat-speak" type="checkbox" checked /> <span data-i18n="chat.speak">Speak the reply (TTS)</span></label>
         </div>
-        <div id="chat-log" class="transcript"></div>
+        <div id="chat-log" class="chat-log"></div>
         <div class="row">
           <input id="chat-input" type="text" data-i18n-ph="chat.placeholder" placeholder="Your message..." />
           <button id="chat-mic" data-i18n-title="chat.dictate" title="Dictate via STT">🎤</button>
           <button id="chat-send" class="primary" data-i18n="chat.send">Send</button>
           <button id="chat-stop" data-i18n="chat.stop">Stop</button>
         </div>
-        <label class="inline"><input id="chat-speak" type="checkbox" checked /> <span data-i18n="chat.speak">Speak the reply (TTS)</span></label>
         <div id="chat-status" class="muted"></div>
       </div>
     </div>
@@ -124,6 +122,9 @@
             <label><span data-i18n="avatars.refText">Reference transcript</span> <input id="av-reftext" type="text" /></label>
           </div>
           <label><span data-i18n="avatars.language">Language</span> <select id="av-lang"></select></label>
+          <label><span data-i18n="avatars.personality">Personality (system prompt, optional)</span>
+            <textarea id="av-personality" rows="2" data-i18n-ph="avatars.personalityPlaceholder" placeholder="e.g. You are a playful assistant who loves puns."></textarea>
+          </label>
           <label><span data-i18n="avatars.photo">Photo (optional)</span> <input id="av-photo" type="file" accept="image/*" /></label>
           <button id="av-create" class="primary" data-i18n="avatars.createBtn">Create</button>
           <div id="av-status" class="muted"></div>
@@ -137,17 +138,7 @@
     <div class="grid">
       <div class="card wide">
         <h2 data-i18n="stt.modelsTitle">STT models</h2>
-        <div class="row">
-          <label class="grow"><span data-i18n="stt.model">Model</span>
-            <select id="stt-model-select"></select>
-          </label>
-          <button id="stt-model-download" class="primary" data-i18n="stt.load">Load</button>
-          <button id="stt-model-stop" data-i18n="stt.stopDownload" hidden>Stop</button>
-          <button id="stt-model-refresh" data-i18n="stt.refresh">Refresh</button>
-        </div>
-        <div id="stt-model-desc" class="muted"></div>
-        <progress id="stt-model-progress" value="0" max="100" hidden></progress>
-        <div id="stt-model-status" class="muted"></div>
+        <div id="stt-picker"></div>
       </div>
       <div class="card">
         <h2 data-i18n="stt.micTitle">Microphone (real time)</h2>
@@ -178,9 +169,10 @@
       <div class="card wide">
         <h2 data-i18n="settings.startupTitle">Startup</h2>
         <div class="row">
-          <label class="grow"><span data-i18n="settings.startupStt">STT model to load</span>
-            <select id="set-startup-stt"></select>
-          </label>
+          <div class="grow">
+            <span class="muted" data-i18n="settings.startupStt">STT model to load</span>
+            <div id="set-startup-stt-picker" class="stt-picker"></div>
+          </div>
           <label class="grow"><span data-i18n="settings.startupVoice">Voice to load</span>
             <select id="set-startup-voice"></select>
           </label>
