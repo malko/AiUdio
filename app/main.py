@@ -70,7 +70,8 @@ async def _apply_startup(app: FastAPI) -> None:
                     handle = await asyncio.to_thread(engine.ensure, "base")
                     await asyncio.to_thread(
                         engine._cached_clone_prompt, handle,
-                        str(store.wav_path(avatar.id)), avatar.ref_text, False,
+                        str(store.wav_path(avatar.id)), avatar.ref_text or None,
+                        bool(avatar.x_vector_only),
                     )
                     log.info("Startup: loaded voice '%s'", avatar.name)
             else:
@@ -130,7 +131,7 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
             "instruct": None,
             "ref_audio": str(wav),
             "ref_text": avatar.ref_text or None,
-            "x_vector_only_mode": False,
+            "x_vector_only_mode": bool(avatar.x_vector_only),
             "generation": gen,
         }
 
@@ -281,7 +282,8 @@ def create_app(
                     raise HTTPException(404, f"Unknown voice: {avatar_id}")
                 handle = await asyncio.to_thread(engine.ensure, "base")
                 await asyncio.to_thread(
-                    engine._cached_clone_prompt, handle, str(wav), avatar.ref_text or None, False,
+                    engine._cached_clone_prompt, handle, str(wav), avatar.ref_text or None,
+                    bool(avatar.x_vector_only),
                 )
             else:
                 family = str(payload.get("family") or "").strip()
@@ -307,14 +309,18 @@ def create_app(
         language: str = Form("Auto"),
         ref_text: str = Form(""),
         personality: str = Form(""),
+        x_vector_only: bool = Form(False),
         ref_audio: Optional[UploadFile] = File(None),
         image: Optional[UploadFile] = File(None),
     ) -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
         aid = store.new_id(name)
-        avatar = Avatar(id=aid, name=name, kind="clone" if kind == "clone" else "design",
+        kind = "clone" if kind == "clone" else "design"
+        # A cloned voice without a transcript must use the speaker embedding only.
+        xvec = bool(x_vector_only) or not ref_text.strip()
+        avatar = Avatar(id=aid, name=name, kind=kind,
                         language=language or "Auto", prompt=prompt, ref_text=ref_text,
-                        personality=personality)
+                        personality=personality, x_vector_only=xvec if kind == "clone" else False)
         wav = store.wav_path(aid)
         try:
             if avatar.kind == "clone":
@@ -348,6 +354,9 @@ def create_app(
         prompt: Optional[str] = Form(None),
         language: Optional[str] = Form(None),
         personality: Optional[str] = Form(None),
+        ref_text: Optional[str] = Form(None),
+        x_vector_only: Optional[bool] = Form(None),
+        ref_audio: Optional[UploadFile] = File(None),
         image: Optional[UploadFile] = File(None),
     ) -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
@@ -362,9 +371,26 @@ def create_app(
             avatar.language = language
         if personality is not None:
             avatar.personality = personality
+        if ref_text is not None:
+            avatar.ref_text = ref_text
+        if x_vector_only is not None:
+            avatar.x_vector_only = bool(x_vector_only)
+        elif ref_text is not None:
+            # Supplying a transcript implies ICL mode; clearing it falls back to x-vector.
+            avatar.x_vector_only = not bool(ref_text.strip())
+        if ref_audio is not None and avatar.kind == "clone":
+            data = await ref_audio.read()
+            try:
+                audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
+            except Exception as exc:
+                raise HTTPException(400, f"Unreadable reference audio: {exc}") from exc
+            sf.write(str(store.wav_path(avatar_id)), audio, int(sr))
         if image is not None:
             store.photo_path(avatar_id).write_bytes(await image.read())
+        if avatar.kind == "clone" and not avatar.ref_text.strip():
+            avatar.x_vector_only = True  # embedding-only; nothing to condition ICL on
         store.save(avatar)
+        await asyncio.to_thread(engine.clear_clone_prompts)
         return asdict(store.get(avatar_id))
 
     @app.post("/api/avatars/{avatar_id}/regenerate")

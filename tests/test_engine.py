@@ -42,10 +42,13 @@ def test_default_speaker_is_stable():
     assert engine._default_speaker(handle) == "Vivian"  # cached, no recompute
 
 
-def test_speakers_empty_when_model_not_loaded():
+def test_speakers_defaults_when_model_not_loaded():
     engine = TTSEngine(Settings())
-    # Querying voices must not trigger a model load (and thus a download).
-    assert engine.speakers("custom_voice") == []
+    # Querying voices must not trigger a model load (and thus a download), but
+    # the built-in CustomVoice speakers are always known.
+    speakers = engine.speakers("custom_voice")
+    assert "Vivian" in speakers and "Ryan" in speakers
+    assert engine.speakers("voice_design") == []
     assert engine.languages("custom_voice") == []
 
 

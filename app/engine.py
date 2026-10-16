@@ -43,6 +43,14 @@ def design_ref_text(language: Optional[str]) -> str:
     return _design_ref_text(language)
 
 
+# Built-in Qwen3-TTS CustomVoice speakers, exposed even before the model is loaded
+# so the conversation UI can always offer the default voices.
+DEFAULT_SPEAKERS = [
+    "Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric",
+    "Ryan", "Aiden", "Ono_Anna", "Sohee",
+]
+
+
 @dataclass
 class ModelHandle:
     family: str
@@ -361,15 +369,16 @@ class TTSEngine:
 
     # ----------------------------------------------------------------- voices
     def speakers(self, family: str = "custom_voice") -> List[str]:
-        # Only report voices for an already-loaded model (do not trigger a load).
+        # Only report voices for an already-loaded model (do not trigger a load),
+        # but fall back to the known built-in list for custom_voice.
         with self._lock:
             handle = self._handles.get(family)
             if handle is None:
-                return []
+                return list(DEFAULT_SPEAKERS) if family == "custom_voice" else []
             try:
-                return list(handle.model.get_supported_speakers() or [])
+                return list(handle.model.get_supported_speakers() or []) or list(DEFAULT_SPEAKERS)
             except Exception:
-                return []
+                return list(DEFAULT_SPEAKERS)
 
     def languages(self, family: str = "custom_voice") -> List[str]:
         with self._lock:

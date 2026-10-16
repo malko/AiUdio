@@ -44,6 +44,16 @@ def test_item_from_request_unknown_avatar(tmp_path):
         _item_from_request(settings, TTSRequest(text="hi", avatar="missing"), "hi")
 
 
+def test_item_from_request_uses_x_vector_mode(tmp_path):
+    settings = Settings()
+    settings.paths.voices = str(tmp_path / "voices")
+    store = AvatarStore(pathlib.Path(settings.paths.voices) / "avatars")
+    store.save(Avatar(id="narrator", name="Narrator", kind="clone", x_vector_only=True))
+    store.wav_path("narrator").write_bytes(b"RIFF....WAVE")
+    item = _item_from_request(settings, TTSRequest(text="hi", avatar="narrator"), "hi")
+    assert item["x_vector_only_mode"] is True
+
+
 def test_avatar_personality_roundtrip(tmp_path):
     store = AvatarStore(tmp_path / "avatars")
     avatar = Avatar(id="ai", name="AI", personality="You are a witty assistant.")

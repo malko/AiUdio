@@ -72,6 +72,25 @@ def test_voices_load_unknown(client):
     assert client.post("/api/voices/load", json={"family": "nope"}).status_code == 400
 
 
+def test_avatar_clone_x_vector_defaults(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.settings.paths.voices = str(tmp_path / "voices")
+    app = create_app(store, DummyEngine())
+    with TestClient(app) as c:
+        # No transcript -> speaker embedding only.
+        r = c.post("/api/avatars", data={"name": "A", "kind": "clone"},
+                   files={"ref_audio": ("ref.wav", _wav_bytes(), "audio/wav")})
+        aid = r.json()["id"]
+        assert r.json()["x_vector_only"] is True
+        # Providing a transcript switches to ICL mode automatically.
+        r = c.put(f"/api/avatars/{aid}", data={"ref_text": "hello world"})
+        assert r.status_code == 200, r.text
+        assert r.json()["x_vector_only"] is False
+        # Explicit override back to x-vector only is honored.
+        r = c.put(f"/api/avatars/{aid}", data={"x_vector_only": "true"})
+        assert r.json()["x_vector_only"] is True
+
+
 def test_tts_non_stream_wav(client):
     r = client.post("/api/tts", json={"text": "Bonjour le monde.", "format": "wav"})
     assert r.status_code == 200

@@ -30,6 +30,7 @@ class Avatar:
     prompt: str = ""              # design instruction (regeneration)
     ref_text: str = ""           # transcript of the reference WAV
     personality: str = ""        # extra system prompt used in conversation
+    x_vector_only: bool = False  # cloned: use speaker embedding only (no transcript)
     has_photo: bool = False
     created_at: float = field(default_factory=time.time)
 
