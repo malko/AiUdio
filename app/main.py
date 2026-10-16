@@ -32,7 +32,7 @@ from .llm import LLMClient, build_messages, trim_history
 from .scheduler import BatchScheduler
 from .schemas import TTSRequest
 from .security import request_authorized, validate_media_ref
-from .stt_models import iter_download, load_index, mark_active
+from .stt_models import iter_download, load_index, mark_active, read_active
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -268,6 +268,32 @@ def create_app(
         }
 
     # ------------------------------------------------------------- avatars
+    @app.post("/api/voices/load")
+    async def api_voices_load(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Warm a conversation voice: load the model and prepare its clone prompt."""
+        avatar_id = str(payload.get("avatar") or "").strip()
+        try:
+            if avatar_id:
+                store = AvatarStore(_avatar_dir(app.state.settings))
+                avatar = store.get(avatar_id)
+                wav = store.wav_path(avatar_id)
+                if avatar is None or not wav.is_file():
+                    raise HTTPException(404, f"Unknown voice: {avatar_id}")
+                handle = await asyncio.to_thread(engine.ensure, "base")
+                await asyncio.to_thread(
+                    engine._cached_clone_prompt, handle, str(wav), avatar.ref_text or None, False,
+                )
+            else:
+                family = str(payload.get("family") or "").strip()
+                if family not in app.state.settings.models.registry:
+                    raise HTTPException(400, f"Unknown family: {family}")
+                await asyncio.to_thread(engine.ensure, family)
+        except HTTPException:
+            raise
+        except Exception as exc:  # pragma: no cover - requires GPU
+            raise HTTPException(503, f"Load failed: {exc}") from exc
+        return {"loaded": engine.loaded_families(), "active_family": engine.active_family()}
+
     @app.get("/api/avatars")
     async def list_avatars() -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
@@ -280,13 +306,15 @@ def create_app(
         prompt: str = Form(""),
         language: str = Form("Auto"),
         ref_text: str = Form(""),
+        personality: str = Form(""),
         ref_audio: Optional[UploadFile] = File(None),
         image: Optional[UploadFile] = File(None),
     ) -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
         aid = store.new_id(name)
         avatar = Avatar(id=aid, name=name, kind="clone" if kind == "clone" else "design",
-                        language=language or "Auto", prompt=prompt, ref_text=ref_text)
+                        language=language or "Auto", prompt=prompt, ref_text=ref_text,
+                        personality=personality)
         wav = store.wav_path(aid)
         try:
             if avatar.kind == "clone":
@@ -319,6 +347,7 @@ def create_app(
         name: Optional[str] = Form(None),
         prompt: Optional[str] = Form(None),
         language: Optional[str] = Form(None),
+        personality: Optional[str] = Form(None),
         image: Optional[UploadFile] = File(None),
     ) -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
@@ -331,6 +360,8 @@ def create_app(
             avatar.prompt = prompt
         if language is not None:
             avatar.language = language
+        if personality is not None:
+            avatar.personality = personality
         if image is not None:
             store.photo_path(avatar_id).write_bytes(await image.read())
         store.save(avatar)
@@ -495,7 +526,12 @@ def create_app(
         index = await asyncio.to_thread(load_index, cfg.model_index)
         if index is None:
             return {"available": False, "models": []}
-        return {"available": True, "models": index.with_status(cfg.models_dir)}
+        active = await asyncio.to_thread(read_active, cfg.models_dir)
+        return {
+            "available": True,
+            "active": active,
+            "models": index.with_status(cfg.models_dir, active),
+        }
 
     @app.post("/api/stt/download")
     async def stt_download(payload: Dict[str, Any]) -> StreamingResponse:
@@ -637,7 +673,44 @@ def create_app(
         await websocket.accept()
         history: List[Dict[str, str]] = []
         tts_config: Dict[str, Any] = {}
+        personality = ""
         speak = True
+        turn: Optional[asyncio.Task] = None
+        send_lock = asyncio.Lock()
+
+        async def send(obj: Dict[str, Any]) -> None:
+            async with send_lock:
+                await websocket.send_json(obj)
+
+        async def run_turn(user_text: str) -> None:
+            system = app.state.settings.llm.system_prompt
+            if personality:
+                system = f"{system}\n\n{personality}" if system else personality
+            messages = build_messages(
+                system,
+                trim_history(history, app.state.settings.llm.history_turns),
+                user_text,
+            )
+            try:
+                reply = await _chat_turn(
+                    websocket, app.state.settings, scheduler, app.state.llm,
+                    tts_config, messages, speak, send_lock,
+                )
+            except asyncio.CancelledError:
+                await send({"type": "turn.cancelled"})
+                raise
+            except Exception as exc:
+                log.exception("Chat turn failed")
+                await send({"type": "error", "message": str(exc)})
+                return
+            history.append({"role": "user", "content": user_text})
+            history.append({"role": "assistant", "content": reply})
+            await send({"type": "llm.done", "text": reply})
+
+        def cancel_turn() -> None:
+            if turn is not None and not turn.done():
+                turn.cancel()
+
         try:
             while True:
                 message = await websocket.receive()
@@ -650,32 +723,23 @@ def create_app(
                 if etype == "session.config":
                     tts_config = event.get("tts") or {}
                     speak = bool(event.get("speak", True))
+                    personality = str(event.get("personality") or "")
+                elif etype == "input.cancel":
+                    cancel_turn()
                 elif etype == "input.text":
                     user_text = str(event.get("text", "")).strip()
                     if not user_text:
                         continue
-                    await websocket.send_json({"type": "transcript", "text": user_text})
-                    messages = build_messages(
-                        app.state.settings.llm.system_prompt,
-                        trim_history(history, app.state.settings.llm.history_turns),
-                        user_text,
-                    )
-                    try:
-                        reply = await _chat_turn(
-                            websocket, app.state.settings, scheduler, app.state.llm,
-                            tts_config, messages, speak,
-                        )
-                    except Exception as exc:
-                        log.exception("Chat turn failed")
-                        await websocket.send_json({"type": "error", "message": str(exc)})
-                        continue
-                    history.append({"role": "user", "content": user_text})
-                    history.append({"role": "assistant", "content": reply})
-                    await websocket.send_json({"type": "llm.done", "text": reply})
+                    cancel_turn()
+                    await send({"type": "transcript", "text": user_text})
+                    turn = asyncio.create_task(run_turn(user_text))
         except WebSocketDisconnect:
+            cancel_turn()
             return
         except Exception:  # pragma: no cover
             log.exception("Chat WebSocket error")
+        finally:
+            cancel_turn()
 
     if UI_DIR.exists():
         app.mount("/ui", StaticFiles(directory=str(UI_DIR)), name="ui")
@@ -759,12 +823,36 @@ async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text
 
 
 _CHAT_SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
+_CHAT_CLAUSE_RE = re.compile(r"[,;:—–]\s+")
+
+# Release a short first chunk at a clause boundary once the buffer reaches this
+# length, so TTS can start before the whole sentence has been generated.
+_CHAT_MIN_CHARS = 40
 
 
-def _pop_chat_chunks(text: str, max_chars: int = 160) -> Tuple[List[str], str]:
+def _last_boundary(text: str, within: int) -> int:
+    """Index just past the last clause/space boundary within ``text[:within]``."""
+    window = text[:within]
+    cut = max(
+        window.rfind(", "), window.rfind("; "), window.rfind(": "),
+        window.rfind("— "), window.rfind("– "), window.rfind(" "),
+    )
+    return cut + 1 if cut > 0 else 0
+
+
+def _first_clause(text: str, at_least: int, within: int) -> int:
+    """Index just past the first clause boundary at position >= ``at_least``."""
+    for match in _CHAT_CLAUSE_RE.finditer(text[:within]):
+        if match.start() >= at_least:
+            return match.end()
+    return 0
+
+
+def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN_CHARS) -> Tuple[List[str], str]:
     """Split streaming LLM text into TTS chunks.
 
-    Sentence ends first, then clause/space boundaries once a chunk grows too long,
+    Sentence ends first, then clause/space boundaries once a chunk grows too long.
+    A short first chunk is released at the first clause boundary past ``min_chars``
     so the first audio packet arrives early (perceived real-time) instead of after
     a whole long sentence has been generated.
     """
@@ -774,18 +862,25 @@ def _pop_chat_chunks(text: str, max_chars: int = 160) -> Tuple[List[str], str]:
         chunks.extend(s.strip() for s in parts[:-1])
         text = parts[-1]
     while len(text) > max_chars:
-        window = text[:max_chars]
-        cut = max(window.rfind(", "), window.rfind("; "), window.rfind(": "), window.rfind(" "))
+        cut = _last_boundary(text, max_chars)
         if cut <= 0:
             break
-        chunks.append(text[: cut + 1].strip())
-        text = text[cut + 1:].lstrip()
+        chunks.append(text[:cut].strip())
+        text = text[cut:].lstrip()
+    if not chunks and len(text) >= min_chars:
+        cut = _first_clause(text, min_chars, max_chars)
+        if cut > 0:
+            chunks.append(text[:cut].strip())
+            text = text[cut:].lstrip()
     return [c for c in chunks if c], text
 
 
-async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages, speak: bool = True) -> str:
+async def _chat_turn(
+    websocket, settings, scheduler, llm, tts_config, messages,
+    speak: bool = True, send_lock: Optional[asyncio.Lock] = None,
+) -> str:
     req = TTSRequest(**{k: v for k, v in (tts_config or {}).items() if k in TTSRequest.model_fields})
-    send_lock = asyncio.Lock()
+    send_lock = send_lock or asyncio.Lock()
     queue: asyncio.Queue = asyncio.Queue()
     reply = ""
     buffer = ""
@@ -836,10 +931,9 @@ async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages, 
                 await queue.put(buffer)
             await queue.put(None)
             await worker
-    except Exception:
+    finally:
         if worker is not None and not worker.done():
             worker.cancel()
-        raise
     return reply
 
 

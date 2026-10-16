@@ -20,3 +20,17 @@ def test_pop_chat_chunks_splits_long_text_on_spaces():
     assert chunks
     assert all(len(c) <= 52 for c in chunks)
     assert rest and text.startswith(chunks[0])
+
+
+def test_pop_chat_chunks_releases_clause_past_min():
+    text = "This is a considerably longer opening clause, followed by more text."
+    chunks, rest = _pop_chat_chunks(text)
+    assert len(chunks) == 1
+    assert chunks[0].endswith("clause,")
+    assert rest == "followed by more text."
+
+
+def test_pop_chat_chunks_keeps_short_sentence():
+    chunks, rest = _pop_chat_chunks("Hi, ok")
+    assert chunks == []
+    assert rest == "Hi, ok"

@@ -96,13 +96,15 @@ class ModelIndex:
         for model in self.models:
             if model.repo == spec or spec in model.aliases:
                 return model
+            if any(artifact.filename == spec for artifact in model.artifacts):
+                return model
         return None
 
     def default_asr(self) -> Optional[IndexedModel]:
         repo = self.defaults.get("asr", "")
         return self.find(repo) if repo else (self.models[0] if self.models else None)
 
-    def with_status(self, models_dir: str) -> List[Dict]:
+    def with_status(self, models_dir: str, active_filename: str = "") -> List[Dict]:
         out: List[Dict] = []
         for model in self.models:
             artifact = model.asr_artifact()
@@ -117,6 +119,7 @@ class ModelIndex:
                     "size": artifact.size,
                     "filename": artifact.filename,
                     "cached": cached,
+                    "active": bool(active_filename) and artifact.filename == active_filename,
                 }
             )
         return out
@@ -138,6 +141,16 @@ def mark_active(models_dir: str, filename: str, role: str = "asr") -> None:
     directory = Path(models_dir)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / name).write_text(filename, encoding="utf-8")
+
+
+def read_active(models_dir: str, role: str = "asr") -> str:
+    """Return the filename of the model the STT container is pointed at, if any."""
+    name = ACTIVE_DIAR if role == "diarization" else ACTIVE_ASR
+    path = Path(models_dir) / name
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 async def iter_download(

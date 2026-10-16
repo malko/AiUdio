@@ -29,6 +29,7 @@ class Avatar:
     language: str = "Auto"
     prompt: str = ""              # design instruction (regeneration)
     ref_text: str = ""           # transcript of the reference WAV
+    personality: str = ""        # extra system prompt used in conversation
     has_photo: bool = False
     created_at: float = field(default_factory=time.time)
 

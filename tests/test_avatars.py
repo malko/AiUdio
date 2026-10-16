@@ -42,3 +42,10 @@ def test_item_from_request_unknown_avatar(tmp_path):
     settings.paths.voices = str(tmp_path / "voices")
     with pytest.raises(HTTPException):
         _item_from_request(settings, TTSRequest(text="hi", avatar="missing"), "hi")
+
+
+def test_avatar_personality_roundtrip(tmp_path):
+    store = AvatarStore(tmp_path / "avatars")
+    avatar = Avatar(id="ai", name="AI", personality="You are a witty assistant.")
+    store.save(avatar)
+    assert store.get("ai").personality == "You are a witty assistant."

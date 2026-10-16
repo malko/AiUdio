@@ -34,6 +34,7 @@ def test_index_find_and_artifact():
     model = index.find("nemotron-3.5")
     assert model is not None and model.repo.startswith("nvidia/")
     assert index.find("nvidia/nemotron-3.5-asr-streaming-0.6b") is model
+    assert index.find("model.q8_0.gguf") is model  # match by artifact filename
     assert index.find("unknown") is None
     artifact = model.asr_artifact()
     assert artifact is not None and artifact.filename == "model.q8_0.gguf"
@@ -49,9 +50,12 @@ def test_local_path_and_status(tmp_path):
 
     status = index.with_status(str(models_dir))
     assert status[0]["cached"] is False
+    assert status[0]["active"] is False
     path.parent.mkdir(parents=True)
     path.write_bytes(b"\0" * 100)
     assert index.with_status(str(models_dir))[0]["cached"] is True
+    active = index.with_status(str(models_dir), "model.q8_0.gguf")
+    assert active[0]["active"] is True
 
 
 def test_iter_download_cached(tmp_path):
@@ -76,6 +80,14 @@ def test_load_index_missing(tmp_path):
 def test_mark_active(tmp_path):
     mark_active(str(tmp_path), "model.q8_0.gguf")
     assert (tmp_path / ACTIVE_ASR).read_text() == "model.q8_0.gguf"
+
+
+def test_read_active(tmp_path):
+    from app.stt_models import read_active
+
+    assert read_active(str(tmp_path)) == ""
+    mark_active(str(tmp_path), "model.q8_0.gguf")
+    assert read_active(str(tmp_path)) == "model.q8_0.gguf"
 
 
 def test_api_stt_models(tmp_path):

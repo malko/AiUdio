@@ -1,3 +1,20 @@
+import io
+
+import numpy as np
+import soundfile as sf
+from conftest import DummyEngine
+from fastapi.testclient import TestClient
+
+from app.config import ConfigStore
+from app.main import create_app
+
+
+def _wav_bytes() -> bytes:
+    buf = io.BytesIO()
+    sf.write(buf, np.zeros(1600, dtype=np.float32), 16000, format="WAV")
+    return buf.getvalue()
+
+
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
@@ -25,6 +42,34 @@ def test_voices(client):
     r = client.get("/api/voices?family=custom_voice")
     assert r.status_code == 200
     assert "Vivian" in r.json()["speakers"]
+
+
+def test_voices_load_preset(client):
+    r = client.post("/api/voices/load", json={"family": "custom_voice"})
+    assert r.status_code == 200
+    assert "custom_voice" in r.json()["loaded"]
+
+
+def test_voices_load_avatar(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.settings.paths.voices = str(tmp_path / "voices")
+    app = create_app(store, DummyEngine())
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/avatars",
+            data={"name": "Narrator", "kind": "clone", "ref_text": "hello"},
+            files={"ref_audio": ("ref.wav", _wav_bytes(), "audio/wav")},
+        )
+        assert r.status_code == 200, r.text
+        aid = r.json()["id"]
+        r = c.post("/api/voices/load", json={"avatar": aid})
+        assert r.status_code == 200
+        assert "base" in r.json()["loaded"]
+
+
+def test_voices_load_unknown(client):
+    assert client.post("/api/voices/load", json={"avatar": "nope"}).status_code == 404
+    assert client.post("/api/voices/load", json={"family": "nope"}).status_code == 400
 
 
 def test_tts_non_stream_wav(client):

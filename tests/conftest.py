@@ -49,6 +49,12 @@ class DummyEngine:
     def speakers(self, family="custom_voice"):
         return ["Vivian", "Ryan"] if family == "custom_voice" else []
 
+    def _cached_clone_prompt(self, handle, ref_audio, ref_text, x_vector_only=False):
+        return {"ref_audio": ref_audio}
+
+    def clear_clone_prompts(self):
+        pass
+
     def languages(self, family="custom_voice"):
         return ["French", "English"]
 
