@@ -316,6 +316,7 @@ $("#tts-go").addEventListener("click", async () => {
 // ------------------------------------------------------------------ STT tab
 let micCtx = null, micStream = null, micNode = null, sttSocket = null;
 let sttFinal = "";
+let sttPartial = "";
 let micDeviceId = "";
 
 async function loadMicDevices() {
@@ -376,6 +377,7 @@ $("#stt-record").addEventListener("click", async () => {
     sttSocket = new WebSocket(wsURL("/ws/stt"));
     sttSocket.binaryType = "arraybuffer";
     sttFinal = $("#stt-text").textContent;
+    sttPartial = "";
 
     sttSocket.onopen = () => {
       sttSocket.send(JSON.stringify({
@@ -391,9 +393,13 @@ $("#stt-record").addEventListener("click", async () => {
       if (typeof ev.data !== "string") return;
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.type && msg.type.includes("delta")) {
-        $("#stt-text").textContent = sttFinal + msg.delta;
+        // Upstream 'delta' is incremental -> accumulate; otherwise each partial
+        // (often a single word) would replace the previous one on screen.
+        sttPartial += (msg.delta || "");
+        $("#stt-text").textContent = sttFinal + sttPartial;
       } else if (msg.type && msg.type.includes("completed")) {
-        sttFinal += (msg.text || msg.transcript || "") + " ";
+        sttFinal += (msg.transcript || msg.text || "") + " ";
+        sttPartial = "";
         $("#stt-text").textContent = sttFinal;
       } else if (msg.type === "error") {
         $("#stt-status").textContent = msg.message || t("stt.serviceNotReady");
@@ -661,6 +667,86 @@ $("#chat-send").addEventListener("click", chatSend);
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") chatSend(); });
 $("#chat-stop").addEventListener("click", () => {
   if (chatPlayer) { chatPlayer.stop(); chatPlayer = null; }
+});
+
+// Chat dictation: microphone -> STT -> chat input (uses the STT tab microphone).
+let dictateActive = false, dictateCtx = null, dictateStream = null, dictateNode = null;
+let dictateSocket = null, dictateText = "", dictatePartial = "", dictateTimer = null;
+
+async function startDictation() {
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    appendTurn("assistant", t("stt.micInsecure"));
+    return;
+  }
+  try {
+    const audio = micDeviceId ? { deviceId: { exact: micDeviceId } } : true;
+    dictateStream = await navigator.mediaDevices.getUserMedia({ audio });
+    dictateCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = dictateCtx.createMediaStreamSource(dictateStream);
+    dictateNode = dictateCtx.createScriptProcessor(4096, 1, 1);
+    dictateSocket = new WebSocket(wsURL("/ws/stt"));
+    dictateSocket.binaryType = "arraybuffer";
+    dictateText = "";
+    dictatePartial = "";
+    dictateSocket.onopen = () => {
+      dictateSocket.send(JSON.stringify({
+        type: "session.update",
+        session: {
+          sample_rate: 16000,
+          language: $("#stt-lang").value || undefined,
+          automatic_punctuation: true,
+        },
+      }));
+    };
+    dictateSocket.onmessage = (ev) => {
+      if (typeof ev.data !== "string") return;
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type && msg.type.includes("delta")) {
+        dictatePartial += (msg.delta || "");
+      } else if (msg.type && msg.type.includes("completed")) {
+        dictateText += (msg.transcript || "") + " ";
+        dictatePartial = "";
+      }
+    };
+    dictateSocket.onclose = () => { if (dictateActive) finishDictation(); };
+    dictateNode.onaudioprocess = (e) => {
+      if (!dictateSocket || dictateSocket.readyState !== 1) return;
+      dictateSocket.send(downsampleTo16k(e.inputBuffer.getChannelData(0), dictateCtx.sampleRate).buffer);
+    };
+    source.connect(dictateNode);
+    dictateNode.connect(dictateCtx.destination);
+    dictateActive = true;
+    $("#chat-mic").textContent = "⏹";
+  } catch (e) {
+    appendTurn("assistant", `${t("status.error")} ${e}`);
+  }
+}
+
+function finishDictation() {
+  if (dictateNode) dictateNode.disconnect();
+  if (dictateCtx) dictateCtx.close();
+  if (dictateStream) dictateStream.getTracks().forEach((track) => track.stop());
+  dictateSocket = null; dictateCtx = null; dictateStream = null; dictateNode = null;
+  dictateActive = false;
+  $("#chat-mic").textContent = "🎤";
+  const text = (dictateText + dictatePartial).trim();
+  if (text) {
+    $("#chat-input").value = text;
+    chatSend();
+  }
+}
+
+function stopDictation() {
+  if (dictateSocket && dictateSocket.readyState === 1) {
+    try { dictateSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" })); } catch (e) { /* ignore */ }
+  }
+  // Let the server emit the final transcript, then finish.
+  clearTimeout(dictateTimer);
+  dictateTimer = setTimeout(finishDictation, 900);
+}
+
+$("#chat-mic").addEventListener("click", () => {
+  if (dictateActive) stopDictation(); else startDictation();
 });
 
 // ------------------------------------------------------------- settings tab
