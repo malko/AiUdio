@@ -135,7 +135,7 @@ async function init() {
   $("#health").className = "dot ok";
 
   buildTtsFamilySelect();
-  $("#tts-family").addEventListener("change", () => { loadVoices(); updateTtsModelDesc(); });
+  $("#tts-family").addEventListener("change", onFamilyChange);
 
   const lang = $("#tts-language");
   lang.innerHTML = "";
@@ -186,29 +186,64 @@ function tt(key, fallback) {
 function ttsName(family) { return tt(`tts.model.${family}.name`, family); }
 function ttsDesc(family) { return tt(`tts.model.${family}.desc`, ""); }
 
+function selectedVariant() {
+  const id = $("#tts-family").value;
+  return (CONFIG.models.variants || []).find((v) => v.id === id)
+    || (CONFIG.models.variants || [])[0] || null;
+}
+
+function loadedFamilySet() {
+  return new Set((CONFIG.models.families || []).filter((f) => f.loaded).map((f) => f.family));
+}
+
 function buildTtsFamilySelect() {
   const fam = $("#tts-family");
-  const current = fam.value || CONFIG.models.default_family;
+  const variants = CONFIG.models.variants || [];
+  const current = fam.value || (variants[0] ? variants[0].id : "");
+  const loaded = loadedFamilySet();
   fam.innerHTML = "";
-  (CONFIG.models.families || []).forEach((m) => {
+  variants.forEach((v) => {
     const o = document.createElement("option");
-    o.value = m.family;
-    const tag = m.loaded ? t("models.loaded") : t("models.notLoaded");
-    o.textContent = `${ttsName(m.family)} [${tag}]`;
+    o.value = v.id;
+    const tag = loaded.has(v.family) ? ` ✓ ${t("models.loaded")}` : "";
+    o.textContent = `${ttsName(v.family)} · ${v.label}${tag}`;
     fam.appendChild(o);
   });
   fam.value = current;
+  if (!fam.value && variants.length) fam.value = variants[0].id;
   updateTtsModelDesc();
 }
 
 function updateTtsModelDesc() {
-  $("#tts-model-desc").textContent = ttsDesc($("#tts-family").value);
+  const v = selectedVariant();
+  if (!v) { $("#tts-model-desc").textContent = ""; return; }
+  $("#tts-model-desc").textContent = v.label ? `${ttsDesc(v.family)} (${v.label})` : ttsDesc(v.family);
+}
+
+async function selectVariant(v) {
+  if (!v) return;
+  try {
+    await apiFetch("/api/models/select", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variant: v.id }),
+    });
+  } catch (e) { /* ignore */ }
+}
+
+async function onFamilyChange() {
+  const v = selectedVariant();
+  updateTtsModelDesc();
+  await selectVariant(v);
+  await refreshConfigModels();
+  await loadVoices();
+  await loadConversationVoices();
 }
 
 async function refreshConfigModels() {
   try {
     const data = await getJSON("/api/models");
     CONFIG.models.families = data.families;
+    if (data.variants) CONFIG.models.variants = data.variants;
     buildTtsFamilySelect();
     const loaded = (data.loaded || []).map(ttsName).join(", ");
     $("#tts-model-status").textContent = loaded ? `${t("models.loaded")}: ${loaded}` : t("models.notLoaded");
@@ -216,7 +251,8 @@ async function refreshConfigModels() {
 }
 
 $("#tts-load").addEventListener("click", async () => {
-  const family = $("#tts-family").value;
+  const v = selectedVariant();
+  const family = v ? v.family : "custom_voice";
   const btn = $("#tts-load");
   btn.disabled = true;
   $("#tts-model-status").textContent = t("models.loading");
@@ -232,7 +268,7 @@ $("#tts-load").addEventListener("click", async () => {
       try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
       $("#tts-model-status").textContent = `${t("status.error")} ${detail}`;
     } else {
-      $("#tts-model-status").textContent = `${ttsName(family)} — ${t("models.loaded")}`;
+      $("#tts-model-status").textContent = `${ttsName(family)}${v && v.label ? ` (${v.label})` : ""} — ${t("models.loaded")}`;
     }
   } catch (e) {
     $("#tts-model-status").textContent = `${t("status.error")} ${e}`;
@@ -247,7 +283,8 @@ $("#tts-load").addEventListener("click", async () => {
 $("#tts-refresh-models").addEventListener("click", refreshConfigModels);
 
 async function loadVoices() {
-  const family = $("#tts-family").value;
+  const v = selectedVariant();
+  const family = v ? v.family : "custom_voice";
   try {
     const data = await getJSON(`/api/voices?family=${encodeURIComponent(family)}`);
     speakers = data.speakers || [];
@@ -278,7 +315,8 @@ setInterval(refreshStatus, 15000);
 
 // ------------------------------------------------------------------ TTS tab
 function ttsPayload(text) {
-  const family = $("#tts-family").value;
+  const v = selectedVariant();
+  const family = v ? v.family : "custom_voice";
   const speaker = family === "custom_voice" ? $("#tts-speaker").value : undefined;
   return {
     text,
@@ -323,7 +361,7 @@ $("#tts-go").addEventListener("click", async () => {
   $("#tts-status").textContent = t("status.generating");
   $("#tts-log").textContent = "";
   const payload = ttsPayload(text);
-  if ($("#tts-family").value === "base") {
+  if (selectedVariant() && selectedVariant().family === "base") {
     const ref = await uploadReference();
     if (ref) payload.ref_audio = ref;
   }
