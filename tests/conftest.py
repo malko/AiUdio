@@ -84,3 +84,18 @@ def auth_client(tmp_path):
     app = create_app(store, DummyEngine())
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture()
+def permissive_media_client(tmp_path):
+    """Client with remote/local reference audio explicitly enabled (sandbox dir)."""
+    (tmp_path / "ref.wav").write_bytes(b"RIFF....WAVE")
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.settings = _settings(
+        tmp_path,
+        audio={"allow_remote_media": True, "allow_local_ref_paths": True},
+        paths={"reference_audio": str(tmp_path)},
+    )
+    app = create_app(store, DummyEngine())
+    with TestClient(app) as c:
+        yield c

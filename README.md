@@ -280,6 +280,12 @@ AUTH_API_KEYS='machine-key-1,machine-key-2'
 (`?api_key=...`) for protected WS usage. For Internet exposure, put a TLS reverse proxy in
 front (see [`docs/security.md`](docs/security.md)).
 
+Reference audio (`ref_audio`) is **restricted by default** — only base64 data-URLs are
+accepted; remote URLs and local paths are rejected to prevent SSRF and local file disclosure
+(`audio.allow_remote_media`, `audio.allow_local_ref_paths`). A **build/run supply-chain risk
+assessment** and a dependency audit are in [`docs/security.md`](docs/security.md); run
+`make audit` (pip-audit) locally.
+
 ## Development
 
 ```bash

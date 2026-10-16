@@ -59,3 +59,24 @@ def test_auth_blocks_and_allows(auth_client):
     # Basic
     r = auth_client.get("/api/config", auth=("admin", "s3cret"))
     assert r.status_code == 200
+
+
+def _clone_body(ref_audio):
+    return {"text": "hello", "family": "base", "ref_audio": ref_audio}
+
+
+def test_ref_audio_defaults_are_restrictive(client):
+    # Remote URLs and local paths are refused by default (SSRF / file disclosure).
+    assert client.post("/api/tts", json=_clone_body("http://example.com/a.wav")).status_code == 400
+    assert client.post("/api/tts", json=_clone_body("/etc/passwd")).status_code == 400
+    assert client.post("/api/tts", json=_clone_body("file:///etc/passwd")).status_code == 400
+    # Base64 data-URL is allowed.
+    assert client.post("/api/tts", json=_clone_body("data:audio/wav;base64,AAAA")).status_code == 200
+
+
+def test_ref_audio_permissive_and_traversal(permissive_media_client):
+    c = permissive_media_client
+    assert c.post("/api/tts", json=_clone_body("http://example.com/a.wav")).status_code == 200
+    assert c.post("/api/tts", json=_clone_body("ref.wav")).status_code == 200
+    # Path traversal outside the reference directory is refused.
+    assert c.post("/api/tts", json=_clone_body("../../etc/passwd")).status_code == 400

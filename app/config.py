@@ -65,6 +65,10 @@ class ChunkingConfig(BaseModel):
 class AudioConfig(BaseModel):
     format: str = "wav"
     sample_rate: int = 24000
+    # Reference-audio security. Defaults are restrictive to avoid SSRF (remote
+    # URLs) and local file disclosure (path traversal) from API clients.
+    allow_remote_media: bool = False
+    allow_local_ref_paths: bool = False
 
 
 class STTConfig(BaseModel):

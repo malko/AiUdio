@@ -51,6 +51,10 @@ chunking:
 audio:
   format: wav                  # wav | pcm
   sample_rate: 24000
+  # Reference-audio security (voice cloning). Keep false unless you trust all
+  # API clients: true enables remote URLs (SSRF) / local filesystem paths.
+  allow_remote_media: false
+  allow_local_ref_paths: false
 
 stt:
   enabled: true

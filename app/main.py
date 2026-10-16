@@ -26,7 +26,7 @@ from .engine import TTSEngine
 from .llm import LLMClient, build_messages, trim_history
 from .scheduler import BatchScheduler
 from .schemas import TTSRequest
-from .security import request_authorized
+from .security import request_authorized, validate_media_ref
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -43,8 +43,7 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
             "residency": settings.models.residency,
         },
         "audio": settings.audio.model_dump(),
-        "chunking": settings.chunking.model_dump(),
-        "generation": settings.generation.model_dump(),
+        "chunking": settings.chunking.model_dump(),        "generation": settings.generation.model_dump(),
         "stt": {
             "enabled": settings.stt.enabled,
             "realtime_path": settings.stt.realtime_path,
@@ -71,7 +70,7 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
         "language": req.language if isinstance(req.language, str) else None,
         "speaker": req.resolve_speaker(),
         "instruct": req.resolve_instruct(),
-        "ref_audio": req.ref_audio,
+        "ref_audio": validate_media_ref(req.ref_audio, settings, settings.paths.reference_audio),
         "ref_text": req.ref_text,
         "x_vector_only_mode": bool(req.x_vector_only_mode),
         "generation": gen,
@@ -214,6 +213,9 @@ def create_app(
         if not texts:
             raise HTTPException(400, "Field 'text' is required")
 
+        # Validate the reference audio up-front (also covers the streaming path).
+        validate_media_ref(req.ref_audio, app.state.settings, app.state.settings.paths.reference_audio)
+
         if req.stream:
             if len(texts) > 1:
                 raise HTTPException(400, "Streaming only supports a single text")
@@ -226,6 +228,8 @@ def create_app(
         try:
             items = [_item_from_request(app.state.settings, req, t) for t in texts]
             results = [await scheduler.submit(item["family"], item) for item in items]
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(503, f"Generation failed: {exc}") from exc
         fmt = req.resolve_format(app.state.settings.audio.format)

@@ -51,3 +51,89 @@ proxied automatically. Keep the application-level authentication as well.
 - `AUTH_PASSWORD`, `AUTH_API_KEYS`, `HF_TOKEN`, `LLM_API_KEY`: provide them through
   environment variables / a Docker secrets manager.
 - API keys should be long random strings (`openssl rand -hex 32`).
+
+## Reference audio (SSRF / local file disclosure)
+
+The Qwen3-TTS engine accepts a reference audio as a **local path, URL or base64
+data-URL** for voice cloning. Exposing all three to untrusted clients is both an
+**SSRF** (server fetches an arbitrary URL) and a **local file disclosure** (server
+reads an arbitrary path) vector. The API therefore restricts `ref_audio` by default
+(`config.yaml`):
+
+```yaml
+audio:
+  allow_remote_media: false     # http(s) URLs in ref_audio
+  allow_local_ref_paths: false  # filesystem paths in ref_audio
+```
+
+- **Default (both false)**: only `data:` base64 payloads are accepted — what the UI
+  sends after an upload. URLs and paths are rejected with HTTP 400.
+- When `allow_local_ref_paths` is enabled, paths are **confined to
+  `paths.reference_audio`** (traversal outside the directory is refused) and the file
+  must exist.
+- Enable these flags only on a fully trusted network, or keep them off and let
+  clients upload audio through the UI/`data:` refs.
+
+## Supply chain and build/run risk
+
+Question: **is it risky to build or run these containers on a user's machine?**
+
+### Build time
+- **Base images** are official (`pytorch/pytorch`, `rocm/pytorch`, `python:slim`,
+  `nvidia/cuda`, `vllm/vllm-omni`) pulled from their registries. Risk is inherited from
+  those registries; `vllm/vllm-omni:latest` is a **mutable** tag → pin to a release tag or
+  digest for reproducible builds.
+- **Python dependencies** are installed from PyPI with TLS but **without hash pinning**
+  and with wide version ranges. A compromised/typosquatted release could be pulled. Pin
+  with `pip-compile --generate-hashes` if you need a hardened build.
+- **STT**: `docker/stt.Dockerfile` `git clone`s **NVIDIA/NeMo-Speech.cpp at `main`**
+  (mutable) and runs its `scripts/configure.sh` (arbitrary upstream build code) and
+  `git submodule update --init llama.cpp` (unpinned). This is the highest build-time risk
+  item. **Pin `NEMO_SPEECH_REF` to a tag/commit** for auditable builds.
+- Docker build does not mount the host filesystem beyond the build context, and runs as
+  root only inside the (ephemeral) build container — low risk to the host itself.
+
+### Run time
+- **Network exposure**: the gateway port is the only one that should be published. Without
+  `AUTH_ENABLED=true`, anyone reaching it can use the GPU, upload audio and proxy to the
+  LLM. Enable auth (and/or a TLS reverse proxy) when the network is not trusted.
+- **Model weights** are loaded from the official Qwen repositories; no `trust_remote_code`
+  is used. The pinned `transformers`/`accelerate` advisories (below) concern *untrusted*
+  checkpoint loading (path traversal via `weight_map`, custom-code download before trust
+  consent). Mitigations: only load trusted `Qwen/*` repos, never enable
+  `trust_remote_code`, and/or pre-download weights and run with `HF_HUB_OFFLINE=1`.
+- **Reference audio**: see the SSRF/file-disclosure section above.
+- **Devices**: NVIDIA uses `count: all`; ROCm/Vulkan add `/dev/kfd` and `/dev/dri`. No
+  `--privileged` is used. These grants are standard for GPU inference.
+
+### Dependency audit (pip-audit / OSV)
+- Gateway runtime deps (FastAPI, Starlette, httpx, Pydantic, uvicorn, numpy, soundfile,
+  websockets, ...): **no known vulnerabilities**.
+- Third-party transitive deps of the engine (requests, urllib3, huggingface-hub,
+  tokenizers, safetensors, pillow, jinja2, ...) at current versions: **no known
+  vulnerabilities**.
+- **Pinned by `qwen-tts`, cannot be bumped safely**:
+  - `transformers==4.57.3` — e.g. `PYSEC-2026-4174` (downloads custom generation code
+    before trust consent), `PYSEC-2026-3929` (`save_pretrained` path traversal — not used
+    by this project), and others fixed only in transformers 5.x.
+  - `accelerate==1.12.0` — `PYSEC-2026-3804` (path traversal/DoS via sharded checkpoint
+    `weight_map`; affects versions ≤ 1.14.0).
+  - Upgrading requires transformers 5.x / accelerate > 1.14, which are **not validated**
+    for Qwen3-TTS and may break it. Treat as an accepted, documented residual risk and
+    re-evaluate when `qwen-tts` updates its pins.
+
+Run the audit yourself:
+
+```bash
+make audit    # pip-audit on requirements.txt
+```
+
+## Hardening checklist
+
+- [ ] `AUTH_ENABLED=true` with a strong password and random API keys.
+- [ ] Publish only port `8004` (keep `8080` internal).
+- [ ] Pin `NEMO_SPEECH_REF` and the `vllm/vllm-omni` image tag; pin base image digests.
+- [ ] Keep `allow_remote_media` / `allow_local_ref_paths` off.
+- [ ] Pre-download weights and run with `HF_HUB_OFFLINE=1` for offline operation.
+- [ ] TLS reverse proxy for any non-LAN exposure.
+

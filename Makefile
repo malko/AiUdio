@@ -4,7 +4,7 @@ CONFIG ?= config.yaml
 
 .DEFAULT_GOAL := help
 
-.PHONY: help hooks venv deps test lint run up up-vllm up-mixed down logs pull models clean
+.PHONY: help hooks venv deps test lint audit run up up-vllm up-mixed down logs pull models clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -26,6 +26,9 @@ test: ## Run the test suite
 
 lint: ## Check style (ruff, if available)
 	ruff check app tests || true
+
+audit: ## Audit dependencies for known vulnerabilities (pip-audit)
+	pip-audit -r requirements.txt --no-deps --disable-pip || true
 
 run: ## Run the server locally (dev)
 	uvicorn app.main:app --host 0.0.0.0 --port $${PORT:-8004} --reload
