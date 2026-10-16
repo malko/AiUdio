@@ -53,10 +53,16 @@ services:
     networks: [speech]
 
   # STT: NeMo-Speech.cpp (Parakeet TDT v3 offline + Nemotron 3.5 streaming + diarization).
-  # Default: official NVIDIA NGC image (CUDA, multi-arch). For CPU/Vulkan use the
-  # cpu/vulkan overrides, which build NeMo-Speech.cpp from source instead.
+  # Default: official NVIDIA NGC image (CUDA, multi-arch), wrapped in a tiny image
+  # that adds busybox for the wait-for-model entrypoint. For CPU/Vulkan/ROCm use the
+  # cpu/vulkan/rocm overrides, which build NeMo-Speech.cpp from source instead.
   stt:
-    image: ${STT_IMAGE:-nvcr.io/nvidia/nemo-speech.cpp:0.2.0}
+    build:
+      context: .
+      dockerfile: docker/stt-nvcr.Dockerfile
+      args:
+        STT_BASE_IMAGE: ${STT_IMAGE:-nvcr.io/nvidia/nemo-speech.cpp:0.2.0}
+    image: aiudio-stt:local
     entrypoint: ["/bin/sh", "/stt-wait.sh"]
     ports:
       - "${STT_PORT:-8080}:8080"
@@ -65,7 +71,6 @@ services:
       # under a subdirectory for NeMo-Speech. Set STT_MODELS_DIR to a host path to
       # use a bind mount instead.
       - ${STT_MODELS_DIR:-hf_cache}:/hf_cache
-      - ./docker/stt-wait.sh:/stt-wait.sh:ro
     environment:
       - STT_PORT=8080
       - NEMO_SPEECH_MODEL_DIR=${NEMO_SPEECH_MODEL_DIR:-/hf_cache/nemo-speech/models}

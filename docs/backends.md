@@ -9,7 +9,7 @@ container does **not** need to match the host CUDA toolkit version — only the 
 | Component | Image | Notes |
 |---|---|---|
 | TTS gateway | `pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime` (built with our app) | official base image |
-| STT | `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` | official NGC image, CUDA, multi-arch (amd64/arm64) |
+| STT | `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` + busybox wrapper | official NGC image, CUDA, multi-arch |
 | vLLM-Omni (profile `vllm`) | `vllm/vllm-omni:latest` | optional experimental streaming |
 
 ### Why CUDA 13.0 (and not 13.2)

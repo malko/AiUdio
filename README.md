@@ -115,7 +115,7 @@ One **CUDA** compose (the default `docker-compose.yml`, CUDA 13), works with any
 **driver ≥ 580**:
 
 - **TTS gateway**: `pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime` (official image).
-- **STT**: `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (official NVIDIA NGC image, CUDA, multi-arch).
+- **STT**: `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (official NVIDIA NGC image, CUDA, multi-arch), wrapped with busybox for the wait entrypoint.
 - Optional: `docker compose --profile vllm up -d` for the experimental vLLM-Omni streaming service.
 
 Non-NVIDIA hardware uses **additive overrides** (the CUDA default is unchanged):
@@ -204,7 +204,9 @@ with client.audio.speech.with_streaming_response.create(
 
 The `stt` service uses the **official NVIDIA NGC image**
 [`nvcr.io/nvidia/nemo-speech.cpp:0.2.0`](https://catalog.ngc.nvidia.com/orgs/nvidia/-/containers/nemo-speech.cpp)
-(CUDA, multi-arch, signed) — no local build. Models are provided by the gateway.
+(CUDA, multi-arch, signed). The image is distroless (no shell), so AiUdio wraps it in a
+**tiny derived image that only adds busybox** (`docker/stt-nvcr.Dockerfile`) for the
+wait-for-model entrypoint — **no compilation**. Models are provided by the gateway.
 
 - **Parakeet TDT 0.6B v3**: 25 European languages, automatic punctuation (offline, accuracy).
 - **Nemotron 3.5 ASR Streaming 0.6B**: realtime streaming (~160 ms) — default.

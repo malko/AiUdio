@@ -13,7 +13,7 @@ services:
           devices: []
 
   stt:
-    image: aiudio-stt:local
+    image: aiudio-stt-source:local
     build:
       context: .
       dockerfile: docker/stt.Dockerfile
