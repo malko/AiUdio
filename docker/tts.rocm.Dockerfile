@@ -10,6 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/app/hf_cache \
     PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     HSA_OVERRIDE_GFX_VERSION=11.0.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
