@@ -79,6 +79,7 @@ const MESSAGES = {
     "stt.defaultMic": "Default",
     "stt.micInsecure": "Microphone needs a secure context (HTTPS or localhost).",
     "stt.serviceNotReady": "STT service not ready — download a model first.",
+    "stt.noSpeech": "No speech recognized.",
 
     "chat.title": "Conversation (external LLM)",
     "chat.placeholder": "Your message...",
@@ -230,6 +231,7 @@ const MESSAGES = {
     "stt.defaultMic": "Par défaut",
     "stt.micInsecure": "Le micro nécessite un contexte sécurisé (HTTPS ou localhost).",
     "stt.serviceNotReady": "Service STT non prêt — téléchargez d'abord un modèle.",
+    "stt.noSpeech": "Aucune parole reconnue.",
 
     "chat.title": "Conversation (LLM externe)",
     "chat.placeholder": "Votre message…",

@@ -854,6 +854,26 @@ async function loadMicDevices() {
 }
 $("#stt-mic-device").addEventListener("change", (e) => { micDeviceId = e.target.value; });
 
+// Re-enumerate when a device is plugged/unplugged, and fall back to the default
+// device when the selected one disappeared (e.g. after swapping microphones).
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", () => { loadMicDevices(); });
+}
+
+async function openMicStream() {
+  if (!micDeviceId) return navigator.mediaDevices.getUserMedia({ audio: true });
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micDeviceId } } });
+  } catch (e) {
+    if (e && ["OverconstrainedError", "NotFoundError", "DevicesNotFoundError"].includes(e.name)) {
+      micDeviceId = "";
+      const sel = $("#stt-mic-device"); if (sel) sel.value = "";
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw e;
+  }
+}
+
 // STT microphone
 let micCtx = null, micStream = null, micNode = null, sttSocket = null, sttFinal = "", sttPartial = "";
 
@@ -865,8 +885,7 @@ $("#stt-record").addEventListener("click", async () => {
     return;
   }
   try {
-    const audio = micDeviceId ? { deviceId: { exact: micDeviceId } } : true;
-    micStream = await navigator.mediaDevices.getUserMedia({ audio });
+    micStream = await openMicStream();
     loadMicDevices();
     micCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = micCtx.createMediaStreamSource(micStream);
@@ -1073,8 +1092,7 @@ async function startDictation() {
     return;
   }
   try {
-    const audio = micDeviceId ? { deviceId: { exact: micDeviceId } } : true;
-    dictateStream = await navigator.mediaDevices.getUserMedia({ audio });
+    dictateStream = await openMicStream();
     dictateCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = dictateCtx.createMediaStreamSource(dictateStream);
     dictateNode = dictateCtx.createScriptProcessor(4096, 1, 1);
@@ -1092,7 +1110,9 @@ async function startDictation() {
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.type && msg.type.includes("delta")) dictatePartial += (msg.delta || "");
       else if (msg.type && msg.type.includes("completed")) { dictateText += (msg.transcript || "") + " "; dictatePartial = ""; }
+      else if (msg.type === "error") $("#chat-status").textContent = msg.message || t("stt.serviceNotReady");
     };
+    dictateSocket.onerror = () => { $("#chat-status").textContent = t("stt.serviceNotReady"); };
     dictateSocket.onclose = () => { if (dictateActive) finishDictation(); };
     dictateNode.onaudioprocess = (e) => {
       if (!dictateSocket || dictateSocket.readyState !== 1) return;
@@ -1116,6 +1136,7 @@ function finishDictation() {
   $("#chat-mic").textContent = "🎤";
   const text = (dictateText + dictatePartial).trim();
   if (text) { $("#chat-input").value = text; chatSend(); }
+  else if ($("#chat-status")) $("#chat-status").textContent = t("stt.noSpeech");
 }
 
 function stopDictation() {
