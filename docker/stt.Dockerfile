@@ -69,7 +69,7 @@ ARG BACKEND
 # libssl package name differs across Ubuntu releases (libssl3t64 >= 24.04, libssl3
 # on 22.04); install whichever exists.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libsentencepiece0 libgomp1 ca-certificates \
+      libsentencepiece0 libgomp1 ca-certificates curl \
     && (for p in libssl3t64 libssl3; do apt-get install -y --no-install-recommends "$p" 2>/dev/null && break; done || true) \
     && if [ "$BACKEND" = "vulkan" ]; then \
          apt-get install -y --no-install-recommends libvulkan1 ; \
