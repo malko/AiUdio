@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Enforce gitmoji-prefixed commit subjects.
+# See https://gitmoji.dev — a leading unicode emoji or a :shortcode: is accepted.
+set -euo pipefail
+
+msg_file="$1"
+subject="$(grep -vE '^\s*#' "$msg_file" | sed '/^\s*$/d' | head -n1)"
+
+if [[ -z "${subject}" ]]; then
+  echo "❌ Empty commit message." >&2
+  exit 1
+fi
+
+# Accept either a leading unicode emoji, or a leading :shortcode:.
+if [[ "${subject}" =~ ^:[a-zA-Z0-9_+-]+: ]] || [[ "${subject}" =~ ^[^[:alnum:][:space:]] ]]; then
+  exit 0
+fi
+
+cat >&2 <<'EOF'
+❌ The commit subject must start with a gitmoji.
+
+   Format : <gitmoji> <type>(<scope>): <subject>
+   Example: ✨ feat(tts): add dynamic batching
+
+   Reference: https://gitmoji.dev
+EOF
+exit 1

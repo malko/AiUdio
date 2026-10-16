@@ -1,0 +1,22 @@
+AiUdio Server
+Copyright (c) 2026 AiUdio Server contributors
+
+This product includes third-party components distributed under their own
+licenses:
+
+- Qwen3-TTS (Alibaba Qwen Team) — Apache License 2.0
+  https://github.com/QwenLM/Qwen3-TTS
+- NeMo-Speech.cpp (NVIDIA) — Apache License 2.0
+  Associated third-party components: see the upstream repository's
+  THIRD_PARTY_NOTICES.md.
+  https://github.com/NVIDIA/NeMo-Speech.cpp
+- vLLM-Omni (vLLM Project) — Apache License 2.0
+  https://github.com/vllm-project/vllm-omni
+- PyTorch base image — BSD-style
+  https://github.com/pytorch/pytorch
+- Models downloaded at runtime (Qwen3-TTS, Parakeet, Nemotron, Magpie...):
+  governed by their respective authors' licenses (Hugging Face / NVIDIA / Alibaba).
+
+Model weights are not redistributed by this repository: they are downloaded by
+the user from their official sources and remain subject to their original
+licenses.

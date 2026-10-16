@@ -1,0 +1,25 @@
+# Vulkan override (Intel/AMD iGPU): STT runs on ggml/Vulkan; TTS has no Vulkan
+# backend, so it falls back to the CPU image (or point it to a remote service
+# instead of running it here).
+#   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build
+services:
+  aiudio:
+    build:
+      dockerfile: docker/tts.cpu.Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+  stt:
+    build:
+      args:
+        BACKEND: vulkan
+    deploy:
+      resources:
+        reservations:
+          devices: []
+    devices:
+      - /dev/dri
+    group_add:
+      - render

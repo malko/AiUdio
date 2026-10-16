@@ -1,0 +1,86 @@
+"""Test fixtures: application with a mocked engine (no GPU required)."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.config import ConfigStore, Settings  # noqa: E402
+from app.main import create_app  # noqa: E402
+
+
+class DummyEngine:
+    """Fake engine: returns a short silence for any synthesis."""
+
+    backend = "dummy"
+
+    def __init__(self, sample_rate: int = 24000):
+        self.sample_rate = sample_rate
+        self._loaded: set[str] = set()
+
+    def available(self):
+        return [
+            {"family": f, "repo_id": f"dummy/{f}", "loaded": f in self._loaded}
+            for f in ("custom_voice", "voice_design", "base")
+        ]
+
+    def loaded_families(self):
+        return list(self._loaded)
+
+    def active_family(self):
+        return next(iter(self._loaded), None)
+
+    def ensure(self, family):
+        self._loaded.add(family)
+        return family
+
+    def unload(self, family=None):
+        if family is None:
+            self._loaded.clear()
+        else:
+            self._loaded.discard(family)
+
+    def speakers(self, family="custom_voice"):
+        return ["Vivian", "Ryan"] if family == "custom_voice" else []
+
+    def languages(self, family="custom_voice"):
+        return ["French", "English"]
+
+    def synthesize_batch(self, family, items):
+        samples = np.zeros(self.sample_rate // 10, dtype=np.float32)
+        return [(samples, self.sample_rate) for _ in items]
+
+
+def _settings(tmp_path: Path, **overrides) -> Settings:
+    settings = Settings()
+    settings.stt.enabled = False
+    settings.llm.base_url = "http://127.0.0.1:9/v1"  # unreachable
+    for section, values in overrides.items():
+        target = getattr(settings, section)
+        for key, value in values.items():
+            setattr(target, key, value)
+    return settings
+
+
+@pytest.fixture()
+def client(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.settings = _settings(tmp_path)
+    app = create_app(store, DummyEngine())
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture()
+def auth_client(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.settings = _settings(tmp_path, auth={"enabled": True, "password": "s3cret", "api_keys": ["k-123"]})
+    app = create_app(store, DummyEngine())
+    with TestClient(app) as c:
+        yield c

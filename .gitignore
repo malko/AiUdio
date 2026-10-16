@@ -1,0 +1,47 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Project runtime data ---
+outputs/
+!outputs/.gitkeep
+logs/
+!logs/.gitkeep
+*.log
+voices/*
+!voices/.gitkeep
+reference_audio/*
+!reference_audio/.gitkeep
+hf_cache/
+model_cache/
+stt_models/
+!stt_models/.gitkeep
+
+# --- Generated audio used for local tests ---
+*.wav
+*.mp3
+*.flac
+!tests/fixtures/*.wav
+
+# --- Env / secrets ---
+.env
+.env.local
+*.secret
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+*.swp

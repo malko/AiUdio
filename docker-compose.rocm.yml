@@ -1,0 +1,26 @@
+# AMD ROCm override (Linux). TTS via the official rocm/pytorch base image (sdpa
+# attention, no FlashAttention). STT is compiled for CPU (HIP/ggml not guaranteed).
+#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build
+services:
+  aiudio:
+    build:
+      dockerfile: docker/tts.rocm.Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices: []
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+
+  stt:
+    build:
+      args:
+        BACKEND: cpu
+    deploy:
+      resources:
+        reservations:
+          devices: []

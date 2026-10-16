@@ -1,0 +1,99 @@
+# Unified TTS + STT stack (CUDA by default).
+#   docker compose up -d --build
+# Hardware variants (overrides):
+#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml  up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build
+# Experimental vLLM-Omni service (native PCM streaming):
+#   docker compose --profile vllm up -d
+name: aiudio
+
+x-nvidia-gpu: &nvidia-gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  # Gateway: Qwen3-TTS engine + REST/OpenAI API + WebSocket + UI + STT/LLM proxies.
+  aiudio:
+    build:
+      context: .
+      dockerfile: docker/tts.Dockerfile
+    image: aiudio-server:local
+    ports:
+      - "${PORT:-8004}:8004"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./voices:/app/voices
+      - ./reference_audio:/app/reference_audio
+      - ./outputs:/app/outputs
+      - ./logs:/app/logs
+      - hf_cache:/app/hf_cache
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-1}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - STT_BASE_URL=http://stt:8080
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - AUTH_USERNAME=${AUTH_USERNAME:-admin}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      - AUTH_API_KEYS=${AUTH_API_KEYS:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    <<: *nvidia-gpu
+    restart: unless-stopped
+    networks: [speech]
+
+  # STT: NeMo-Speech.cpp (Parakeet TDT v3 offline + Nemotron 3.5 streaming + diarization).
+  stt:
+    build:
+      context: .
+      dockerfile: docker/stt.Dockerfile
+      args:
+        BACKEND: cuda
+    image: aiudio-stt:local
+    ports:
+      - "${STT_PORT:-8080}:8080"
+    volumes:
+      - ${STT_MODELS_DIR:-./stt_models}:/models
+    environment:
+      - STT_ASR_MODEL=${STT_ASR_MODEL:-nemotron-3.5}
+      - STT_PORT=8080
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    <<: *nvidia-gpu
+    restart: unless-stopped
+    networks: [speech]
+
+  # Optional: vLLM-Omni (official image) for native PCM streaming.
+  tts-vllm:
+    image: ${VLLM_OMNI_IMAGE:-vllm/vllm-omni:latest}
+    profiles: ["vllm"]
+    command: >
+      vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+      --omni --host 0.0.0.0 --port 8091
+    ports:
+      - "8005:8091"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - NVIDIA_VISIBLE_DEVICES=all
+    <<: *nvidia-gpu
+    restart: unless-stopped
+    networks: [speech]
+
+networks:
+  speech:
+    name: aiudio-net
+
+volumes:
+  hf_cache:

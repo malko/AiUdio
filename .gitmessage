@@ -1,0 +1,15 @@
+# Commit message — gitmoji conventions
+# Format: <gitmoji> <type>(<scope>): <subject in present tense>  (#issue)
+#
+# Examples:
+#   ✨ feat(tts): add dynamic batching of requests
+#   🐛 fix(stt): fix realtime WebSocket passthrough
+#   📝 docs: document environment variables
+#   🐳 chore(docker): add the ROCm override
+#   ✅ test(chunking): cover sentence boundaries
+#
+# Gitmoji reference: https://gitmoji.dev
+# The .githooks/commit-msg hook checks that the subject starts with a gitmoji.
+#
+# --- Subject line below (delete these comments before saving) ---
+

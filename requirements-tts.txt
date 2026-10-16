@@ -1,0 +1,4 @@
+# Qwen3-TTS engine (pulls torch/torchaudio/transformers/accelerate).
+# NOTE: torch must match the CUDA of the base image. The Dockerfile reinstalls
+# torch/torchaudio at the right version after installing qwen-tts.
+qwen-tts>=0.1.1,<0.2

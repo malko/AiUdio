@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AiUdio Server</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <header>
+    <h1 id="title" data-i18n="app.title">AiUdio Server</h1>
+    <div class="status">
+      <span id="health" class="dot" title="status">●</span>
+      <span id="active-model">—</span>
+      <select id="lang-select" class="lang">
+        <option value="en">English</option>
+        <option value="fr">Français</option>
+      </select>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="tts" class="active" data-i18n="nav.synthesis">Synthesis</button>
+    <button data-tab="stt" data-i18n="nav.transcription">Transcription</button>
+    <button data-tab="chat" data-i18n="nav.conversation">Conversation</button>
+    <button data-tab="settings" data-i18n="nav.settings">Settings</button>
+  </nav>
+
+  <!-- ------------------------------------------------------------- TTS -->
+  <section id="tab-tts" class="tab active">
+    <div class="grid">
+      <div class="card">
+        <label><span data-i18n="tts.textLabel">Text</span>
+          <textarea id="tts-text" rows="6" data-i18n-ph="tts.textPlaceholder" placeholder="Hello, this is a test."></textarea>
+        </label>
+        <div class="row">
+          <label><span data-i18n="tts.family">Mode / family</span>
+            <select id="tts-family"></select>
+          </label>
+          <label><span data-i18n="tts.language">Language</span>
+            <select id="tts-language"></select>
+          </label>
+          <label><span data-i18n="tts.speaker">Voice (speaker)</span>
+            <select id="tts-speaker"></select>
+          </label>
+        </div>
+        <label><span data-i18n="tts.instruct">Instruction (style / emotion)</span>
+          <input id="tts-instruct" type="text" data-i18n-ph="tts.instructPlaceholder" placeholder="e.g. Speak with excitement" />
+        </label>
+        <details id="clone-box">
+          <summary data-i18n="tts.cloneTitle">Voice cloning (family "base")</summary>
+          <label><span data-i18n="tts.refAudio">Reference audio</span> <input id="tts-ref-audio" type="file" accept="audio/*" /></label>
+          <label><span data-i18n="tts.refText">Reference transcript</span> <input id="tts-ref-text" type="text" /></label>
+          <label class="inline"><input id="tts-xvec" type="checkbox" /> <span data-i18n="tts.xvec">x-vector only</span></label>
+        </details>
+        <div class="row">
+          <label class="inline"><input id="tts-stream" type="checkbox" checked /> <span data-i18n="tts.stream">Streaming (PCM)</span></label>
+          <label class="inline"><input id="tts-chunk" type="checkbox" checked /> <span data-i18n="tts.chunk">Split by sentence</span></label>
+        </div>
+        <button id="tts-go" class="primary" data-i18n="tts.generate">Generate</button>
+      </div>
+      <div class="card">
+        <h2 data-i18n="tts.playback">Playback</h2>
+        <div id="tts-status" class="muted" data-i18n="tts.ready">Ready.</div>
+        <audio id="tts-player" controls></audio>
+        <div id="tts-log" class="log"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- STT -->
+  <section id="tab-stt" class="tab">
+    <div class="grid">
+      <div class="card">
+        <h2 data-i18n="stt.micTitle">Microphone (real time)</h2>
+        <div class="row">
+          <button id="stt-record" class="primary" data-i18n="stt.start">Start</button>
+          <label><span data-i18n="stt.language">Language</span> <input id="stt-lang" type="text" placeholder="auto" /></label>
+        </div>
+        <div class="muted" id="stt-status" data-i18n="stt.stopped">Stopped.</div>
+        <h3 data-i18n="stt.transcription">Transcription</h3>
+        <div id="stt-text" class="transcript"></div>
+      </div>
+      <div class="card">
+        <h2 data-i18n="stt.fileTitle">Audio file</h2>
+        <label><span data-i18n="stt.file">File</span> <input id="stt-file" type="file" accept="audio/*" /></label>
+        <label class="inline"><input id="stt-diar" type="checkbox" /> <span data-i18n="stt.diar">Diarization (who speaks)</span></label>
+        <button id="stt-upload" data-i18n="stt.transcribe">Transcribe</button>
+        <pre id="stt-file-out" class="log"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- CHAT -->
+  <section id="tab-chat" class="tab">
+    <div class="grid">
+      <div class="card wide">
+        <h2 data-i18n="chat.title">Conversation (external LLM)</h2>
+        <div id="chat-log" class="transcript"></div>
+        <div class="row">
+          <input id="chat-input" type="text" data-i18n-ph="chat.placeholder" placeholder="Your message..." />
+          <button id="chat-mic" data-i18n-title="chat.dictate" title="Dictate via STT">🎤</button>
+          <button id="chat-send" class="primary" data-i18n="chat.send">Send</button>
+          <button id="chat-stop" data-i18n="chat.stop">Stop</button>
+        </div>
+        <label class="inline"><input id="chat-speak" type="checkbox" checked /> <span data-i18n="chat.speak">Speak the reply (TTS)</span></label>
+      </div>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------------- SETTINGS -->
+  <section id="tab-settings" class="tab">
+    <div class="grid">
+      <div class="card">
+        <h2 data-i18n="settings.llmTitle">External LLM</h2>
+        <label><span data-i18n="settings.baseUrl">Base URL</span> <input id="set-llm-url" type="text" /></label>
+        <label><span data-i18n="settings.model">Model</span> <input id="set-llm-model" type="text" /></label>
+        <label><span data-i18n="settings.apiKey">API key</span> <input id="set-llm-key" type="password" /></label>
+        <label><span data-i18n="settings.systemPrompt">System prompt</span> <textarea id="set-llm-system" rows="3"></textarea></label>
+        <button id="set-llm-ping" data-i18n="settings.test">Test connection</button>
+        <div id="set-llm-status" class="muted"></div>
+      </div>
+      <div class="card">
+        <h2 data-i18n="settings.genTitle">Generation / audio</h2>
+        <label><span data-i18n="settings.temperature">Temperature</span> <input id="set-temp" type="number" step="0.05" /></label>
+        <label><span data-i18n="settings.batch">Batch size</span> <input id="set-batch" type="number" min="1" /></label>
+        <label><span data-i18n="settings.chunkMax">Chunk max (chars)</span> <input id="set-maxchars" type="number" min="40" /></label>
+        <button id="set-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="set-save-status" class="muted"></div>
+      </div>
+      <div class="card">
+        <h2 data-i18n="settings.clientKeyTitle">Client API key</h2>
+        <label><span data-i18n="settings.apiKey">API key</span>
+          <input id="set-apikey" type="password" data-i18n-ph="settings.clientKeyPlaceholder" placeholder="if auth is enabled" />
+        </label>
+        <button id="set-apikey-save" data-i18n="settings.remember">Remember (localStorage)</button>
+        <div class="muted" data-i18n="settings.clientKeyHint">Used by the UI for protected endpoints.</div>
+      </div>
+    </div>
+  </section>
+
+  <script src="/ui/i18n.js"></script>
+  <script src="/ui/app.js"></script>
+</body>
+</html>

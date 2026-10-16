@@ -1,0 +1,20 @@
+# Project ruff configuration.
+line-length = 110
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+  "E501",     # line length is handled during review
+  "B008",     # FastAPI File()/Form() in default arguments
+  "UP006",    # typing.List/Dict kept for readability
+  "UP007",
+  "UP035",
+  "UP045",
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["F401", "E402"]
+
+[lint.isort]
+known-first-party = ["app"]

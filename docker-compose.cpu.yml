@@ -1,0 +1,19 @@
+# CPU override: no GPU required. TTS is slow but functional; STT is fast.
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+services:
+  aiudio:
+    build:
+      dockerfile: docker/tts.cpu.Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+  stt:
+    build:
+      args:
+        BACKEND: cpu
+    deploy:
+      resources:
+        reservations:
+          devices: []

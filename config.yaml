@@ -1,0 +1,82 @@
+## Runtime configuration for the AiUdio Server.
+## Mounted into the container (/app/config.yaml) and editable from the UI.
+## Environment variables documented in .env.example can override some fields at
+## startup (see app/config.py).
+
+server:
+  host: 0.0.0.0
+  port: 8004
+  cors_origins: ["*"]
+  log_level: info
+
+paths:
+  output: outputs
+  voices: voices
+  reference_audio: reference_audio
+  logs: logs
+
+models:
+  # Registry: family -> Hugging Face repo (or local path).
+  registry:
+    custom_voice: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    voice_design: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+    base: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+  default_family: custom_voice
+  # single = one model in VRAM (hot-swap); multi = keep `resident` loaded.
+  residency: single
+  resident: [custom_voice]
+  device: auto                 # auto | cuda:0 | cpu ...
+  dtype: bfloat16              # bfloat16 | float16 | float32
+  attn_implementation: sdpa    # sdpa | flash_attention_2
+  hf_home: /app/hf_cache
+
+generation:
+  temperature: 0.9
+  top_k: 50
+  top_p: 1.0
+  repetition_penalty: 1.05
+  max_new_tokens: 2048
+  subtalker_temperature: 0.9
+  subtalker_top_k: 50
+  subtalker_top_p: 1.0
+  # Micro-batching (throughput): requests grouped by family within a short window.
+  batch_size: 4
+  batch_window_ms: 25
+
+chunking:
+  enabled: true
+  max_chars: 240
+  silence_ms: 120
+
+audio:
+  format: wav                  # wav | pcm
+  sample_rate: 24000
+
+stt:
+  enabled: true
+  base_url: http://stt:8080
+  transcribe_path: /v1/audio/transcriptions
+  realtime_path: /v1/audio/transcriptions/realtime
+  diarize_path: /v1/audio/diarizations
+  api_key: ""
+
+llm:
+  base_url: http://host.docker.internal:8080/v1
+  api_key: ""
+  model: ""
+  system_prompt: >-
+    You are a helpful voice assistant. Answer concisely, in complete
+    sentences, in the language of the user.
+  temperature: 0.7
+  max_tokens: -1
+  history_turns: 12
+
+vllm:
+  # Alternative engine (native PCM streaming) served by the official vLLM-Omni image.
+  enabled: false
+  base_url: http://tts-vllm:8091
+
+ui:
+  title: AiUdio Server
+  show_stt_tab: true
+  show_chat_tab: true
