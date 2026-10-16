@@ -105,59 +105,43 @@
       <div class="card wide">
         <h2 data-i18n="avatars.title">Voices (avatars)</h2>
         <div class="muted" data-i18n="avatars.hint">Reusable voices: clone a voice or design one from a description, then use it in the conversation.</div>
+        <div class="row"><button id="av-new" class="primary" data-i18n="avatars.createBtn">Create a voice</button></div>
         <div id="avatars-list" class="avatars"></div>
-        <details>
-          <summary data-i18n="avatars.create">Create a voice</summary>
-          <label><span data-i18n="avatars.name">Name</span> <input id="av-name" type="text" /></label>
-          <label><span data-i18n="avatars.type">Type</span>
-            <select id="av-kind">
-              <option value="design" data-i18n="avatars.kindDesign">Design from a description</option>
-              <option value="clone" data-i18n="avatars.kindClone">Clone from audio</option>
-            </select>
-          </label>
-          <div id="av-design-box">
-            <label><span data-i18n="avatars.prompt">Description</span>
-              <textarea id="av-prompt" rows="2" data-i18n-ph="avatars.promptPlaceholder" placeholder="e.g. warm, calm female voice, slight British accent"></textarea>
-            </label>
-          </div>
-          <div id="av-clone-box" hidden>
-            <label><span data-i18n="avatars.refAudio">Reference audio</span> <input id="av-ref" type="file" accept="audio/*" /></label>
-            <label><span data-i18n="avatars.refText">Reference transcript</span> <input id="av-reftext" type="text" /></label>
-            <label class="inline"><input id="av-xvec" type="checkbox" checked /> <span data-i18n="avatars.xvec">x-vector only</span></label>
-          </div>
-          <label><span data-i18n="avatars.language">Language</span> <select id="av-lang"></select></label>
-          <label><span data-i18n="avatars.personality">Personality (system prompt, optional)</span>
-            <textarea id="av-personality" rows="2" data-i18n-ph="avatars.personalityPlaceholder" placeholder="e.g. You are a playful assistant who loves puns."></textarea>
-          </label>
-          <label><span data-i18n="avatars.photo">Photo (optional)</span> <input id="av-photo" type="file" accept="image/*" /></label>
-          <button id="av-create" class="primary" data-i18n="avatars.createBtn">Create</button>
-          <div id="av-status" class="muted"></div>
-        </details>
       </div>
     </div>
   </section>
 
   <dialog id="avatar-dialog" class="modal">
-    <h2 data-i18n="avatars.editTitle">Edit voice</h2>
+    <div class="modal-head">
+      <div id="ad-photo-preview" class="avatar-photo big"></div>
+      <h2 id="ad-title">Edit voice</h2>
+    </div>
     <label><span data-i18n="avatars.name">Name</span> <input id="ad-name" type="text" /></label>
+    <label id="ad-kind-wrap"><span data-i18n="avatars.type">Type</span>
+      <select id="ad-kind">
+        <option value="design" data-i18n="avatars.kindDesign">Design from a description</option>
+        <option value="clone" data-i18n="avatars.kindClone">Clone from audio</option>
+      </select>
+    </label>
     <label><span data-i18n="avatars.language">Language</span> <select id="ad-lang"></select></label>
     <div id="ad-design-box">
       <label><span data-i18n="avatars.prompt">Description</span>
-        <textarea id="ad-prompt" rows="2"></textarea>
+        <textarea id="ad-prompt" rows="2" data-i18n-ph="avatars.promptPlaceholder" placeholder="e.g. warm, calm female voice, slight British accent"></textarea>
       </label>
     </div>
     <div id="ad-clone-box">
+      <label><span data-i18n="avatars.refAudio">Reference audio</span> <input id="ad-ref" type="file" accept="audio/*" /></label>
       <label><span data-i18n="avatars.refText">Reference transcript</span> <input id="ad-reftext" type="text" /></label>
-      <label class="inline"><input id="ad-xvec" type="checkbox" /> <span data-i18n="avatars.xvec">x-vector only</span></label>
-      <label><span data-i18n="avatars.replaceAudio">Replace reference audio</span> <input id="ad-ref" type="file" accept="audio/*" /></label>
+      <label class="inline"><input id="ad-xvec" type="checkbox" /> <span data-i18n="tts.xvec">x-vector only</span></label>
     </div>
     <label><span data-i18n="avatars.personality">Personality (system prompt, optional)</span>
-      <textarea id="ad-personality" rows="2"></textarea>
+      <textarea id="ad-personality" rows="2" data-i18n-ph="avatars.personalityPlaceholder" placeholder="e.g. You are a playful assistant who loves puns."></textarea>
     </label>
-    <label><span data-i18n="avatars.photo">Photo (optional)</span> <input id="ad-photo" type="file" accept="image/*" /></label>
-    <div class="row">
+    <label class="file-label"><span data-i18n="avatars.photo">Photo (optional)</span> <input id="ad-photo" type="file" accept="image/*" /></label>
+    <div class="row modal-actions">
       <button type="button" id="ad-save" class="primary" data-i18n="settings.save">Save</button>
       <button type="button" id="ad-regenerate" data-i18n="avatars.regenerate">Regenerate</button>
+      <button type="button" id="ad-delete" class="danger" data-i18n="avatars.delete">Delete</button>
       <button type="button" id="ad-close" data-i18n="avatars.close">Close</button>
     </div>
     <div id="ad-status" class="muted"></div>

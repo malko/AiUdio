@@ -143,13 +143,6 @@ async function init() {
     const o = document.createElement("option"); o.value = l; o.textContent = l; lang.appendChild(o);
   });
 
-  const avLang = $("#av-lang");
-  avLang.innerHTML = "";
-  (CONFIG.languages || ["Auto"]).forEach((l) => {
-    const o = document.createElement("option"); o.value = l; o.textContent = l; avLang.appendChild(o);
-  });
-  avLang.value = "English";
-
   ["#chat-language", "#ad-lang"].forEach((sel) => {
     const el = $(sel);
     if (!el) return;
@@ -410,7 +403,7 @@ function renderAvatars() {
     meta.className = "muted";
     const kind = a.kind === "clone" ? t("avatars.kindClone") : t("avatars.kindDesign");
     const lang = a.language && a.language !== "Auto" ? ` · ${a.language}` : "";
-    const xvec = a.kind === "clone" && a.x_vector_only ? ` · ${t("avatars.xvec")}` : "";
+    const xvec = a.kind === "clone" && a.x_vector_only ? ` · ${t("tts.xvec")}` : "";
     meta.textContent = `${kind}${lang}${xvec}`;
     info.appendChild(nm); info.appendChild(meta);
     card.appendChild(info);
@@ -434,91 +427,123 @@ function renderAvatars() {
     }));
     actions.appendChild(mk(t("avatars.preview"), "", () => window.open(`/api/avatars/${encodeURIComponent(a.id)}/audio`, "_blank")));
     actions.appendChild(mk(t("avatars.edit"), "", () => openAvatarDialog(a.id)));
-    actions.appendChild(mk(t("avatars.delete"), "", async () => {
-      if (!window.confirm(`${t("avatars.delete")} "${a.name}"?`)) return;
-      await apiFetch(`/api/avatars/${encodeURIComponent(a.id)}`, { method: "DELETE" });
-      await loadAvatars(); await loadConversationVoices(); buildStartupVoiceSelect();
-    }));
     card.appendChild(actions);
     list.appendChild(card);
   });
 }
 
-async function regenerateAvatar(id) {
-  $("#av-status").textContent = "…";
-  try {
-    const r = await apiFetch(`/api/avatars/${encodeURIComponent(id)}/regenerate`, { method: "POST" });
-    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
-    $("#av-status").textContent = t("status.done");
-    await loadAvatars();
-    await loadConversationVoices();
-  } catch (e) {
-    $("#av-status").textContent = `${t("status.error")} ${e}`;
+// x-vector only is implied when there is no reference transcript (ICL needs one).
+function syncXvec(transcriptEl, xvecEl) {
+  $(xvecEl).checked = !$(transcriptEl).value.trim();
+}
+
+function toggleAvatarKindBoxes() {
+  const clone = $("#ad-kind").value === "clone";
+  $("#ad-design-box").hidden = clone;
+  $("#ad-clone-box").hidden = !clone;
+}
+
+function avatarPhotoPreview(id, name) {
+  const el = $("#ad-photo-preview");
+  const a = id ? avatars.find((x) => x.id === id) : null;
+  el.textContent = "";
+  if (a && a.has_photo) {
+    el.style.background = "";
+    el.style.backgroundImage = `url('/api/avatars/${encodeURIComponent(id)}/photo')`;
+  } else {
+    el.style.backgroundImage = "";
+    el.style.background = name ? colorFor(name) : "var(--panel-2)";
+    el.textContent = name ? initialOf(name) : "";
   }
 }
 
-// x-vector only is implied when there is no reference transcript (ICL needs one).
-function syncXvec(transcriptEl, xvecEl) {
-  const hasText = !!$(transcriptEl).value.trim();
-  if (hasText) $(xvecEl).checked = false;
-  else $(xvecEl).checked = true;
-}
-
-$("#av-kind").addEventListener("change", () => {
-  const clone = $("#av-kind").value === "clone";
-  $("#av-design-box").hidden = clone;
-  $("#av-clone-box").hidden = !clone;
-  if (clone) syncXvec("#av-reftext", "#av-xvec");
-});
-$("#av-reftext").addEventListener("input", () => syncXvec("#av-reftext", "#av-xvec"));
-
-async function openAvatarDialog(id) {
-  const a = avatars.find((x) => x.id === id);
-  if (!a) return;
+function openAvatarDialog(id) {
   const dlg = $("#avatar-dialog");
-  dlg.dataset.id = id;
-  $("#ad-name").value = a.name || "";
-  $("#ad-lang").value = a.language || "Auto";
-  $("#ad-personality").value = a.personality || "";
-  $("#ad-prompt").value = a.prompt || "";
-  $("#ad-reftext").value = a.ref_text || "";
-  $("#ad-xvec").checked = !!a.x_vector_only;
+  const editing = !!id;
+  dlg.dataset.id = id || "";
+  const a = editing ? avatars.find((x) => x.id === id) : null;
+  $("#ad-title").textContent = editing ? t("avatars.editTitle") : t("avatars.createTitle");
+  $("#ad-kind-wrap").hidden = editing;
+  $("#ad-kind").value = a ? a.kind : "design";
+  $("#ad-name").value = a ? (a.name || "") : "";
+  $("#ad-lang").value = a ? (a.language || "Auto") : "English";
+  $("#ad-personality").value = a ? (a.personality || "") : "";
+  $("#ad-prompt").value = a ? (a.prompt || "") : "";
+  $("#ad-reftext").value = a ? (a.ref_text || "") : "";
+  $("#ad-xvec").checked = a ? !!a.x_vector_only : true;
   $("#ad-ref").value = "";
   $("#ad-photo").value = "";
-  const clone = a.kind === "clone";
-  $("#ad-design-box").hidden = clone;
-  $("#ad-clone-box").hidden = !clone;
-  $("#ad-regenerate").hidden = clone;
+  toggleAvatarKindBoxes();
+  $("#ad-regenerate").hidden = !editing || (a && a.kind !== "design");
+  $("#ad-delete").hidden = !editing;
+  $("#ad-save").textContent = editing ? t("settings.save") : t("avatars.createBtn");
   $("#ad-status").textContent = "";
+  avatarPhotoPreview(id, a ? a.name : "");
   if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
 }
 
+$("#av-new").addEventListener("click", () => openAvatarDialog(null));
+$("#ad-kind").addEventListener("change", () => {
+  toggleAvatarKindBoxes();
+  if ($("#ad-kind").value === "clone") syncXvec("#ad-reftext", "#ad-xvec");
+});
 $("#ad-reftext").addEventListener("input", () => syncXvec("#ad-reftext", "#ad-xvec"));
+$("#ad-name").addEventListener("input", () => {
+  if (!$("#ad-photo").files[0]) avatarPhotoPreview($("#avatar-dialog").dataset.id || null, $("#ad-name").value);
+});
+$("#ad-photo").addEventListener("change", () => {
+  const f = $("#ad-photo").files[0];
+  if (!f) return;
+  const el = $("#ad-photo-preview");
+  el.textContent = "";
+  el.style.background = "";
+  el.style.backgroundImage = `url('${URL.createObjectURL(f)}')`;
+});
 $("#ad-close").addEventListener("click", () => $("#avatar-dialog").close());
 
 function avatarDialogForm() {
+  const editing = !!$("#avatar-dialog").dataset.id;
+  const clone = !$("#ad-clone-box").hidden;
   const fd = new FormData();
   fd.append("name", $("#ad-name").value.trim());
   fd.append("language", $("#ad-lang").value);
   fd.append("personality", $("#ad-personality").value);
-  fd.append("ref_text", $("#ad-reftext").value);
-  fd.append("x_vector_only", String($("#ad-xvec").checked));
-  if (!$("#ad-design-box").hidden) fd.append("prompt", $("#ad-prompt").value);
-  if ($("#ad-ref").files[0]) fd.append("ref_audio", $("#ad-ref").files[0]);
+  if (!editing) fd.append("kind", $("#ad-kind").value);
+  if (clone) {
+    fd.append("ref_text", $("#ad-reftext").value);
+    fd.append("x_vector_only", String($("#ad-xvec").checked));
+    if ($("#ad-ref").files[0]) fd.append("ref_audio", $("#ad-ref").files[0]);
+  } else {
+    fd.append("prompt", $("#ad-prompt").value);
+  }
   if ($("#ad-photo").files[0]) fd.append("image", $("#ad-photo").files[0]);
   return fd;
 }
 
+async function reloadAvatarViews() {
+  await loadAvatars();
+  await loadConversationVoices();
+  buildStartupVoiceSelect();
+}
+
 $("#ad-save").addEventListener("click", async () => {
   const id = $("#avatar-dialog").dataset.id;
+  const clone = !$("#ad-clone-box").hidden;
+  if (!$("#ad-name").value.trim()) { $("#ad-status").textContent = t("avatars.name"); return; }
+  if (!id && clone && !$("#ad-ref").files[0]) { $("#ad-status").textContent = t("avatars.needAudio"); return; }
+  if (!id && !clone && !$("#ad-prompt").value.trim()) { $("#ad-status").textContent = t("avatars.needPrompt"); return; }
   $("#ad-status").textContent = "…";
   try {
-    const r = await apiFetch(`/api/avatars/${encodeURIComponent(id)}`, { method: "PUT", body: avatarDialogForm() });
-    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
-    $("#ad-status").textContent = t("status.saved");
-    await loadAvatars();
-    await loadConversationVoices();
-    buildStartupVoiceSelect();
+    const r = await apiFetch(id ? `/api/avatars/${encodeURIComponent(id)}` : "/api/avatars", {
+      method: id ? "PUT" : "POST", body: avatarDialogForm(),
+    });
+    if (!r.ok) {
+      let detail = await r.text();
+      try { detail = JSON.parse(detail).detail || detail; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    await reloadAvatarViews();
+    $("#avatar-dialog").close();
   } catch (e) {
     $("#ad-status").textContent = `${t("status.error")} ${e}`;
   }
@@ -526,56 +551,29 @@ $("#ad-save").addEventListener("click", async () => {
 
 $("#ad-regenerate").addEventListener("click", async () => {
   const id = $("#avatar-dialog").dataset.id;
+  if (!id) return;
   $("#ad-status").textContent = "…";
   try {
     const r = await apiFetch(`/api/avatars/${encodeURIComponent(id)}`, { method: "PUT", body: avatarDialogForm() });
     if (!r.ok) throw new Error((await r.text()).slice(0, 200));
     const reg = await apiFetch(`/api/avatars/${encodeURIComponent(id)}/regenerate`, { method: "POST" });
     if (!reg.ok) throw new Error((await reg.text()).slice(0, 200));
+    await reloadAvatarViews();
     $("#ad-status").textContent = t("status.done");
-    await loadAvatars();
-    await loadConversationVoices();
   } catch (e) {
     $("#ad-status").textContent = `${t("status.error")} ${e}`;
   }
 });
 
-$("#av-create").addEventListener("click", async () => {
-  const name = $("#av-name").value.trim();
-  if (!name) { $("#av-status").textContent = t("avatars.name"); return; }
-  const fd = new FormData();
-  fd.append("name", name);
-  fd.append("kind", $("#av-kind").value);
-  fd.append("language", $("#av-lang").value);
-  fd.append("prompt", $("#av-prompt").value);
-  fd.append("ref_text", $("#av-reftext").value);
-  fd.append("personality", $("#av-personality").value);
-  fd.append("x_vector_only", String($("#av-xvec").checked));
-  if ($("#av-ref").files[0]) fd.append("ref_audio", $("#av-ref").files[0]);
-  if ($("#av-photo").files[0]) fd.append("image", $("#av-photo").files[0]);
-
-  const btn = $("#av-create");
-  btn.disabled = true;
-  $("#av-status").textContent = t("models.loading");
+$("#ad-delete").addEventListener("click", async () => {
+  const id = $("#avatar-dialog").dataset.id;
+  if (!id || !window.confirm(`${t("avatars.delete")}?`)) return;
   try {
-    const r = await apiFetch("/api/avatars", { method: "POST", body: fd });
-    const text = await r.text();
-    if (!r.ok) {
-      let detail = text;
-      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
-      throw new Error(detail);
-    }
-    $("#av-status").textContent = t("status.saved");
-    $("#av-name").value = ""; $("#av-prompt").value = ""; $("#av-reftext").value = "";
-    $("#av-personality").value = "";
-    $("#av-ref").value = ""; $("#av-photo").value = "";
-    await loadAvatars();
-    await loadConversationVoices();
-    buildStartupVoiceSelect();
+    await apiFetch(`/api/avatars/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await reloadAvatarViews();
+    $("#avatar-dialog").close();
   } catch (e) {
-    $("#av-status").textContent = `${t("status.error")} ${e}`;
-  } finally {
-    btn.disabled = false;
+    $("#ad-status").textContent = `${t("status.error")} ${e}`;
   }
 });
 
