@@ -65,15 +65,22 @@ Any combination of {CUDA, ROCm, CPU} TTS × {CUDA, CPU, Vulkan} STT is valid. Ca
 #### CUDA 12 vs CUDA 13
 - **A container does not need to match the host CUDA toolkit** — only the NVIDIA **driver**
   matters (backward compatibility). A CUDA 12.4 container runs on a CUDA 13.x host driver.
-- Default (CUDA 12.4) base: `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`, driver ≥ 525.
-- **CUDA 13 override** (`docker-compose.cuda13.yml`, driver ≥ 580): base
+- **TTS** (default): `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`, driver ≥ 525.
+- **STT** (default): compiled from source on **Ubuntu 26.04 LTS / CUDA 13.4**
+  (`nvidia/cuda:13.4.2-*-ubuntu26.04`). Ubuntu 26.04 ships **CMake 4.2.3**, required by
+  NeMo-Speech.cpp's `CMakePresets.json` (Ubuntu 22.04's CMake 3.22 fails with
+  `Unrecognized "version" field`). This needs **driver ≥ 580**.
+- **Legacy (driver < 580)**: use `docker-compose.cuda12.yml` (STT on Ubuntu 24.04 / CUDA 12.8;
+  Ubuntu 24.04 ships CMake 3.28, new enough for the presets).
+- **CUDA 13 TTS** (`docker-compose.cuda13.yml`, driver ≥ 580): TTS base
   `pytorch/pytorch:2.14.1-cuda13.2-cudnn9-runtime`; the image already ships a compatible
   `torch`/`torchaudio`, so torch is **not** force-reinstalled (`TORCH_SPEC` empty).
 - Since PyTorch 2.11, `pip install torch` pulls CUDA 13.0 wheels by default, and **torchaudio
   2.11 is ABI-stable** (works with torch ≥ 2.11, no separate CUDA wheels). CUDA 13 supports
-  Turing (SM 7.5) and newer only — older GPUs must stay on CUDA 12.6/12.4.
+  Turing (SM 7.5) and newer only — older GPUs must stay on CUDA 12.
 - Select images/versions via `TTS_BASE_IMAGE`, `TTS_TORCH_SPEC`, `TTS_TORCH_INDEX_URL`,
-  `STT_CUDA_BUILDER_IMAGE`, `STT_CUDA_RUNTIME_IMAGE` (see `.env.example`).
+  `STT_CUDA_BUILDER_IMAGE`, `STT_CUDA_RUNTIME_IMAGE`, `STT_CUDA_ARCHITECTURES`
+  (see `.env.example`).
 
 ### ROCm
 - Base: `rocm/pytorch` (tag configurable via `BASE_IMAGE`).

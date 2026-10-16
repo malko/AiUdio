@@ -4,7 +4,7 @@ CONFIG ?= config.yaml
 
 .DEFAULT_GOAL := help
 
-.PHONY: help hooks venv deps test lint audit run up up-vllm up-mixed up-cuda13 down logs pull models clean
+.PHONY: help hooks venv deps test lint audit run up up-vllm up-mixed up-cuda13 up-cuda12 down logs pull models clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -42,8 +42,11 @@ up-vllm: ## Start the stack with the vLLM-Omni service (experimental streaming)
 up-mixed: ## Start with mixed backends (CUDA TTS + CPU STT)
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.mixed.yml up -d --build
 
-up-cuda13: ## Start with CUDA 13.2 images (host driver >= 580)
+up-cuda13: ## Start with CUDA 13.2 TTS images (host driver >= 580)
 	$(COMPOSE) -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build
+
+up-cuda12: ## Start with legacy CUDA 12 images (older drivers)
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.cuda12.yml up -d --build
 
 down: ## Stop the stack
 	$(COMPOSE) down

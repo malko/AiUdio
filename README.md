@@ -113,8 +113,9 @@ curl -s localhost:8004/health | jq
 
 | Target | Command |
 |---|---|
-| **CUDA** (default, 12.4) | `docker compose up -d --build` |
-| **CUDA 13** (driver ≥ 580) | `docker compose -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build` |
+| **CUDA** (default) | `docker compose up -d --build` |
+| **CUDA 13 TTS** (driver ≥ 580) | `docker compose -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build` |
+| **CUDA 12 legacy** (older drivers) | `docker compose -f docker-compose.yml -f docker-compose.cuda12.yml up -d --build` |
 | **AMD ROCm** | `docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build` |
 | **CPU** | `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build` |
 | **Vulkan** (STT) | `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build` |
@@ -125,8 +126,11 @@ Notes: **TTS has no Vulkan backend** (PyTorch/vLLM); under Vulkan the TTS falls 
 CPU image (or point it to a remote service). On **ROCm**, FlashAttention 2 is not available
 → `sdpa` attention. On **CUDA**: a container does **not** need to match the host CUDA toolkit
 — only the NVIDIA **driver** matters, so a CUDA 12.4 container runs fine on a CUDA 13.x host.
-Use the CUDA 13 override if you want CUDA 13 images (newer GPUs; requires driver ≥ 580).
-See [`docs/backends.md`](docs/backends.md).
+
+Default images: **TTS** on PyTorch CUDA 12.4 (broad support); **STT** is compiled from source
+on **Ubuntu 26.04 / CUDA 13.4** (needed for a recent CMake ≥ 3.28) — so the default stack
+needs a **driver ≥ 580**. Older drivers: use the `cuda12` override (STT on Ubuntu 24.04 /
+CUDA 12.8). Newer GPUs/CUDA 13 TTS: the `cuda13` override. See [`docs/backends.md`](docs/backends.md).
 
 ### Mixing backends (TTS and STT are independent)
 

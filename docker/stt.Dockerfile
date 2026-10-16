@@ -2,18 +2,25 @@
 # official sources (NVIDIA/NeMo-Speech.cpp repository) using the multi-stage build
 # below. Selectable backend: cuda (default), cpu, vulkan, metal.
 #
+# Base OS: Ubuntu 26.04 LTS (NVIDIA CUDA 13.4 images), which ships a recent CMake
+# (>= 4.x) required by NeMo-Speech.cpp's CMakePresets. Override the CUDA/OS images
+# via CUDA_BUILDER_IMAGE / CUDA_RUNTIME_IMAGE (e.g. CUDA 12.8 + Ubuntu 24.04 for
+# older drivers).
+#
 # The build directory depends on the upstream preset; installation goes through
 # `cmake --install` and, as a fallback, a targeted copy of the binary.
 ARG BACKEND=cuda
 ARG NEMO_SPEECH_REF=main
 # CUDA base images for the builder/runtime stages (override for CUDA 12/13).
-ARG CUDA_BUILDER_IMAGE=nvidia/cuda:12.8.1-devel-ubuntu22.04
-ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.8.1-runtime-ubuntu22.04
+ARG CUDA_BUILDER_IMAGE=nvidia/cuda:13.4.2-devel-ubuntu26.04
+ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:13.4.2-runtime-ubuntu26.04
 
 # --------------------------------------------------------------- builder ----
 FROM ${CUDA_BUILDER_IMAGE} AS builder
 ARG BACKEND
 ARG NEMO_SPEECH_REF
+# Optional CUDA arch list (e.g. "75;80;86;89;90"). Empty = let ggml auto-detect.
+ARG CUDA_ARCHITECTURES=""
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake ninja-build git pkg-config \
@@ -32,7 +39,12 @@ RUN git clone --depth 1 --branch "${NEMO_SPEECH_REF}" \
 WORKDIR /src
 RUN git submodule update --init llama.cpp third_party/cpp-httplib
 
-RUN scripts/configure.sh ${BACKEND}-server \
+RUN cmake --version \
+ && if [ -n "$CUDA_ARCHITECTURES" ]; then \
+      scripts/configure.sh ${BACKEND}-server -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" ; \
+    else \
+      scripts/configure.sh ${BACKEND}-server ; \
+    fi \
  && cmake --build --preset ${BACKEND}-server -j"$(nproc)" \
  && (cmake --install build/${BACKEND}-server --prefix /opt/nemo || true)
 
@@ -48,8 +60,11 @@ RUN mkdir -p /opt/nemo/bin /opt/nemo/lib \
 FROM ${CUDA_RUNTIME_IMAGE} AS runtime
 ARG BACKEND
 
+# libssl package name differs across Ubuntu releases (libssl3t64 >= 24.04, libssl3
+# on 22.04); install whichever exists.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libsentencepiece0 libgomp1 libssl3 ca-certificates \
+      libsentencepiece0 libgomp1 ca-certificates \
+    && (for p in libssl3t64 libssl3; do apt-get install -y --no-install-recommends "$p" 2>/dev/null && break; done || true) \
     && if [ "$BACKEND" = "vulkan" ]; then \
          apt-get install -y --no-install-recommends libvulkan1 ; \
        fi \
