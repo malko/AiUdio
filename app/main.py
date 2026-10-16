@@ -89,6 +89,7 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
         "auth_required": settings.auth.enabled,
         "models": {
             "families": engine.available(),
+            "variants": [v.model_dump() for v in settings.models.variants],
             "default_family": settings.models.default_family,
             "residency": settings.models.residency,
         },
@@ -237,7 +238,34 @@ def create_app(
     async def api_models() -> Dict[str, Any]:
         return {
             "families": engine.available(),
+            "variants": [v.model_dump() for v in app.state.settings.models.variants],
             "active_family": engine.active_family(),
+            "loaded": engine.loaded_families(),
+        }
+
+    @app.post("/api/models/select")
+    async def api_models_select(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Pick which model version (0.6B/1.7B...) a family should load."""
+        wanted = str(payload.get("variant") or payload.get("id") or payload.get("repo") or "").strip()
+        variant = next(
+            (v for v in app.state.settings.models.variants if wanted in (v.id, v.repo)),
+            None,
+        )
+        if variant is None:
+            raise HTTPException(400, f"Unknown model variant: {wanted}")
+        registry = dict(app.state.settings.models.registry)
+        registry[variant.family] = variant.repo
+        try:
+            updated = store.update(models={"registry": registry})
+        except Exception as exc:
+            raise HTTPException(400, f"Invalid settings: {exc}") from exc
+        app.state.settings = updated
+        engine.settings = updated
+        await asyncio.to_thread(engine.unload, variant.family)
+        return {
+            "family": variant.family,
+            "variant": variant.id,
+            "repo": variant.repo,
             "loaded": engine.loaded_families(),
         }
 
@@ -442,6 +470,7 @@ def create_app(
             raise HTTPException(400, f"Invalid settings: {exc}") from exc
         app.state.settings = updated
         app.state.llm = LLMClient(updated.llm)
+        engine.settings = updated
         return _public_config(updated, engine)
 
     # ------------------------------------------------------------------- TTS

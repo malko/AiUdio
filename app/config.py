@@ -26,6 +26,30 @@ class PathsConfig(BaseModel):
     logs: str = "logs"
 
 
+class ModelVariant(BaseModel):
+    """A selectable model version for a family (e.g. custom_voice 0.6B / 1.7B)."""
+
+    id: str
+    family: str
+    repo: str
+    label: str = ""
+
+
+def _default_variants() -> List[ModelVariant]:
+    return [
+        ModelVariant(id="custom_voice:1.7B", family="custom_voice",
+                     repo="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", label="1.7B"),
+        ModelVariant(id="custom_voice:0.6B", family="custom_voice",
+                     repo="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", label="0.6B"),
+        ModelVariant(id="voice_design:1.7B", family="voice_design",
+                     repo="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", label="1.7B"),
+        ModelVariant(id="base:1.7B", family="base",
+                     repo="Qwen/Qwen3-TTS-12Hz-1.7B-Base", label="1.7B"),
+        ModelVariant(id="base:0.6B", family="base",
+                     repo="Qwen/Qwen3-TTS-12Hz-0.6B-Base", label="0.6B"),
+    ]
+
+
 class ModelsConfig(BaseModel):
     registry: Dict[str, str] = Field(
         default_factory=lambda: {
@@ -34,6 +58,9 @@ class ModelsConfig(BaseModel):
             "base": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         }
     )
+    # Selectable versions offered in the UI (per family). The chosen variant sets
+    # `registry[family]`, so switching only changes which repo the family loads.
+    variants: List[ModelVariant] = Field(default_factory=_default_variants)
     default_family: str = "custom_voice"
     residency: str = "single"  # single | multi
     resident: List[str] = Field(default_factory=lambda: ["custom_voice"])

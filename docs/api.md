@@ -19,6 +19,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 |---|---|---|
 | GET | `/api/models` | Available families, loaded, active |
 | POST | `/api/models/load` | `{"family": "custom_voice"}` — load (hot-swap) |
+| POST | `/api/models/select` | `{"variant": "custom_voice:0.6B"}` — pick the model version for a family |
 | POST | `/api/models/unload` | `{"family": "..."}` or `{}` to unload everything |
 | GET | `/api/voices?family=custom_voice` | Speakers, languages, reference files |
 | POST | `/api/voices/load` | `{"avatar": "id"}` or `{"family": "custom_voice"}` — warm a conversation voice |

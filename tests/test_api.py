@@ -38,6 +38,24 @@ def test_models_and_load(client):
     assert "custom_voice" in r.json()["loaded"]
 
 
+def test_models_variants_listed(client):
+    body = client.get("/api/models").json()
+    ids = {v["id"] for v in body["variants"]}
+    assert "custom_voice:0.6B" in ids and "base:0.6B" in ids
+
+
+def test_models_select_variant(client):
+    r = client.post("/api/models/select", json={"variant": "base:0.6B"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["family"] == "base"
+    assert "0.6B" in body["repo"]
+    # The chosen repo becomes the registry entry for that family.
+    reg = client.get("/api/config").json()
+    assert reg["models"]["variants"]  # still listed
+    assert client.post("/api/models/select", json={"variant": "nope"}).status_code == 400
+
+
 def test_voices(client):
     r = client.get("/api/voices?family=custom_voice")
     assert r.status_code == 200
