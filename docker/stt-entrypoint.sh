@@ -8,7 +8,8 @@
 set -euo pipefail
 
 # Model cache: NeMo-Speech.cpp downloads models into $NEMO_SPEECH_MODEL_DIR.
-export NEMO_SPEECH_MODEL_DIR="${NEMO_SPEECH_MODEL_DIR:-${STT_MODELS_DIR:-/models}}"
+export NEMO_SPEECH_MODEL_DIR="${NEMO_SPEECH_MODEL_DIR:-/hf_cache/nemo-speech/models}"
+mkdir -p "${NEMO_SPEECH_MODEL_DIR}"
 
 ARGS=(serve --host 0.0.0.0 --port "${STT_PORT:-8080}" --asr-model "${STT_ASR_MODEL:-nemotron-3.5}")
 if [[ -n "${STT_DIAR_MODEL:-}" ]]; then

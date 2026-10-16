@@ -71,12 +71,15 @@ services:
     ports:
       - "${STT_PORT:-8080}:8080"
     volumes:
-      - ${STT_MODELS_DIR:-./stt_models}:/models
+      # Shared model cache. Defaults to the same named volume as the TTS HF cache,
+      # under a subdirectory for NeMo-Speech. Set STT_MODELS_DIR to a host path to
+      # use a bind mount instead.
+      - ${STT_MODELS_DIR:-hf_cache}:/hf_cache
     environment:
       - STT_ASR_MODEL=${STT_ASR_MODEL:-nemotron-3.5}
       - STT_PORT=8080
       - NEMO_SPEECH_MODEL_INDEX=${NEMO_SPEECH_MODEL_INDEX:-/usr/local/share/nemo-speech/model-index.json}
-      - NEMO_SPEECH_MODEL_DIR=${NEMO_SPEECH_MODEL_DIR:-/models}
+      - NEMO_SPEECH_MODEL_DIR=${NEMO_SPEECH_MODEL_DIR:-/hf_cache/nemo-speech/models}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     <<: *nvidia-gpu

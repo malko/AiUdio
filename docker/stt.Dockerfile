@@ -87,13 +87,13 @@ RUN mkdir -p /usr/local/share/nemo-speech
 COPY --from=builder /src/models/index.json /usr/local/share/nemo-speech/model-index.json
 
 COPY docker/stt-entrypoint.sh /usr/local/bin/stt-entrypoint.sh
-RUN chmod +x /usr/local/bin/stt-entrypoint.sh
+RUN chmod +x /usr/local/bin/stt-entrypoint.sh \
+ && mkdir -p /hf_cache/nemo-speech/models
 
 ENV NEMO_SPEECH_MODEL_INDEX=/usr/local/share/nemo-speech/model-index.json \
-    NEMO_SPEECH_MODEL_DIR=/models \
+    NEMO_SPEECH_MODEL_DIR=/hf_cache/nemo-speech/models \
     STT_ASR_MODEL=nemotron-3.5 \
-    STT_PORT=8080 \
-    STT_MODELS_DIR=/models
+    STT_PORT=8080
 
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/stt-entrypoint.sh"]
