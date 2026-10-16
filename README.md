@@ -249,10 +249,12 @@ Config (`config.yaml` / `.env`): `STT_ASR_MODEL` (default `nemotron-3.5`, or
 volume): NeMo-Speech.cpp writes under `nemo-speech/models` inside it. Set `STT_MODELS_DIR` to
 a host path for a bind mount instead.
 
-On first start, the STT service downloads the ASR model (≈0.74 GB for Nemotron 3.5) into the
-shared volume, using the model index embedded in the image
-(`share/nemo-speech/model-index.json`, override with `NEMO_SPEECH_MODEL_INDEX`). To pre-fetch
-without starting the server: `docker compose run --rm stt nemo-speech pull nemotron-3.5`.
+**Models are downloaded on demand**, not at container startup: the STT service waits until
+the ASR model is present, then starts. Download it from the **STT tab** of the UI (the gateway
+fetches the GGUF from Hugging Face, verifies its SHA-256 and stores it in the shared volume);
+the service starts automatically once the file appears. To let the container download at
+startup instead, set `STT_AUTO_DOWNLOAD=true`. To pre-fetch from a shell:
+`docker compose run --rm stt nemo-speech pull nemotron-3.5`.
 
 ## Conversation with an external LLM
 

@@ -120,6 +120,7 @@ async function init() {
   $("#set-apikey").value = apiKey();
 
   await loadVoices();
+  loadSttModels();
   refreshStatus();
 }
 
@@ -333,6 +334,84 @@ $("#stt-upload").addEventListener("click", async () => {
       data.words ? { text: data.text, words: data.words } : data, null, 2);
   } catch (e) {
     $("#stt-file-out").textContent = `${t("status.error")} ${e}`;
+  }
+});
+
+// STT models (on demand download)
+let sttModels = [];
+const fmtMB = (bytes) => ((bytes || 0) / (1024 * 1024)).toFixed(0);
+
+async function loadSttModels() {
+  const status = $("#stt-model-status");
+  const sel = $("#stt-model-select");
+  try {
+    const data = await getJSON("/api/stt/models");
+    if (!data.available) {
+      sel.innerHTML = "";
+      status.textContent = t("stt.indexUnavailable");
+      return;
+    }
+    sttModels = data.models || [];
+    sel.innerHTML = "";
+    sttModels.forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.repo;
+      const tag = m.cached ? t("stt.cached") : t("stt.notCached");
+      o.textContent = `${m.repo} — ${fmtMB(m.size)} ${t("stt.sizeMb")} [${tag}]`;
+      sel.appendChild(o);
+    });
+    status.textContent = "";
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+}
+
+$("#stt-model-refresh").addEventListener("click", loadSttModels);
+
+$("#stt-model-download").addEventListener("click", async () => {
+  const repo = $("#stt-model-select").value;
+  if (!repo) return;
+  const status = $("#stt-model-status");
+  const bar = $("#stt-model-progress");
+  bar.hidden = false;
+  bar.value = 0;
+  status.textContent = `${t("stt.downloading")}…`;
+  try {
+    const r = await apiFetch("/api/stt/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: repo }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data:\s*/, "").trim();
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch (e) { continue; }
+        if (ev.status === "downloading" || ev.status === "cached") {
+          if (ev.total) bar.value = Math.round((ev.downloaded / ev.total) * 100);
+          status.textContent =
+            `${t("stt.downloading")} ${fmtMB(ev.downloaded)} / ${fmtMB(ev.total)} ${t("stt.sizeMb")}`;
+        } else if (ev.status === "done") {
+          bar.value = 100;
+          status.textContent = t("stt.downloadedMsg");
+        } else if (ev.status === "error") {
+          status.textContent = `${t("status.error")} ${ev.message}`;
+        }
+      }
+    }
+    await loadSttModels();
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
   }
 });
 

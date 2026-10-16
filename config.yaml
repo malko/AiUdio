@@ -63,6 +63,10 @@ stt:
   realtime_path: /v1/audio/transcriptions/realtime
   diarize_path: /v1/audio/diarizations
   api_key: ""
+  # On-demand model management (paths are inside the shared 'hf_cache' volume).
+  model_index: /app/hf_cache/nemo-speech/model-index.json
+  models_dir: /app/hf_cache/nemo-speech/models
+  hf_base_url: https://huggingface.co
 
 llm:
   base_url: http://host.docker.internal:8080/v1

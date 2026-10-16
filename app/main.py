@@ -27,6 +27,7 @@ from .llm import LLMClient, build_messages, trim_history
 from .scheduler import BatchScheduler
 from .schemas import TTSRequest
 from .security import request_authorized, validate_media_ref
+from .stt_models import iter_download, load_index
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -306,6 +307,41 @@ def create_app(
             return {"enabled": True, "status": resp.status_code, "upstream": resp.json()}
         except Exception as exc:
             return {"enabled": True, "error": str(exc)}
+
+    @app.get("/api/stt/models")
+    async def stt_models() -> Dict[str, Any]:
+        cfg = app.state.settings.stt
+        if not cfg.enabled:
+            return {"available": False, "models": []}
+        index = await asyncio.to_thread(load_index, cfg.model_index)
+        if index is None:
+            return {"available": False, "models": []}
+        return {"available": True, "models": index.with_status(cfg.models_dir)}
+
+    @app.post("/api/stt/download")
+    async def stt_download(payload: Dict[str, Any]) -> StreamingResponse:
+        cfg = app.state.settings.stt
+        if not cfg.enabled:
+            raise HTTPException(501, "STT disabled")
+        spec = str(payload.get("model") or payload.get("name") or "").strip()
+        index = await asyncio.to_thread(load_index, cfg.model_index)
+        if index is None:
+            raise HTTPException(503, "STT model index unavailable (start the stt service once)")
+        model = index.find(spec) if spec else index.default_asr()
+        if model is None:
+            raise HTTPException(400, f"Unknown STT model: {spec}")
+        artifact = model.asr_artifact()
+        if artifact is None:
+            raise HTTPException(400, f"No ASR artifact for {model.repo}")
+
+        async def gen() -> AsyncIterator[str]:
+            try:
+                async for event in iter_download(model, artifact, cfg.models_dir, cfg.hf_base_url):
+                    yield f"data: {json.dumps(event)}\n\n"
+            except Exception as exc:  # pragma: no cover - network failure
+                yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.post("/v1/audio/transcriptions")
     async def proxy_transcription(

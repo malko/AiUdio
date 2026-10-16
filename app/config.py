@@ -78,6 +78,10 @@ class STTConfig(BaseModel):
     realtime_path: str = "/v1/audio/transcriptions/realtime"
     diarize_path: str = "/v1/audio/diarizations"
     api_key: str = ""
+    # On-demand model management (shared volume with the STT service).
+    model_index: str = "/app/hf_cache/nemo-speech/model-index.json"
+    models_dir: str = "/app/hf_cache/nemo-speech/models"
+    hf_base_url: str = "https://huggingface.co"
 
 
 class LLMConfig(BaseModel):
