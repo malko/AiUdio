@@ -874,22 +874,49 @@ async function openMicStream() {
   }
 }
 
+// Microphone capture with an AudioWorklet (preferred) and a ScriptProcessor
+// fallback. Calls onSamples(Float32Array, sampleRate) for every captured frame.
+async function startMicCapture(onSamples) {
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error(t("stt.micInsecure"));
+  }
+  const stream = await openMicStream();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === "suspended") { try { await ctx.resume(); } catch (e) { /* ignore */ } }
+  const source = ctx.createMediaStreamSource(stream);
+  let node = null, sink = null, worklet = false;
+  if (ctx.audioWorklet) {
+    try {
+      await ctx.audioWorklet.addModule("/ui/pcm-worklet.js");
+      node = new AudioWorkletNode(ctx, "pcm-capture");
+      node.port.onmessage = (e) => onSamples(e.data, ctx.sampleRate);
+      sink = ctx.createGain(); sink.gain.value = 0;  // keep the graph alive, silent
+      node.connect(sink); sink.connect(ctx.destination);
+      worklet = true;
+    } catch (e) { node = null; sink = null; }
+  }
+  if (!node) {
+    node = ctx.createScriptProcessor(4096, 1, 1);
+    node.onaudioprocess = (e) => onSamples(e.inputBuffer.getChannelData(0), ctx.sampleRate);
+    node.connect(ctx.destination);
+  }
+  source.connect(node);
+  return { ctx, stream, source, node, sink, worklet };
+}
+
 // STT microphone
-let micCtx = null, micStream = null, micNode = null, sttSocket = null, sttFinal = "", sttPartial = "";
+let micCtx = null, micStream = null, micSource = null, micNode = null, micSink = null, sttSocket = null, sttFinal = "", sttPartial = "";
 
 $("#stt-record").addEventListener("click", async () => {
   const btn = $("#stt-record");
   if (sttSocket) { stopMic(); return; }
-  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    $("#stt-status").textContent = t("stt.micInsecure");
-    return;
-  }
   try {
-    micStream = await openMicStream();
+    const cap = await startMicCapture((samples, sr) => {
+      if (!sttSocket || sttSocket.readyState !== 1) return;
+      sttSocket.send(downsampleTo16k(samples, sr).buffer);
+    });
+    micCtx = cap.ctx; micStream = cap.stream; micSource = cap.source; micNode = cap.node; micSink = cap.sink;
     loadMicDevices();
-    micCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = micCtx.createMediaStreamSource(micStream);
-    micNode = micCtx.createScriptProcessor(4096, 1, 1);
     sttSocket = new WebSocket(wsURL("/ws/stt"));
     sttSocket.binaryType = "arraybuffer";
     sttFinal = $("#stt-text").textContent;
@@ -923,26 +950,22 @@ $("#stt-record").addEventListener("click", async () => {
       stopMic();
       if (ev && ev.code !== 1000 && ev.code !== 4401) $("#stt-status").textContent = t("stt.serviceNotReady");
     };
-    micNode.onaudioprocess = (e) => {
-      if (!sttSocket || sttSocket.readyState !== 1) return;
-      sttSocket.send(downsampleTo16k(e.inputBuffer.getChannelData(0), micCtx.sampleRate).buffer);
-    };
-    source.connect(micNode);
-    micNode.connect(micCtx.destination);
   } catch (e) {
     $("#stt-status").textContent = `${t("status.micUnavailable")}: ${e}`;
   }
 });
 
 function stopMic() {
+  if (micSource) micSource.disconnect();
   if (micNode) micNode.disconnect();
+  if (micSink) micSink.disconnect();
   if (micCtx) micCtx.close();
   if (micStream) micStream.getTracks().forEach((track) => track.stop());
   if (sttSocket && sttSocket.readyState === 1) {
     try { sttSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" })); } catch (e) { /* ignore */ }
     sttSocket.close();
   }
-  sttSocket = null; micCtx = null; micStream = null; micNode = null;
+  sttSocket = null; micCtx = null; micStream = null; micSource = null; micNode = null; micSink = null;
   $("#stt-status").textContent = t("stt.stopped");
   const btn = $("#stt-record"); btn.textContent = t("stt.start"); btn.classList.add("primary");
 }
@@ -1083,19 +1106,16 @@ $("#chat-stop").addEventListener("click", () => {
 });
 
 // Chat dictation
-let dictateActive = false, dictateCtx = null, dictateStream = null, dictateNode = null;
+let dictateActive = false, dictateCtx = null, dictateStream = null, dictateSource = null, dictateNode = null, dictateSink = null;
 let dictateSocket = null, dictateText = "", dictatePartial = "", dictateTimer = null;
 
 async function startDictation() {
-  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    $("#chat-status").textContent = t("stt.micInsecure");
-    return;
-  }
   try {
-    dictateStream = await openMicStream();
-    dictateCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = dictateCtx.createMediaStreamSource(dictateStream);
-    dictateNode = dictateCtx.createScriptProcessor(4096, 1, 1);
+    const cap = await startMicCapture((samples, sr) => {
+      if (!dictateSocket || dictateSocket.readyState !== 1) return;
+      dictateSocket.send(downsampleTo16k(samples, sr).buffer);
+    });
+    dictateCtx = cap.ctx; dictateStream = cap.stream; dictateSource = cap.source; dictateNode = cap.node; dictateSink = cap.sink;
     dictateSocket = new WebSocket(wsURL("/ws/stt"));
     dictateSocket.binaryType = "arraybuffer";
     dictateText = ""; dictatePartial = "";
@@ -1114,12 +1134,6 @@ async function startDictation() {
     };
     dictateSocket.onerror = () => { $("#chat-status").textContent = t("stt.serviceNotReady"); };
     dictateSocket.onclose = () => { if (dictateActive) finishDictation(); };
-    dictateNode.onaudioprocess = (e) => {
-      if (!dictateSocket || dictateSocket.readyState !== 1) return;
-      dictateSocket.send(downsampleTo16k(e.inputBuffer.getChannelData(0), dictateCtx.sampleRate).buffer);
-    };
-    source.connect(dictateNode);
-    dictateNode.connect(dictateCtx.destination);
     dictateActive = true;
     $("#chat-mic").textContent = "⏹";
   } catch (e) {
@@ -1128,10 +1142,13 @@ async function startDictation() {
 }
 
 function finishDictation() {
+  if (dictateSource) dictateSource.disconnect();
   if (dictateNode) dictateNode.disconnect();
+  if (dictateSink) dictateSink.disconnect();
   if (dictateCtx) dictateCtx.close();
   if (dictateStream) dictateStream.getTracks().forEach((track) => track.stop());
-  dictateSocket = null; dictateCtx = null; dictateStream = null; dictateNode = null;
+  dictateSocket = null; dictateCtx = null; dictateStream = null;
+  dictateSource = null; dictateNode = null; dictateSink = null;
   dictateActive = false;
   $("#chat-mic").textContent = "🎤";
   const text = (dictateText + dictatePartial).trim();
