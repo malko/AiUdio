@@ -6,9 +6,12 @@
 # `cmake --install` and, as a fallback, a targeted copy of the binary.
 ARG BACKEND=cuda
 ARG NEMO_SPEECH_REF=main
+# CUDA base images for the builder/runtime stages (override for CUDA 12/13).
+ARG CUDA_BUILDER_IMAGE=nvidia/cuda:12.8.1-devel-ubuntu22.04
+ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
 # --------------------------------------------------------------- builder ----
-FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS builder
+FROM ${CUDA_BUILDER_IMAGE} AS builder
 ARG BACKEND
 ARG NEMO_SPEECH_REF
 
@@ -42,7 +45,7 @@ RUN mkdir -p /opt/nemo/bin /opt/nemo/lib \
  && find /src/build -name 'libnemo_speech_*.so*' -exec cp {} /opt/nemo/lib/ \; 2>/dev/null || true
 
 # --------------------------------------------------------------- runtime ----
-FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04 AS runtime
+FROM ${CUDA_RUNTIME_IMAGE} AS runtime
 ARG BACKEND
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

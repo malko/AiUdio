@@ -113,7 +113,8 @@ curl -s localhost:8004/health | jq
 
 | Target | Command |
 |---|---|
-| **CUDA** (default) | `docker compose up -d --build` |
+| **CUDA** (default, 12.4) | `docker compose up -d --build` |
+| **CUDA 13** (driver ≥ 580) | `docker compose -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build` |
 | **AMD ROCm** | `docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build` |
 | **CPU** | `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build` |
 | **Vulkan** (STT) | `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build` |
@@ -122,7 +123,10 @@ curl -s localhost:8004/health | jq
 
 Notes: **TTS has no Vulkan backend** (PyTorch/vLLM); under Vulkan the TTS falls back to the
 CPU image (or point it to a remote service). On **ROCm**, FlashAttention 2 is not available
-→ `sdpa` attention. See [`docs/backends.md`](docs/backends.md).
+→ `sdpa` attention. On **CUDA**: a container does **not** need to match the host CUDA toolkit
+— only the NVIDIA **driver** matters, so a CUDA 12.4 container runs fine on a CUDA 13.x host.
+Use the CUDA 13 override if you want CUDA 13 images (newer GPUs; requires driver ≥ 580).
+See [`docs/backends.md`](docs/backends.md).
 
 ### Mixing backends (TTS and STT are independent)
 

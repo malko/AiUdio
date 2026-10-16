@@ -1,0 +1,23 @@
+# CUDA 13 override (e.g. host driver >= 580 / CUDA 13.2). Both the TTS gateway and
+# the STT runtime use official CUDA 13.2 images.
+#   docker compose -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build
+#
+# NOTE: a container does NOT need to match the host CUDA toolkit version — only the
+# NVIDIA driver matters. A CUDA 12.x container runs fine on a CUDA 13.x host driver.
+# Use this override when you specifically want CUDA 13 images (newer GPUs, CUDA 13
+# features). CUDA 13 supports Turing (SM 7.5) and newer only.
+services:
+  aiudio:
+    build:
+      args:
+        # pytorch/pytorch CUDA 13.2 image ships a compatible torch/torchaudio,
+        # so there is no need to force-reinstall torch (TORCH_SPEC empty).
+        BASE_IMAGE: ${TTS_BASE_IMAGE:-pytorch/pytorch:2.14.1-cuda13.2-cudnn9-runtime}
+        TORCH_SPEC: ""
+        TORCH_INDEX_URL: ${TTS_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu132}
+
+  stt:
+    build:
+      args:
+        CUDA_BUILDER_IMAGE: ${STT_CUDA_BUILDER_IMAGE:-nvidia/cuda:13.2.1-devel-ubuntu22.04}
+        CUDA_RUNTIME_IMAGE: ${STT_CUDA_RUNTIME_IMAGE:-nvidia/cuda:13.2.1-runtime-ubuntu22.04}

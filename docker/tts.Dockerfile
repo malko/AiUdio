@@ -1,9 +1,13 @@
 # AiUdio gateway (TTS + API + UI). Official PyTorch/CUDA base image.
-# Overridable: --build-arg BASE_IMAGE=... TORCH_VERSION=... TORCH_INDEX_URL=...
+# Overridable: --build-arg BASE_IMAGE=... TORCH_SPEC=... TORCH_INDEX_URL=...
 ARG BASE_IMAGE=pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 FROM ${BASE_IMAGE}
 
-ARG TORCH_VERSION=2.5.1
+# Packages force-reinstalled to match the base image's CUDA variant. Set to an
+# empty string to skip (e.g. when the base image already ships a compatible
+# torch, as with the CUDA 13.x images). Since torchaudio 2.11 it is ABI-stable
+# and no longer needs to match the torch minor version.
+ARG TORCH_SPEC="torch==2.5.1 torchaudio==2.5.1"
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 # INSTALL_TTS=0 builds a lightweight "gateway" image without the TTS engine.
 ARG INSTALL_TTS=1
@@ -24,9 +28,9 @@ RUN pip install --upgrade pip \
  && pip install -r requirements.txt \
  && if [ "$INSTALL_TTS" = "1" ]; then \
         pip install -r requirements-tts.txt \
-        && pip install --force-reinstall --no-deps \
-             torch==${TORCH_VERSION} torchaudio==${TORCH_VERSION} \
-             --index-url ${TORCH_INDEX_URL} ; \
+        && if [ -n "$TORCH_SPEC" ]; then \
+             pip install --force-reinstall --no-deps $TORCH_SPEC --index-url ${TORCH_INDEX_URL} ; \
+           fi ; \
     fi
 
 COPY app ./app

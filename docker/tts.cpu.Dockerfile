@@ -1,7 +1,7 @@
 # CPU variant (official python:slim base image). Slow for Qwen3-TTS but portable.
 FROM python:3.12-slim
 
-ARG TORCH_VERSION=2.5.1
+ARG TORCH_SPEC="torch==2.5.1 torchaudio==2.5.1"
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 ARG INSTALL_TTS=1
 
@@ -21,9 +21,9 @@ RUN pip install --upgrade pip \
  && pip install -r requirements.txt \
  && if [ "$INSTALL_TTS" = "1" ]; then \
         pip install -r requirements-tts.txt \
-        && pip install --force-reinstall --no-deps \
-             torch==${TORCH_VERSION} torchaudio==${TORCH_VERSION} \
-             --index-url ${TORCH_INDEX_URL} ; \
+        && if [ -n "$TORCH_SPEC" ]; then \
+             pip install --force-reinstall --no-deps $TORCH_SPEC --index-url ${TORCH_INDEX_URL} ; \
+           fi ; \
     fi
 
 COPY app ./app

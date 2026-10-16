@@ -4,8 +4,7 @@
 
 | Target | TTS Qwen3-TTS | STT NeMo-Speech.cpp | vLLM-Omni |
 |---|---|---|---|
-| **NVIDIA CUDA** | ✅ official (bf16, FlashAttention 2 optional) | ✅ | ✅ (official image) |
-| **AMD ROCm** | ⚠️ ROCm torch + `sdpa` (no FlashAttention), not upstream-tested | ⚠️ HIP/ggml possible; compose uses CPU | ❌ not supported (NVIDIA first) |
+| **NVIDIA CUDA** | ✅ official (bf16, FlashAttention 2 optional) | ✅ | ✅ (official image) || **AMD ROCm** | ⚠️ ROCm torch + `sdpa` (no FlashAttention), not upstream-tested | ⚠️ HIP/ggml possible; compose uses CPU | ❌ not supported (NVIDIA first) |
 | **CPU** | ✅ slow (1.7B autoregressive) | ✅ fast (~6× real time) | ❌ |
 | **Vulkan** | ❌ no PyTorch/vLLM/vLLM-Omni backend | ✅ ggml (Intel/AMD iGPU) | ❌ |
 | **Apple Metal** | via `qwen-tts` outside Docker | ✅ (Metal build) | ❌ |
@@ -62,6 +61,19 @@ Any combination of {CUDA, ROCm, CPU} TTS × {CUDA, CPU, Vulkan} STT is valid. Ca
   it: set `models.attn_implementation: flash_attention_2` **and** add the `flash-attn` build
   to the image.
 - NVIDIA driver + Container Toolkit required.
+
+#### CUDA 12 vs CUDA 13
+- **A container does not need to match the host CUDA toolkit** — only the NVIDIA **driver**
+  matters (backward compatibility). A CUDA 12.4 container runs on a CUDA 13.x host driver.
+- Default (CUDA 12.4) base: `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`, driver ≥ 525.
+- **CUDA 13 override** (`docker-compose.cuda13.yml`, driver ≥ 580): base
+  `pytorch/pytorch:2.14.1-cuda13.2-cudnn9-runtime`; the image already ships a compatible
+  `torch`/`torchaudio`, so torch is **not** force-reinstalled (`TORCH_SPEC` empty).
+- Since PyTorch 2.11, `pip install torch` pulls CUDA 13.0 wheels by default, and **torchaudio
+  2.11 is ABI-stable** (works with torch ≥ 2.11, no separate CUDA wheels). CUDA 13 supports
+  Turing (SM 7.5) and newer only — older GPUs must stay on CUDA 12.6/12.4.
+- Select images/versions via `TTS_BASE_IMAGE`, `TTS_TORCH_SPEC`, `TTS_TORCH_INDEX_URL`,
+  `STT_CUDA_BUILDER_IMAGE`, `STT_CUDA_RUNTIME_IMAGE` (see `.env.example`).
 
 ### ROCm
 - Base: `rocm/pytorch` (tag configurable via `BASE_IMAGE`).

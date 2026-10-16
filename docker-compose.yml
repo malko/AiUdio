@@ -25,7 +25,7 @@ services:
       dockerfile: ${TTS_DOCKERFILE:-docker/tts.Dockerfile}
       args:
         BASE_IMAGE: ${TTS_BASE_IMAGE:-pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime}
-        TORCH_VERSION: ${TTS_TORCH_VERSION:-2.5.1}
+        TORCH_SPEC: ${TTS_TORCH_SPEC:-torch==2.5.1 torchaudio==2.5.1}
         TORCH_INDEX_URL: ${TTS_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}
     image: aiudio-server:local
     ports:
@@ -64,6 +64,8 @@ services:
       args:
         BACKEND: ${STT_BACKEND:-cuda}
         NEMO_SPEECH_REF: ${NEMO_SPEECH_REF:-main}
+        CUDA_BUILDER_IMAGE: ${STT_CUDA_BUILDER_IMAGE:-nvidia/cuda:12.8.1-devel-ubuntu22.04}
+        CUDA_RUNTIME_IMAGE: ${STT_CUDA_RUNTIME_IMAGE:-nvidia/cuda:12.8.1-runtime-ubuntu22.04}
     image: aiudio-stt:local
     ports:
       - "${STT_PORT:-8080}:8080"
