@@ -1,10 +1,10 @@
 # Official NeMo-Speech.cpp image + a minimal shell for the wait-for-model entrypoint.
 #
-# The NGC image is distroless (no /bin/sh), so we add busybox (static) and install
-# its applets. No compilation — the speech runtime comes from the official image.
+# The NGC image is distroless (no /bin/sh), so we add a STATIC busybox (the musl
+# variant is static-pie; the default tag is dynamically linked and misses libs).
 ARG STT_BASE_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0
 
-FROM busybox:1.36 AS busybox
+FROM busybox:1.36-musl AS busybox
 
 FROM ${STT_BASE_IMAGE}
 ARG STT_BASE_IMAGE
