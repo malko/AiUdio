@@ -67,13 +67,14 @@ input, select { min-height: 38px; }
 label.inline input { width: auto; margin: 0; }
 textarea { resize: vertical; }
 
-.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
-.row > label { flex: 1; min-width: 120px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+.row > label { flex: 1; min-width: 120px; margin-bottom: 0; }
+.row > button { margin-bottom: 0; }
 
 button {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
   padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit;
-  min-height: 36px; min-width: 96px; line-height: 1.2;
+  min-height: 38px; min-width: 96px; line-height: 1.2;
 }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #201203; }
