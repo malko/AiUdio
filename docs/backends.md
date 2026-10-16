@@ -81,6 +81,10 @@ Any combination of {CUDA, ROCm, CPU} TTS × {CUDA, CPU, Vulkan} STT is valid. Ca
 - Select images/versions via `TTS_BASE_IMAGE`, `TTS_TORCH_SPEC`, `TTS_TORCH_INDEX_URL`,
   `STT_CUDA_BUILDER_IMAGE`, `STT_CUDA_RUNTIME_IMAGE`, `STT_CUDA_ARCHITECTURES`
   (see `.env.example`).
+- **STT CUDA architectures**: the builder has no GPU, so ggml's `-arch=native` detection
+  would be unreliable. A broad portable default is compiled (`75;80;86;89;90;100;120`); set
+  `STT_CUDA_ARCHITECTURES` to your GPU (e.g. `89` Ada/RTX 40, `90` Hopper, `120` Blackwell/RTX 50)
+  for a faster, smaller build.
 
 ### ROCm
 - Base: `rocm/pytorch` (tag configurable via `BASE_IMAGE`).

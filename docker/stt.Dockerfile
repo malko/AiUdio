@@ -19,7 +19,9 @@ ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:13.4.2-runtime-ubuntu26.04
 FROM ${CUDA_BUILDER_IMAGE} AS builder
 ARG BACKEND
 ARG NEMO_SPEECH_REF
-# Optional CUDA arch list (e.g. "75;80;86;89;90"). Empty = let ggml auto-detect.
+# Optional CUDA arch list (e.g. "75;80;86;89;90"). When empty, a broad portable
+# list is used so the build works on any target GPU (the builder has no GPU, so
+# ggml's "-arch=native" detection would otherwise fall back to a default arch).
 ARG CUDA_ARCHITECTURES=""
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,9 +41,13 @@ RUN git clone --depth 1 --branch "${NEMO_SPEECH_REF}" \
 WORKDIR /src
 RUN git submodule update --init llama.cpp third_party/cpp-httplib
 
-RUN cmake --version \
- && if [ -n "$CUDA_ARCHITECTURES" ]; then \
-      scripts/configure.sh ${BACKEND}-server -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" ; \
+RUN archs="${CUDA_ARCHITECTURES}" ; \
+    if [ -z "$archs" ] && [ "$BACKEND" = "cuda" ]; then \
+      archs="75;80;86;89;90;100;120" ; \
+    fi ; \
+    cmake --version \
+ && if [ -n "$archs" ]; then \
+      scripts/configure.sh ${BACKEND}-server -DCMAKE_CUDA_ARCHITECTURES="$archs" ; \
     else \
       scripts/configure.sh ${BACKEND}-server ; \
     fi \
