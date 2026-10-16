@@ -64,7 +64,7 @@ stt:
   diarize_path: /v1/audio/diarizations
   api_key: ""
   # On-demand model management (paths are inside the shared 'hf_cache' volume).
-  model_index: /app/hf_cache/nemo-speech/model-index.json
+  # model_index defaults to the vendored app/data/nemo-speech-model-index.json.
   models_dir: /app/hf_cache/nemo-speech/models
   hf_base_url: https://huggingface.co
 

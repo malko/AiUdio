@@ -5,7 +5,7 @@
 | Service | Image | Role |
 |---|---|---|
 | `aiudio` | `aiudio-server:local` (built on official PyTorch/ROCm/Python base) | Qwen3-TTS engine + REST/OpenAI API + WebSocket + UI + STT/LLM proxies |
-| `stt` | built from official NeMo-Speech.cpp sources | offline/streaming ASR + diarization |
+| `stt` | official NGC `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (non-NVIDIA: built from source) | offline/streaming ASR + diarization |
 | `tts-vllm` | `vllm/vllm-omni` (official, `vllm` profile) | experimental native PCM streaming |
 | LLM | *outside compose* | external OpenAI-compatible endpoint |
 

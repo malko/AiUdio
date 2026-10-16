@@ -4,7 +4,7 @@ CONFIG ?= config.yaml
 
 .DEFAULT_GOAL := help
 
-.PHONY: help hooks venv deps test lint audit run up up-vllm up-mixed up-cuda13 up-cuda12 down logs pull models clean
+.PHONY: help hooks venv deps test lint audit run up up-vllm up-rocm up-cpu up-vulkan down logs pull models clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -39,14 +39,14 @@ up: ## Start the stack (CUDA)
 up-vllm: ## Start the stack with the vLLM-Omni service (experimental streaming)
 	$(COMPOSE) --profile vllm up -d --build
 
-up-mixed: ## Start with mixed backends (CUDA TTS + CPU STT)
-	$(COMPOSE) -f docker-compose.yml -f docker-compose.mixed.yml up -d --build
+up-rocm: ## Start with the AMD ROCm override (non-NVIDIA)
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.rocm.yml up -d --build
 
-up-cuda13: ## Start with CUDA 13.2 TTS images (host driver >= 580)
-	$(COMPOSE) -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build
+up-cpu: ## Start with the CPU override (non-NVIDIA)
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
 
-up-cuda12: ## Start with legacy CUDA 12 images (older drivers)
-	$(COMPOSE) -f docker-compose.yml -f docker-compose.cuda12.yml up -d --build
+up-vulkan: ## Start with the Vulkan override (non-NVIDIA)
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build
 
 down: ## Stop the stack
 	$(COMPOSE) down

@@ -79,7 +79,8 @@ class STTConfig(BaseModel):
     diarize_path: str = "/v1/audio/diarizations"
     api_key: str = ""
     # On-demand model management (shared volume with the STT service).
-    model_index: str = "/app/hf_cache/nemo-speech/model-index.json"
+    # The model index is vendored with the app (see app/data/).
+    model_index: str = str(Path(__file__).resolve().parent / "data" / "nemo-speech-model-index.json")
     models_dir: str = "/app/hf_cache/nemo-speech/models"
     hf_base_url: str = "https://huggingface.co"
 
@@ -153,6 +154,8 @@ def _apply_env(settings: Settings) -> Settings:
         settings.stt.base_url = v
     if v := os.environ.get("STT_API_KEY"):
         settings.stt.api_key = v
+    if v := os.environ.get("STT_MODEL_INDEX"):
+        settings.stt.model_index = v
     if v := os.environ.get("AUTH_ENABLED"):
         settings.auth.enabled = v.lower() in {"1", "true", "yes", "on"}
     if v := os.environ.get("AUTH_USERNAME"):

@@ -1,16 +1,22 @@
-# CPU override: no GPU required. TTS is slow but functional; STT is fast.
+# CPU override (no GPU). TTS is very slow; STT (ggml CPU) is fast.
 #   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
 services:
   aiudio:
     build:
       dockerfile: docker/tts.cpu.Dockerfile
+      args:
+        TORCH_SPEC: torch==2.5.1 torchaudio==2.5.1
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
     deploy:
       resources:
         reservations:
           devices: []
 
   stt:
+    image: aiudio-stt:local
     build:
+      context: .
+      dockerfile: docker/stt.Dockerfile
       args:
         BACKEND: cpu
     deploy:

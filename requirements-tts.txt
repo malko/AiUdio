@@ -2,3 +2,6 @@
 # NOTE: torch must match the CUDA of the base image. The Dockerfile reinstalls
 # torch/torchaudio at the right version after installing qwen-tts.
 qwen-tts>=0.1.1,<0.2
+
+# Required when HF_HUB_ENABLE_HF_TRANSFER=1 (faster parallel downloads).
+hf_transfer>=0.1.9

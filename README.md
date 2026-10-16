@@ -21,7 +21,7 @@ pluggable into an external OpenAI-compatible LLM. Everything is served by a sing
 - [Architecture](#architecture)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
-- [Hardware variants](#hardware-variants)
+- [Hardware](#hardware)
 - [Models](#models)
 - [API](#api)
 - [STT](#stt)
@@ -48,7 +48,7 @@ pluggable into an external OpenAI-compatible LLM. Everything is served by a sing
   the STT → LLM → TTS cascade in streaming mode, without serving the LLM.
 - **Multilingual UI**: English and French out of the box, easily extensible.
 - **Security**: HTTP Basic for the UI, API keys (Bearer / `X-API-Key`) for machines.
-- **Multi-backend**: CUDA (default), ROCm, CPU, Vulkan (STT) via Compose overrides.
+- **Single CUDA stack**: TTS gateway on the official PyTorch image + STT on the official NVIDIA NGC NeMo-Speech.cpp image (base images overridable via `.env`).
 
 ## Architecture
 
@@ -109,54 +109,26 @@ curl -s localhost:8004/health | jq
 > The first call to a model family triggers the weight download (several GB). The cache
 > is persisted in the `hf_cache` volume.
 
-## Hardware variants
+## Hardware
+
+One **CUDA** compose (the default `docker-compose.yml`, CUDA 13), works with any NVIDIA
+**driver ≥ 580**:
+
+- **TTS gateway**: `pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime` (official image).
+- **STT**: `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (official NVIDIA NGC image, CUDA, multi-arch).
+- Optional: `docker compose --profile vllm up -d` for the experimental vLLM-Omni streaming service.
+
+Non-NVIDIA hardware uses **additive overrides** (the CUDA default is unchanged):
 
 | Target | Command |
 |---|---|
-| **CUDA** (default) | `docker compose up -d --build` |
-| **CUDA 13 TTS** (driver ≥ 580) | `docker compose -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build` |
-| **CUDA 12 legacy** (older drivers) | `docker compose -f docker-compose.yml -f docker-compose.cuda12.yml up -d --build` |
-| **AMD ROCm** | `docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build` |
+| **AMD ROCm** (TTS rocm/pytorch; STT built from source, CPU) | `docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build` |
 | **CPU** | `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build` |
-| **Vulkan** (STT) | `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build` |
-| **Mixed** (e.g. CUDA TTS + CPU STT) | `docker compose -f docker-compose.yml -f docker-compose.mixed.yml up -d --build` |
-| **vLLM-Omni** (experimental) | `docker compose --profile vllm up -d` |
+| **Vulkan** (STT on ggml/Vulkan; TTS on CPU) | `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build` |
 
-Notes: **TTS has no Vulkan backend** (PyTorch/vLLM); under Vulkan the TTS falls back to the
-CPU image (or point it to a remote service). On **ROCm**, FlashAttention 2 is not available
-→ `sdpa` attention. On **CUDA**: a container does **not** need to match the host CUDA toolkit
-— only the NVIDIA **driver** matters, so a CUDA 12.4 container runs fine on a CUDA 13.x host.
-
-Default images: **TTS** on PyTorch CUDA 12.4 (broad support); **STT** is compiled from source
-on **Ubuntu 26.04 / CUDA 13.4** (needed for a recent CMake ≥ 3.28) — so the default stack
-needs a **driver ≥ 580**. Older drivers: use the `cuda12` override (STT on Ubuntu 24.04 /
-CUDA 12.8). Newer GPUs/CUDA 13 TTS: the `cuda13` override. See [`docs/backends.md`](docs/backends.md).
-
-### Mixing backends (TTS and STT are independent)
-
-Yes — the TTS gateway and the STT service are **separate containers**, so each can use a
-different backend. For example, run **TTS on CUDA** (fast) and **STT on CPU** (no extra VRAM)
-on the same host:
-
-```bash
-# Option A: the ready-made mixed override (CUDA TTS + CPU STT)
-docker compose -f docker-compose.yml -f docker-compose.mixed.yml up -d --build
-```
-
-```bash
-# Option B: pick backends independently via .env (no override file)
-#   TTS backend  -> TTS_DOCKERFILE (docker/tts.Dockerfile, docker/tts.cpu.Dockerfile,
-#                   docker/tts.rocm.Dockerfile) + TTS_BASE_IMAGE / TTS_TORCH_* args
-#   STT backend  -> STT_BACKEND (cuda | cpu | vulkan)
-TTS_DOCKERFILE=docker/tts.Dockerfile
-STT_BACKEND=cpu
-docker compose up -d --build
-```
-
-Valid combinations: any of {CUDA, ROCm, CPU} × {CUDA, CPU, Vulkan}. Constraints to remember:
-the STT `cuda` and `vulkan` backends need the matching device (`deploy.resources` GPU
-reservation, or `/dev/dri` for Vulkan) — the mixed override clears the GPU reservation for a
-CPU STT. Full details: [`docs/backends.md`](docs/backends.md#mixing-backends).
+Reminder: a container does **not** need to match the host CUDA toolkit — only the driver
+matters. Base images and torch pins can be overridden via `.env` (`TTS_BASE_IMAGE`,
+`TTS_TORCH_SPEC`, `TTS_TORCH_INDEX_URL`, `STT_IMAGE`). See [`docs/backends.md`](docs/backends.md).
 
 ## Models
 
@@ -230,9 +202,9 @@ with client.audio.speech.with_streaming_response.create(
 
 ## STT
 
-The `stt` service relies on **[NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp)**
-(official ggml-based C++ runtime). NVIDIA does not publish a registry image, so it is built
-from their sources (`docker/stt.Dockerfile`).
+The `stt` service uses the **official NVIDIA NGC image**
+[`nvcr.io/nvidia/nemo-speech.cpp:0.2.0`](https://catalog.ngc.nvidia.com/orgs/nvidia/-/containers/nemo-speech.cpp)
+(CUDA, multi-arch, signed) — no local build. Models are provided by the gateway.
 
 - **Parakeet TDT 0.6B v3**: 25 European languages, automatic punctuation (offline, accuracy).
 - **Nemotron 3.5 ASR Streaming 0.6B**: realtime streaming (~160 ms) — default.
@@ -248,17 +220,16 @@ curl -s localhost:8004/v1/audio/transcriptions -F file=@audio.wav -F response_fo
 curl -s localhost:8004/api/stt/diarize -F file=@meeting.wav
 ```
 
-Config (`config.yaml` / `.env`): `STT_ASR_MODEL` (default `nemotron-3.5`, or
-`parakeet-tdt-0.6b-v3`). Model storage is **shared with the TTS cache** (the `hf_cache` named
-volume): NeMo-Speech.cpp writes under `nemo-speech/models` inside it. Set `STT_MODELS_DIR` to
-a host path for a bind mount instead.
+Model storage is **shared with the TTS cache** (the `hf_cache` named volume): the gateway
+downloads GGUFs under `nemo-speech/models` and points the STT container at the chosen one.
+Set `STT_MODELS_DIR` to a host path for a bind mount instead.
 
-**Models are downloaded on demand**, not at container startup: the STT service waits until
-the ASR model is present, then starts. Download it from the **STT tab** of the UI (the gateway
-fetches the GGUF from Hugging Face, verifies its SHA-256 and stores it in the shared volume);
-the service starts automatically once the file appears. To let the container download at
-startup instead, set `STT_AUTO_DOWNLOAD=true`. To pre-fetch from a shell:
-`docker compose run --rm stt nemo-speech pull nemotron-3.5`.
+**Models are downloaded on demand**, not at container startup: the gateway fetches the GGUF
+from Hugging Face (SHA-256 verified) when you click **Download** in the **STT tab**, writes a
+pointer file, and the STT container starts automatically. Pin the image via `STT_IMAGE`.
+
+> The official image is **CUDA-only**. For **CPU/Vulkan/ROCm**, use the corresponding
+> compose overrides, which build NeMo-Speech.cpp from source (`docker/stt.Dockerfile`).
 
 ## Conversation with an external LLM
 

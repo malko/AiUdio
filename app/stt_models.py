@@ -18,6 +18,10 @@ from typing import AsyncIterator, Dict, List, Optional
 
 import httpx
 
+# Pointer files written by the gateway so the STT container knows which model to load.
+ACTIVE_ASR = ".active"
+ACTIVE_DIAR = ".active-diar"
+
 
 @dataclass
 class Artifact:
@@ -46,7 +50,9 @@ class IndexedModel:
         return artifact.revision or self.revision
 
     def local_path(self, artifact: Artifact, models_dir: str) -> Path:
-        return Path(models_dir) / self.repo / self.artifact_revision(artifact) / artifact.filename
+        # Flat layout (<models_dir>/<filename>) shared with the STT container, which
+        # is started with an explicit --asr-model path.
+        return Path(models_dir) / artifact.filename
 
 
 class ModelIndex:
@@ -124,6 +130,14 @@ def load_index(path: str) -> Optional[ModelIndex]:
         return ModelIndex.from_file(p)
     except Exception:
         return None
+
+
+def mark_active(models_dir: str, filename: str, role: str = "asr") -> None:
+    """Write the pointer file the STT container watches to load a model."""
+    name = ACTIVE_DIAR if role == "diarization" else ACTIVE_ASR
+    directory = Path(models_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(filename, encoding="utf-8")
 
 
 async def iter_download(

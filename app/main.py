@@ -27,7 +27,7 @@ from .llm import LLMClient, build_messages, trim_history
 from .scheduler import BatchScheduler
 from .schemas import TTSRequest
 from .security import request_authorized, validate_media_ref
-from .stt_models import iter_download, load_index
+from .stt_models import iter_download, load_index, mark_active
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -337,6 +337,9 @@ def create_app(
         async def gen() -> AsyncIterator[str]:
             try:
                 async for event in iter_download(model, artifact, cfg.models_dir, cfg.hf_base_url):
+                    if event.get("status") in ("done", "cached"):
+                        # Point the STT container at this model.
+                        await asyncio.to_thread(mark_active, cfg.models_dir, artifact.filename)
                     yield f"data: {json.dumps(event)}\n\n"
             except Exception as exc:  # pragma: no cover - network failure
                 yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"

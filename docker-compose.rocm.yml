@@ -1,5 +1,6 @@
-# AMD ROCm override (Linux). TTS via the official rocm/pytorch base image (sdpa
-# attention, no FlashAttention). STT is compiled for CPU (HIP/ggml not guaranteed).
+# AMD ROCm override (Linux). TTS uses the official rocm/pytorch image (sdpa
+# attention, no FlashAttention). STT builds from source with the CPU backend
+# (HIP/ggml is not provided).
 #   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build
 services:
   aiudio:
@@ -17,7 +18,10 @@ services:
       - render
 
   stt:
+    image: aiudio-stt:local
     build:
+      context: .
+      dockerfile: docker/stt.Dockerfile
       args:
         BACKEND: cpu
     deploy:

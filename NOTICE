@@ -10,6 +10,8 @@ licenses:
   Associated third-party components: see the upstream repository's
   THIRD_PARTY_NOTICES.md.
   https://github.com/NVIDIA/NeMo-Speech.cpp
+  The model index at app/data/nemo-speech-model-index.json is a copy of the
+  upstream models/index.json (Apache-2.0), vendored to drive on-demand downloads.
 - vLLM-Omni (vLLM Project) — Apache License 2.0
   https://github.com/vllm-project/vllm-omni
 - PyTorch base image — BSD-style

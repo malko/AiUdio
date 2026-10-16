@@ -1,10 +1,6 @@
-# Unified TTS + STT stack (CUDA by default).
+# AiUdio stack (CUDA 13): TTS gateway + official NeMo-Speech.cpp STT image.
 #   docker compose up -d --build
-# Hardware variants (overrides):
-#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build
-#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml  up -d --build
-#   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build
-# Experimental vLLM-Omni service (native PCM streaming):
+# Optional experimental vLLM-Omni service (native PCM streaming):
 #   docker compose --profile vllm up -d
 name: aiudio
 
@@ -22,11 +18,11 @@ services:
   aiudio:
     build:
       context: .
-      dockerfile: ${TTS_DOCKERFILE:-docker/tts.Dockerfile}
+      dockerfile: docker/tts.Dockerfile
       args:
-        BASE_IMAGE: ${TTS_BASE_IMAGE:-pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime}
-        TORCH_SPEC: ${TTS_TORCH_SPEC:-torch==2.5.1 torchaudio==2.5.1}
-        TORCH_INDEX_URL: ${TTS_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}
+        BASE_IMAGE: ${TTS_BASE_IMAGE:-pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime}
+        TORCH_SPEC: ${TTS_TORCH_SPEC-}
+        TORCH_INDEX_URL: ${TTS_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     image: aiudio-server:local
     ports:
       - "${PORT:-8004}:8004"
@@ -57,17 +53,11 @@ services:
     networks: [speech]
 
   # STT: NeMo-Speech.cpp (Parakeet TDT v3 offline + Nemotron 3.5 streaming + diarization).
+  # Default: official NVIDIA NGC image (CUDA, multi-arch). For CPU/Vulkan use the
+  # cpu/vulkan overrides, which build NeMo-Speech.cpp from source instead.
   stt:
-    build:
-      context: .
-      dockerfile: docker/stt.Dockerfile
-      args:
-        BACKEND: ${STT_BACKEND:-cuda}
-        NEMO_SPEECH_REF: ${NEMO_SPEECH_REF:-main}
-        CUDA_BUILDER_IMAGE: ${STT_CUDA_BUILDER_IMAGE:-nvidia/cuda:13.4.2-devel-ubuntu26.04}
-        CUDA_RUNTIME_IMAGE: ${STT_CUDA_RUNTIME_IMAGE:-nvidia/cuda:13.4.2-runtime-ubuntu26.04}
-        CUDA_ARCHITECTURES: ${STT_CUDA_ARCHITECTURES:-}
-    image: aiudio-stt:local
+    image: ${STT_IMAGE:-nvcr.io/nvidia/nemo-speech.cpp:0.2.0}
+    entrypoint: ["/bin/sh", "/stt-wait.sh"]
     ports:
       - "${STT_PORT:-8080}:8080"
     volumes:
@@ -75,12 +65,9 @@ services:
       # under a subdirectory for NeMo-Speech. Set STT_MODELS_DIR to a host path to
       # use a bind mount instead.
       - ${STT_MODELS_DIR:-hf_cache}:/hf_cache
+      - ./docker/stt-wait.sh:/stt-wait.sh:ro
     environment:
-      - STT_ASR_MODEL=${STT_ASR_MODEL:-nemotron-3.5}
-      - STT_DIAR_MODEL=${STT_DIAR_MODEL:-}
-      - STT_AUTO_DOWNLOAD=${STT_AUTO_DOWNLOAD:-false}
       - STT_PORT=8080
-      - NEMO_SPEECH_MODEL_INDEX=${NEMO_SPEECH_MODEL_INDEX:-/usr/local/share/nemo-speech/model-index.json}
       - NEMO_SPEECH_MODEL_DIR=${NEMO_SPEECH_MODEL_DIR:-/hf_cache/nemo-speech/models}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility

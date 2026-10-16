@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.config import ConfigStore
 from app.main import create_app
-from app.stt_models import ModelIndex, iter_download, load_index
+from app.stt_models import ACTIVE_ASR, ModelIndex, iter_download, load_index, mark_active
 
 INDEX = {
     "schema_version": 1,
@@ -45,7 +45,7 @@ def test_local_path_and_status(tmp_path):
     artifact = model.asr_artifact()
     models_dir = tmp_path / "models"
     path = model.local_path(artifact, str(models_dir))
-    assert str(path).endswith("nvidia/nemotron-3.5-asr-streaming-0.6b/abc123/model.q8_0.gguf")
+    assert path == models_dir / "model.q8_0.gguf"
 
     status = index.with_status(str(models_dir))
     assert status[0]["cached"] is False
@@ -59,7 +59,7 @@ def test_iter_download_cached(tmp_path):
     model = index.find("nemotron-3.5")
     artifact = model.asr_artifact()
     path = model.local_path(artifact, str(tmp_path))
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"\0" * 100)
 
     async def collect():
@@ -71,6 +71,11 @@ def test_iter_download_cached(tmp_path):
 
 def test_load_index_missing(tmp_path):
     assert load_index(str(tmp_path / "nope.json")) is None
+
+
+def test_mark_active(tmp_path):
+    mark_active(str(tmp_path), "model.q8_0.gguf")
+    assert (tmp_path / ACTIVE_ASR).read_text() == "model.q8_0.gguf"
 
 
 def test_api_stt_models(tmp_path):
