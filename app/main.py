@@ -365,13 +365,16 @@ def create_app(
         }
         if language:
             data["language"] = language
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{cfg.base_url.rstrip('/')}{cfg.transcribe_path}",
-                files={"file": (file.filename or "audio.wav", content, file.content_type or "audio/wav")},
-                data=data,
-                headers=_stt_headers(cfg),
-            )
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                resp = await client.post(
+                    f"{cfg.base_url.rstrip('/')}{cfg.transcribe_path}",
+                    files={"file": (file.filename or "audio.wav", content, file.content_type or "audio/wav")},
+                    data=data,
+                    headers=_stt_headers(cfg),
+                )
+        except Exception as exc:
+            raise HTTPException(502, f"STT service unavailable: {exc}") from exc
         return Response(
             content=resp.content,
             status_code=resp.status_code,
@@ -384,12 +387,15 @@ def create_app(
         if not cfg.enabled:
             raise HTTPException(501, "STT disabled")
         content = await file.read()
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{cfg.base_url.rstrip('/')}{cfg.diarize_path}",
-                files={"file": (file.filename or "audio.wav", content, file.content_type or "audio/wav")},
-                headers=_stt_headers(cfg),
-            )
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                resp = await client.post(
+                    f"{cfg.base_url.rstrip('/')}{cfg.diarize_path}",
+                    files={"file": (file.filename or "audio.wav", content, file.content_type or "audio/wav")},
+                    headers=_stt_headers(cfg),
+                )
+        except Exception as exc:
+            raise HTTPException(502, f"STT service unavailable: {exc}") from exc
         return Response(
             content=resp.content,
             status_code=resp.status_code,
@@ -412,8 +418,12 @@ def create_app(
             url = _ws_url(cfg.base_url, cfg.realtime_path, cfg.api_key)
             async with websockets.connect(url, max_size=None) as upstream:
                 await _relay(websocket, upstream)
-        except Exception:  # pragma: no cover - depends on the STT service
+        except Exception as exc:  # pragma: no cover - depends on the STT service
             log.exception("STT WebSocket proxy error")
+            try:
+                await websocket.send_json({"type": "error", "message": f"STT service unavailable: {exc}"})
+            except Exception:
+                pass
 
     # ------------------------------------------------------------- LLM / chat
     @app.get("/api/llm/ping")

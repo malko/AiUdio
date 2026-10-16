@@ -4,7 +4,8 @@
   --panel-2: #1e222b;
   --text: #e6e9ef;
   --muted: #8a93a6;
-  --accent: #4a90d9;
+  --accent: #f97316;
+  --accent-2: #ea580c;
   --ok: #64dd17;
   --err: #ef5552;
   --border: #262b36;
@@ -62,6 +63,7 @@ input, select, textarea {
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; font: inherit;
 }
+input, select { min-height: 38px; }
 label.inline input { width: auto; margin: 0; }
 textarea { resize: vertical; }
 
@@ -71,10 +73,17 @@ textarea { resize: vertical; }
 button {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
   padding: 8px 14px; border-radius: 8px; cursor: pointer; font: inherit;
+  min-height: 38px; line-height: 1.2;
 }
 button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #201203; }
+button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
 button:disabled { opacity: .5; cursor: not-allowed; }
+
+.row > button { min-width: 112px; }
+.grow { flex: 1 1 220px; }
+
+progress { width: 100%; margin-top: 8px; accent-color: var(--accent); }
 
 audio { width: 100%; margin-top: 10px; }
 

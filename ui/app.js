@@ -14,8 +14,13 @@ function apiFetch(url, options = {}) {
 
 async function getJSON(url) {
   const r = await apiFetch(url);
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return r.json();
+  const text = await r.text();
+  if (!r.ok) throw new Error(text || `${r.status}`);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(text ? text.slice(0, 160) : "invalid JSON response");
+  }
 }
 
 function wsURL(path) {
@@ -73,6 +78,7 @@ $("#lang-select").addEventListener("change", (e) => {
   if (CONFIG) {
     buildTtsFamilySelect();
     updateSttModelDesc();
+    loadMicDevices();
   }
 });
 
@@ -122,6 +128,7 @@ async function init() {
 
   await loadVoices();
   loadSttModels();
+  loadMicDevices();
   refreshConfigModels();
   refreshStatus();
 }
@@ -309,6 +316,37 @@ $("#tts-go").addEventListener("click", async () => {
 // ------------------------------------------------------------------ STT tab
 let micCtx = null, micStream = null, micNode = null, sttSocket = null;
 let sttFinal = "";
+let micDeviceId = "";
+
+async function loadMicDevices() {
+  const sel = $("#stt-mic-device");
+  if (!sel) return;
+  const keep = sel.value || micDeviceId;
+  sel.innerHTML = "";
+  const def = document.createElement("option");
+  def.value = "";
+  def.textContent = t("stt.defaultMic");
+  sel.appendChild(def);
+  if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      devices
+        .filter((d) => d.kind === "audioinput")
+        .forEach((d, i) => {
+          const o = document.createElement("option");
+          o.value = d.deviceId;
+          o.textContent = d.label || `Microphone ${i + 1}`;
+          sel.appendChild(o);
+        });
+    } catch (e) { /* permission not granted yet */ }
+  }
+  sel.value = keep || "";
+  micDeviceId = sel.value;
+}
+
+$("#stt-mic-device").addEventListener("change", (e) => {
+  micDeviceId = e.target.value;
+});
 
 function downsampleTo16k(input, inRate) {
   const ratio = inRate / 16000;
@@ -324,8 +362,14 @@ function downsampleTo16k(input, inRate) {
 $("#stt-record").addEventListener("click", async () => {
   const btn = $("#stt-record");
   if (sttSocket) { stopMic(); return; }
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $("#stt-status").textContent = t("stt.micInsecure");
+    return;
+  }
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const audio = micDeviceId ? { deviceId: { exact: micDeviceId } } : true;
+    micStream = await navigator.mediaDevices.getUserMedia({ audio });
+    loadMicDevices();  // labels become available once permission is granted
     micCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = micCtx.createMediaStreamSource(micStream);
     micNode = micCtx.createScriptProcessor(4096, 1, 1);
@@ -351,9 +395,17 @@ $("#stt-record").addEventListener("click", async () => {
       } else if (msg.type && msg.type.includes("completed")) {
         sttFinal += (msg.text || msg.transcript || "") + " ";
         $("#stt-text").textContent = sttFinal;
+      } else if (msg.type === "error") {
+        $("#stt-status").textContent = msg.message || t("stt.serviceNotReady");
       }
     };
-    sttSocket.onclose = () => stopMic();
+    sttSocket.onerror = () => { $("#stt-status").textContent = t("stt.serviceNotReady"); };
+    sttSocket.onclose = (ev) => {
+      stopMic();
+      if (ev && ev.code !== 1000 && ev.code !== 4401) {
+        $("#stt-status").textContent = t("stt.serviceNotReady");
+      }
+    };
 
     micNode.onaudioprocess = (e) => {
       if (!sttSocket || sttSocket.readyState !== 1) return;
@@ -389,7 +441,13 @@ $("#stt-upload").addEventListener("click", async () => {
   if ($("#stt-diar").checked) fd.append("diarization", "true");
   try {
     const r = await apiFetch("/v1/audio/transcriptions", { method: "POST", body: fd });
-    const data = await r.json();
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch (e) { data = null; }
+    if (!r.ok || data === null) {
+      $("#stt-file-out").textContent = `${t("status.error")} ${(data && data.detail) || text || r.status}`;
+      return;
+    }
     $("#stt-file-out").textContent = JSON.stringify(
       data.words ? { text: data.text, words: data.words } : data, null, 2);
   } catch (e) {
@@ -436,30 +494,48 @@ async function loadSttModels() {
       o.textContent = `${m.repo} — ${fmtMB(m.size)} ${t("stt.sizeMb")} [${tag}]`;
       sel.appendChild(o);
     });
-    status.textContent = "";
     updateSttModelDesc();
+    await refreshSttServiceStatus();
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }
 }
 
+async function refreshSttServiceStatus() {
+  const status = $("#stt-model-status");
+  try {
+    const h = await getJSON("/api/stt/health");
+    if (h.enabled && h.error) status.textContent = t("stt.serviceNotReady");
+  } catch (e) {
+    status.textContent = t("stt.serviceNotReady");
+  }
+}
+
 $("#stt-model-refresh").addEventListener("click", loadSttModels);
+
+let sttDownloadAbort = null;
 
 $("#stt-model-download").addEventListener("click", async () => {
   const repo = $("#stt-model-select").value;
   if (!repo) return;
   const status = $("#stt-model-status");
   const bar = $("#stt-model-progress");
+  const dlBtn = $("#stt-model-download");
+  const stopBtn = $("#stt-model-stop");
   bar.hidden = false;
   bar.value = 0;
   status.textContent = `${t("stt.downloading")}…`;
+  sttDownloadAbort = new AbortController();
+  dlBtn.disabled = true;
+  stopBtn.hidden = false;
   try {
     const r = await apiFetch("/api/stt/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: repo }),
+      signal: sttDownloadAbort.signal,
     });
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -488,8 +564,16 @@ $("#stt-model-download").addEventListener("click", async () => {
     }
     await loadSttModels();
   } catch (e) {
-    status.textContent = `${t("status.error")} ${e}`;
+    status.textContent = e.name === "AbortError" ? t("stt.cancelled") : `${t("status.error")} ${e}`;
+  } finally {
+    sttDownloadAbort = null;
+    dlBtn.disabled = false;
+    stopBtn.hidden = true;
   }
+});
+
+$("#stt-model-stop").addEventListener("click", () => {
+  if (sttDownloadAbort) sttDownloadAbort.abort();
 });
 
 // ----------------------------------------------------------------- chat tab
