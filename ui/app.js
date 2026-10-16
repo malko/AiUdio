@@ -143,7 +143,7 @@ async function loadVoices() {
       const o = document.createElement("option"); o.value = s; o.textContent = s; sel.appendChild(o);
     });
     if (!data.speakers || !data.speakers.length) {
-      const o = document.createElement("option"); o.value = ""; o.textContent = "(n/a)"; sel.appendChild(o);
+      const o = document.createElement("option"); o.value = ""; o.textContent = t("tts.defaultSpeaker"); sel.appendChild(o);
     }
   } catch (e) { /* ignore */ }
 }

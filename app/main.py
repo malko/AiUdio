@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -582,11 +583,33 @@ async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text
     })
 
 
-async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages, speak: bool = True) -> str:
-    import re
+_CHAT_SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
 
+
+def _pop_chat_chunks(text: str, max_chars: int = 160) -> Tuple[List[str], str]:
+    """Split streaming LLM text into TTS chunks.
+
+    Sentence ends first, then clause/space boundaries once a chunk grows too long,
+    so the first audio packet arrives early (perceived real-time) instead of after
+    a whole long sentence has been generated.
+    """
+    chunks: List[str] = []
+    parts = _CHAT_SENTENCE_RE.split(text)
+    if len(parts) > 1:
+        chunks.extend(s.strip() for s in parts[:-1])
+        text = parts[-1]
+    while len(text) > max_chars:
+        window = text[:max_chars]
+        cut = max(window.rfind(", "), window.rfind("; "), window.rfind(": "), window.rfind(" "))
+        if cut <= 0:
+            break
+        chunks.append(text[: cut + 1].strip())
+        text = text[cut + 1:].lstrip()
+    return [c for c in chunks if c], text
+
+
+async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages, speak: bool = True) -> str:
     req = TTSRequest(**{k: v for k, v in (tts_config or {}).items() if k in TTSRequest.model_fields})
-    sentence_re = re.compile(r"(?<=[.!?…])\s+")
     send_lock = asyncio.Lock()
     queue: asyncio.Queue = asyncio.Queue()
     reply = ""
@@ -630,11 +653,9 @@ async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages, 
             await send_json({"type": "llm.delta", "text": token})
             if speak:
                 buffer += token
-                parts = sentence_re.split(buffer)
-                if len(parts) > 1:
-                    buffer = parts[-1]
-                    for sentence in parts[:-1]:
-                        await queue.put(sentence)
+                chunks, buffer = _pop_chat_chunks(buffer)
+                for sentence in chunks:
+                    await queue.put(sentence)
         if speak and worker is not None:
             if buffer.strip():
                 await queue.put(buffer)

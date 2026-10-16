@@ -26,6 +26,7 @@ class ModelHandle:
     model: Any
     loaded_at: float = field(default_factory=time.time)
     last_used: float = field(default_factory=time.time)
+    default_speaker: str = ""
 
 
 def _resolve_dtype(name: str) -> Any:  # pragma: no cover - requires torch
@@ -153,10 +154,17 @@ class TTSEngine:
 
         with self._lock:
             if family == "custom_voice":
+                # A missing speaker would let the model pick a different voice per
+                # generation; fall back to a stable default for consistency (this is
+                # what caused the "different voice every sentence" in chat mode).
+                speakers = [i.get("speaker") or "" for i in items]
+                if any(not s for s in speakers):
+                    default = self._default_speaker(handle)
+                    speakers = [s or default for s in speakers]
                 wavs, sr = handle.model.generate_custom_voice(
                     text=[i["text"] for i in items],
                     language=[i.get("language") or "Auto" for i in items],
-                    speaker=[i.get("speaker") or "" for i in items],
+                    speaker=speakers,
                     instruct=[i.get("instruct") or "" for i in items],
                     **gen,
                 )
@@ -184,6 +192,17 @@ class TTSEngine:
     def synthesize_one(self, item: Dict[str, Any]) -> Tuple[np.ndarray, int]:
         return self.synthesize_batch(item["family"], [item])[0]
 
+    def _default_speaker(self, handle: ModelHandle) -> str:
+        """Stable default speaker for a loaded custom_voice model."""
+        if handle.default_speaker:
+            return handle.default_speaker
+        try:
+            speakers = list(handle.model.get_supported_speakers() or [])
+        except Exception:
+            speakers = []
+        handle.default_speaker = speakers[0] if speakers else ""
+        return handle.default_speaker
+
     def _generation_defaults(self) -> Dict[str, Any]:
         g = self.settings.generation
         return {
@@ -207,27 +226,22 @@ class TTSEngine:
 
     # ----------------------------------------------------------------- voices
     def speakers(self, family: str = "custom_voice") -> List[str]:
+        # Only report voices for an already-loaded model (do not trigger a load).
         with self._lock:
-            if family in self._handles:
-                model = self._handles[family].model
-            else:
-                try:
-                    model = self.ensure(family).model
-                except Exception as exc:  # pragma: no cover - requires GPU
-                    log.warning("Speakers unavailable (%s): %s", family, exc)
-                    return []
+            handle = self._handles.get(family)
+            if handle is None:
+                return []
             try:
-                return list(model.get_supported_speakers() or [])
+                return list(handle.model.get_supported_speakers() or [])
             except Exception:
                 return []
 
     def languages(self, family: str = "custom_voice") -> List[str]:
         with self._lock:
-            try:
-                model = self.ensure(family).model
-            except Exception:
+            handle = self._handles.get(family)
+            if handle is None:
                 return []
             try:
-                return list(model.get_supported_languages() or [])
+                return list(handle.model.get_supported_languages() or [])
             except Exception:
                 return []

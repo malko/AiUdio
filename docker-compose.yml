@@ -40,12 +40,14 @@ services:
       - HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+      # LLM/Auth: only override when explicitly set in .env, otherwise the values
+      # persisted in config.yaml (edited from the UI) are kept across restarts.
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-}
       - STT_BASE_URL=http://stt:8080
-      - AUTH_ENABLED=${AUTH_ENABLED:-false}
-      - AUTH_USERNAME=${AUTH_USERNAME:-admin}
+      - AUTH_ENABLED=${AUTH_ENABLED:-}
+      - AUTH_USERNAME=${AUTH_USERNAME:-}
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - AUTH_API_KEYS=${AUTH_API_KEYS:-}
     extra_hosts:
