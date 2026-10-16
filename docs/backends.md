@@ -73,8 +73,11 @@ Any combination of {CUDA, ROCm, CPU} TTS × {CUDA, CPU, Vulkan} STT is valid. Ca
 - **Legacy (driver < 580)**: use `docker-compose.cuda12.yml` (STT on Ubuntu 24.04 / CUDA 12.8;
   Ubuntu 24.04 ships CMake 3.28, new enough for the presets).
 - **CUDA 13 TTS** (`docker-compose.cuda13.yml`, driver ≥ 580): TTS base
-  `pytorch/pytorch:2.14.1-cuda13.2-cudnn9-runtime`; the image already ships a compatible
-  `torch`/`torchaudio`, so torch is **not** force-reinstalled (`TORCH_SPEC` empty).
+  `pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime`; the image already ships a compatible
+  `torch`/`torchaudio`, so torch is **not** force-reinstalled (`TORCH_SPEC` empty). CUDA
+  **13.0** is used on purpose: torchaudio is only published for CUDA 13.0 (a 13.2 torch +
+  13.0 torchaudio errors with "compiled with different CUDA versions"). It still runs on
+  13.x host drivers.
 - Since PyTorch 2.11, `pip install torch` pulls CUDA 13.0 wheels by default, and **torchaudio
   2.11 is ABI-stable** (works with torch ≥ 2.11, no separate CUDA wheels). CUDA 13 supports
   Turing (SM 7.5) and newer only — older GPUs must stay on CUDA 12.

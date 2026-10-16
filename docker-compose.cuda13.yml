@@ -1,4 +1,4 @@
-# CUDA 13 TTS override: switches the TTS gateway to a CUDA 13.2 PyTorch image
+# CUDA 13 TTS override: switches the TTS gateway to a CUDA 13 PyTorch image
 # (e.g. host driver >= 580). The STT service already builds on CUDA 13.4 / Ubuntu
 # 26.04 by default, so it is not overridden here.
 #   docker compose -f docker-compose.yml -f docker-compose.cuda13.yml up -d --build
@@ -7,12 +7,16 @@
 # NVIDIA driver matters. A CUDA 12.x container runs fine on a CUDA 13.x host driver.
 # Use this override when you specifically want CUDA 13 TTS images (newer GPUs, CUDA 13
 # features). CUDA 13 supports Turing (SM 7.5) and newer only.
+#
+# Why CUDA 13.0 and not 13.2: torchaudio is only published for CUDA 13.0 on PyPI.
+# A CUDA 13.2 torch + CUDA 13.0 torchaudio raises "PyTorch and TorchAudio were
+# compiled with different CUDA versions". Keep torch and torchaudio on the same
+# CUDA minor (13.0) — it still runs on 13.x host drivers.
 services:
   aiudio:
     build:
       args:
-        # pytorch/pytorch CUDA 13.2 image ships a compatible torch/torchaudio,
-        # so there is no need to force-reinstall torch (TORCH_SPEC empty).
-        BASE_IMAGE: ${TTS_BASE_IMAGE:-pytorch/pytorch:2.14.1-cuda13.2-cudnn9-runtime}
+        # The PyPI torchaudio build is CUDA 13.0; the image's torch matches it.
+        BASE_IMAGE: ${TTS_BASE_IMAGE:-pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime}
         TORCH_SPEC: ""
-        TORCH_INDEX_URL: ${TTS_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu132}
+        TORCH_INDEX_URL: ${TTS_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
