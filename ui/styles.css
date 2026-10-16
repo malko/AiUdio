@@ -178,3 +178,11 @@ summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 
 .stt-picker { min-width: 0; }
 .stt-picker .row { margin-bottom: 6px; }
+
+.modal {
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+  color: var(--text); padding: 18px; width: min(520px, 92vw); max-height: 90vh; overflow: auto;
+}
+.modal::backdrop { background: rgba(0, 0, 0, .6); }
+.modal h2 { margin-top: 0; }
+#chat-lang-wrap { margin-bottom: 10px; }

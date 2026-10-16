@@ -31,6 +31,9 @@
     <div class="chat-layout">
       <aside class="card chat-voices">
         <h2 data-i18n="chat.voicesTitle">Talk with</h2>
+        <label id="chat-lang-wrap"><span data-i18n="chat.language">Language</span>
+          <select id="chat-language"></select>
+        </label>
         <div id="chat-voice-list" class="voice-list"></div>
       </aside>
       <div class="card chat-main">
@@ -120,6 +123,7 @@
           <div id="av-clone-box" hidden>
             <label><span data-i18n="avatars.refAudio">Reference audio</span> <input id="av-ref" type="file" accept="audio/*" /></label>
             <label><span data-i18n="avatars.refText">Reference transcript</span> <input id="av-reftext" type="text" /></label>
+            <label class="inline"><input id="av-xvec" type="checkbox" checked /> <span data-i18n="avatars.xvec">x-vector only</span></label>
           </div>
           <label><span data-i18n="avatars.language">Language</span> <select id="av-lang"></select></label>
           <label><span data-i18n="avatars.personality">Personality (system prompt, optional)</span>
@@ -133,7 +137,31 @@
     </div>
   </section>
 
-  <!-- ------------------------------------------------------------- STT -->
+  <dialog id="avatar-dialog" class="modal">
+    <h2 data-i18n="avatars.editTitle">Edit voice</h2>
+    <label><span data-i18n="avatars.name">Name</span> <input id="ad-name" type="text" /></label>
+    <label><span data-i18n="avatars.language">Language</span> <select id="ad-lang"></select></label>
+    <div id="ad-design-box">
+      <label><span data-i18n="avatars.prompt">Description</span>
+        <textarea id="ad-prompt" rows="2"></textarea>
+      </label>
+    </div>
+    <div id="ad-clone-box">
+      <label><span data-i18n="avatars.refText">Reference transcript</span> <input id="ad-reftext" type="text" /></label>
+      <label class="inline"><input id="ad-xvec" type="checkbox" /> <span data-i18n="avatars.xvec">x-vector only</span></label>
+      <label><span data-i18n="avatars.replaceAudio">Replace reference audio</span> <input id="ad-ref" type="file" accept="audio/*" /></label>
+    </div>
+    <label><span data-i18n="avatars.personality">Personality (system prompt, optional)</span>
+      <textarea id="ad-personality" rows="2"></textarea>
+    </label>
+    <label><span data-i18n="avatars.photo">Photo (optional)</span> <input id="ad-photo" type="file" accept="image/*" /></label>
+    <div class="row">
+      <button type="button" id="ad-save" class="primary" data-i18n="settings.save">Save</button>
+      <button type="button" id="ad-regenerate" data-i18n="avatars.regenerate">Regenerate</button>
+      <button type="button" id="ad-close" data-i18n="avatars.close">Close</button>
+    </div>
+    <div id="ad-status" class="muted"></div>
+  </dialog>
   <section id="tab-stt" class="tab">
     <div class="grid">
       <div class="card wide">
