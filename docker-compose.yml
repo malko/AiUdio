@@ -75,6 +75,8 @@ services:
     environment:
       - STT_ASR_MODEL=${STT_ASR_MODEL:-nemotron-3.5}
       - STT_PORT=8080
+      - NEMO_SPEECH_MODEL_INDEX=${NEMO_SPEECH_MODEL_INDEX:-/usr/local/share/nemo-speech/model-index.json}
+      - NEMO_SPEECH_MODEL_DIR=${NEMO_SPEECH_MODEL_DIR:-/models}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     <<: *nvidia-gpu
