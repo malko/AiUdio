@@ -88,8 +88,7 @@ git clone <your-fork> aiudio && cd aiudio
 cp .env.example .env        # set PORT, HF_TOKEN, AUTH_*, LLM_*
 make hooks                  # enable the gitmoji commit-msg hook + template
 
-# (optional) pre-download the TTS models
-python3 -m pip install "huggingface_hub[cli]"
+# (optional) pre-download the TTS models (plain curl, no Python needed)
 ./scripts/download_models.sh
 
 docker compose up -d --build
@@ -161,6 +160,20 @@ CPU STT. Full details: [`docs/backends.md`](docs/backends.md#mixing-backends).
 
 Override the repositories via `config.yaml` (`models.registry`) or the environment
 variables `TTS_CUSTOM_VOICE`, `TTS_VOICE_DESIGN`, `TTS_BASE`. 0.6B variants are supported.
+
+By default the weights are downloaded automatically on first use (into the `hf_cache`
+volume). To pre-fetch them instead, run `./scripts/download_models.sh` (plain **curl**, no
+Python dependency; honours `HF_TOKEN` and `HF_ENDPOINT`). It saves each model under
+`hf_cache/models/<name>`; to run fully offline, point `models.registry` at those directories,
+e.g.:
+
+```yaml
+models:
+  registry:
+    custom_voice: /app/hf_cache/models/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    voice_design: /app/hf_cache/models/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+    base: /app/hf_cache/models/Qwen3-TTS-12Hz-1.7B-Base
+```
 
 Loading strategy in `config.yaml`:
 
