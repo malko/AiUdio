@@ -29,14 +29,23 @@
   <!-- ------------------------------------------------------------- TTS -->
   <section id="tab-tts" class="tab active">
     <div class="grid">
+      <div class="card wide">
+        <h2 data-i18n="models.title">Model</h2>
+        <div class="row">
+          <label><span data-i18n="models.family">Model</span>
+            <select id="tts-family"></select>
+          </label>
+          <button id="tts-load" class="primary" data-i18n="models.load">Load</button>
+          <button id="tts-refresh-models" data-i18n="stt.refresh">Refresh</button>
+        </div>
+        <div id="tts-model-desc" class="muted"></div>
+        <div id="tts-model-status" class="muted"></div>
+      </div>
       <div class="card">
         <label><span data-i18n="tts.textLabel">Text</span>
           <textarea id="tts-text" rows="6" data-i18n-ph="tts.textPlaceholder" placeholder="Hello, this is a test."></textarea>
         </label>
         <div class="row">
-          <label><span data-i18n="tts.family">Mode / family</span>
-            <select id="tts-family"></select>
-          </label>
           <label><span data-i18n="tts.language">Language</span>
             <select id="tts-language"></select>
           </label>
@@ -97,6 +106,7 @@
           <button id="stt-model-download" class="primary" data-i18n="stt.download">Download</button>
           <button id="stt-model-refresh" data-i18n="stt.refresh">Refresh</button>
         </div>
+        <div id="stt-model-desc" class="muted"></div>
         <progress id="stt-model-progress" value="0" max="100" hidden></progress>
         <div id="stt-model-status" class="muted"></div>
       </div>

@@ -68,7 +68,13 @@ const TTS_SESSION = { format: "pcm", sample_rate: 24000 };
 // i18n: apply static labels + language switcher.
 window.I18N.init();
 window.I18N.apply();
-$("#lang-select").addEventListener("change", (e) => window.I18N.setLang(e.target.value));
+$("#lang-select").addEventListener("change", (e) => {
+  window.I18N.setLang(e.target.value);
+  if (CONFIG) {
+    buildTtsFamilySelect();
+    updateSttModelDesc();
+  }
+});
 
 // --------------------------------------------------------------------- tabs
 document.querySelectorAll(".tabs button").forEach((btn) => {
@@ -93,16 +99,11 @@ async function init() {
   TTS_SESSION.sample_rate = CONFIG.audio.sample_rate;
   $("#health").className = "dot ok";
 
-  const fam = $("#tts-family");
-  fam.innerHTML = "";
-  (CONFIG.models.families || []).forEach((m) => {
-    const o = document.createElement("option");
-    o.value = m.family;
-    o.textContent = `${m.family}${m.loaded ? " *" : ""}`;
-    fam.appendChild(o);
+  buildTtsFamilySelect();
+  $("#tts-family").addEventListener("change", () => {
+    loadVoices();
+    updateTtsModelDesc();
   });
-  fam.value = CONFIG.models.default_family;
-  fam.addEventListener("change", loadVoices);
 
   const lang = $("#tts-language");
   lang.innerHTML = "";
@@ -121,6 +122,7 @@ async function init() {
 
   await loadVoices();
   loadSttModels();
+  refreshConfigModels();
   refreshStatus();
 }
 
@@ -152,6 +154,64 @@ async function refreshStatus() {
   }
 }
 setInterval(refreshStatus, 15000);
+
+// ---------------------------------------------------------- TTS model choice
+function tt(key, fallback) {
+  const v = window.I18N.t(key);
+  return v === key ? fallback : v;
+}
+function ttsName(family) { return tt(`tts.model.${family}.name`, family); }
+function ttsDesc(family) { return tt(`tts.model.${family}.desc`, ""); }
+
+function buildTtsFamilySelect() {
+  const fam = $("#tts-family");
+  const current = fam.value || CONFIG.models.default_family;
+  fam.innerHTML = "";
+  (CONFIG.models.families || []).forEach((m) => {
+    const o = document.createElement("option");
+    o.value = m.family;
+    const tag = m.loaded ? t("models.loaded") : t("models.notLoaded");
+    o.textContent = `${ttsName(m.family)} [${tag}]`;
+    fam.appendChild(o);
+  });
+  fam.value = current;
+  updateTtsModelDesc();
+}
+
+function updateTtsModelDesc() {
+  $("#tts-model-desc").textContent = ttsDesc($("#tts-family").value);
+}
+
+async function refreshConfigModels() {
+  try {
+    const data = await getJSON("/api/models");
+    CONFIG.models.families = data.families;
+    buildTtsFamilySelect();
+    const loaded = (data.loaded || []).map(ttsName).join(", ");
+    $("#tts-model-status").textContent = loaded
+      ? `${t("models.loaded")}: ${loaded}`
+      : t("models.notLoaded");
+  } catch (e) { /* ignore */ }
+}
+
+$("#tts-load").addEventListener("click", async () => {
+  const family = $("#tts-family").value;
+  $("#tts-model-status").textContent = t("models.loading");
+  try {
+    const r = await apiFetch("/api/models/load", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ family }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    $("#tts-model-status").textContent = `${ttsName(family)} — ${t("models.loaded")}`;
+    await refreshConfigModels();
+  } catch (e) {
+    $("#tts-model-status").textContent = `${t("status.error")} ${e}`;
+  }
+});
+
+$("#tts-refresh-models").addEventListener("click", refreshConfigModels);
 
 // ------------------------------------------------------------------ TTS tab
 function ttsPayload(text) {
@@ -341,6 +401,22 @@ $("#stt-upload").addEventListener("click", async () => {
 let sttModels = [];
 const fmtMB = (bytes) => ((bytes || 0) / (1024 * 1024)).toFixed(0);
 
+function sttModelDesc(m) {
+  const id = `${m.repo} ${(m.aliases || []).join(" ")}`.toLowerCase();
+  if (id.includes("nemotron-3.5")) return t("stt.desc.nemotron3_5");
+  if (id.includes("parakeet-tdt")) return t("stt.desc.parakeet_v3");
+  if (id.includes("nemotron-speech-streaming-en")) return t("stt.desc.nemotron_en");
+  return t("stt.desc.generic");
+}
+
+function updateSttModelDesc() {
+  const repo = $("#stt-model-select").value;
+  const m = sttModels.find((x) => x.repo === repo);
+  $("#stt-model-desc").textContent = m ? sttModelDesc(m) : "";
+}
+
+$("#stt-model-select").addEventListener("change", updateSttModelDesc);
+
 async function loadSttModels() {
   const status = $("#stt-model-status");
   const sel = $("#stt-model-select");
@@ -361,6 +437,7 @@ async function loadSttModels() {
       sel.appendChild(o);
     });
     status.textContent = "";
+    updateSttModelDesc();
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }

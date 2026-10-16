@@ -189,6 +189,10 @@ Loading strategy in `config.yaml`:
 - `models.residency: multi` + `models.resident: [custom_voice, base]` → keep several models
   loaded (more VRAM, no reload).
 
+The **web UI (Synthesis tab)** exposes a model selector with plain-language descriptions and a
+**Load** button (models load lazily on first use anyway). The **Transcription tab** lists the
+downloadable STT models with descriptions, sizes and cache status.
+
 ## API
 
 Quick examples (full reference: [`docs/api.md`](docs/api.md)):
