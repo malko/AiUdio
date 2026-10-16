@@ -10,7 +10,9 @@ x-nvidia-gpu: &nvidia-gpu
       reservations:
         devices:
           - driver: nvidia
-            count: all
+            device_ids:
+              - 'GPU-fb340601-4e43-19d9-289f-3a9d41aaa23e' # gygabyte rtx 5060ti python III
+            # count: all
             capabilities: [gpu]
 
 services:

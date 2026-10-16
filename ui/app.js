@@ -592,47 +592,68 @@ function appendTurn(role, text) {
   return span;
 }
 
+function chatConfig() {
+  return {
+    type: "session.config",
+    speak: $("#chat-speak").checked,
+    tts: {
+      family: $("#tts-family").value,
+      language: $("#tts-language").value,
+      speaker: $("#tts-speaker").value,
+      format: "pcm",
+      chunking: true,
+    },
+  };
+}
+
 function ensureChatSocket() {
   if (chatSocket && chatSocket.readyState === 1) return Promise.resolve(chatSocket);
   return new Promise((resolve, reject) => {
-    chatSocket = new WebSocket(wsURL("/ws/chat"));
-    chatSocket.binaryType = "arraybuffer";
-    chatSocket.onopen = () => {
-      chatSocket.send(JSON.stringify({
-        type: "session.config",
-        tts: { family: $("#tts-family").value, language: $("#tts-language").value,
-               speaker: $("#tts-speaker").value, format: "pcm", chunking: true },
-      }));
-      resolve(chatSocket);
+    const sock = new WebSocket(wsURL("/ws/chat"));
+    sock.binaryType = "arraybuffer";
+    sock.onopen = () => {
+      chatSocket = sock;
+      sock.send(JSON.stringify(chatConfig()));
+      resolve(sock);
     };
-    chatSocket.onerror = reject;
+    sock.onerror = () => reject(new Error("connection failed"));
+    sock.onclose = () => { chatSocket = null; };
   });
 }
 
 async function chatSend() {
-  const text = $("#chat-input").value.trim();
+  const input = $("#chat-input");
+  const text = input.value.trim();
   if (!text) return;
-  $("#chat-input").value = "";
+  input.value = "";
   appendTurn("user", text);
   currentAssistant = appendTurn("assistant", "");
-  const sock = await ensureChatSocket();
-  sock.onmessage = (ev) => {
-    if (typeof ev.data !== "string") {
-      if (chatPlayer && $("#chat-speak").checked) chatPlayer.pushBytes(new Uint8Array(ev.data));
-      return;
-    }
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "llm.delta") currentAssistant.textContent += msg.text;
-    else if (msg.type === "audio.start") {
-      if (!chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
-      chatPlayer.reset();
-    } else if (msg.type === "llm.done") {
-      currentAssistant = null;
-    } else if (msg.type === "error") {
-      currentAssistant.textContent += ` [error: ${msg.message}]`;
-    }
-  };
-  sock.send(JSON.stringify({ type: "input.text", text }));
+  try {
+    const sock = await ensureChatSocket();
+    sock.onmessage = (ev) => {
+      if (typeof ev.data !== "string") {
+        if (chatPlayer && $("#chat-speak").checked) chatPlayer.pushBytes(new Uint8Array(ev.data));
+        return;
+      }
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === "llm.delta") {
+        if (currentAssistant) currentAssistant.textContent += msg.text;
+      } else if (msg.type === "audio.start") {
+        if (!chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
+        chatPlayer.reset();
+      } else if (msg.type === "llm.done") {
+        currentAssistant = null;
+      } else if (msg.type === "error") {
+        if (currentAssistant) currentAssistant.textContent += ` [error: ${msg.message}]`;
+      }
+    };
+    sock.send(JSON.stringify(chatConfig()));  // keep speak/voice up to date
+    sock.send(JSON.stringify({ type: "input.text", text }));
+  } catch (e) {
+    currentAssistant.textContent = `${t("status.error")} ${e}`;
+    currentAssistant = null;
+  }
 }
 
 $("#chat-send").addEventListener("click", chatSend);

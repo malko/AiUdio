@@ -458,6 +458,7 @@ def create_app(
         await websocket.accept()
         history: List[Dict[str, str]] = []
         tts_config: Dict[str, Any] = {}
+        speak = True
         try:
             while True:
                 message = await websocket.receive()
@@ -468,7 +469,8 @@ def create_app(
                 event = json.loads(data)
                 etype = event.get("type")
                 if etype == "session.config":
-                    tts_config = event.get("tts") or event
+                    tts_config = event.get("tts") or {}
+                    speak = bool(event.get("speak", True))
                 elif etype == "input.text":
                     user_text = str(event.get("text", "")).strip()
                     if not user_text:
@@ -479,9 +481,15 @@ def create_app(
                         trim_history(history, app.state.settings.llm.history_turns),
                         user_text,
                     )
-                    reply = await _chat_turn(
-                        websocket, app.state.settings, scheduler, app.state.llm, tts_config, messages
-                    )
+                    try:
+                        reply = await _chat_turn(
+                            websocket, app.state.settings, scheduler, app.state.llm,
+                            tts_config, messages, speak,
+                        )
+                    except Exception as exc:
+                        log.exception("Chat turn failed")
+                        await websocket.send_json({"type": "error", "message": str(exc)})
+                        continue
                     history.append({"role": "user", "content": user_text})
                     history.append({"role": "assistant", "content": reply})
                     await websocket.send_json({"type": "llm.done", "text": reply})
@@ -571,7 +579,7 @@ async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text
     })
 
 
-async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages) -> str:
+async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages, speak: bool = True) -> str:
     import re
 
     req = TTSRequest(**{k: v for k, v in (tts_config or {}).items() if k in TTSRequest.model_fields})
@@ -583,29 +591,33 @@ async def _chat_turn(websocket, settings, scheduler, llm, tts_config, messages) 
     async def flush(sentence: str) -> None:
         nonlocal index
         sentence = sentence.strip()
-        if not sentence:
+        if not speak or not sentence:
             return
-        async for _, pcm, sr in _stream_pcm(settings, scheduler, req, sentence):
-            await websocket.send_json({
-                "type": "audio.start", "sentence_index": index,
-                "sentence_text": sentence, "format": "pcm", "sample_rate": sr,
-            })
-            await websocket.send_bytes(pcm)
-            await websocket.send_json({
-                "type": "audio.done", "sentence_index": index, "total_bytes": len(pcm),
-            })
-            index += 1
+        try:
+            async for _, pcm, sr in _stream_pcm(settings, scheduler, req, sentence):
+                await websocket.send_json({
+                    "type": "audio.start", "sentence_index": index,
+                    "sentence_text": sentence, "format": "pcm", "sample_rate": sr,
+                })
+                await websocket.send_bytes(pcm)
+                await websocket.send_json({
+                    "type": "audio.done", "sentence_index": index, "total_bytes": len(pcm),
+                })
+                index += 1
+        except Exception as exc:  # TTS failure must not break the text conversation
+            await websocket.send_json({"type": "error", "message": f"TTS: {exc}"})
 
     async for token in llm.stream(messages):
         reply += token
-        buffer += token
         await websocket.send_json({"type": "llm.delta", "text": token})
-        parts = sentence_re.split(buffer)
-        if len(parts) > 1:
-            buffer = parts[-1]
-            for sentence in parts[:-1]:
-                await flush(sentence)
-    if buffer.strip():
+        if speak:
+            buffer += token
+            parts = sentence_re.split(buffer)
+            if len(parts) > 1:
+                buffer = parts[-1]
+                for sentence in parts[:-1]:
+                    await flush(sentence)
+    if speak and buffer.strip():
         await flush(buffer)
     return reply
 
