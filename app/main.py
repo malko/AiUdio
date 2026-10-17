@@ -160,6 +160,10 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
             "system_prompt": settings.llm.system_prompt,
             "temperature": settings.llm.temperature,
         },
+        "vllm": {
+            "enabled": settings.vllm.enabled,
+            "base_url": settings.vllm.base_url,
+        },
         "languages": [
             "Auto", "Chinese", "English", "Japanese", "Korean", "German",
             "French", "Russian", "Portuguese", "Spanish", "Italian",
@@ -737,7 +741,7 @@ def create_app(
 
     @app.put("/api/settings", tags=["Settings"])
     async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
-        allowed = {"llm", "generation", "chunking", "chat", "audio", "stt", "ui", "startup", "models"}
+        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models", "vllm"}
         sections = {k: v for k, v in payload.items() if k in allowed}
         if not sections:
             raise HTTPException(400, "No editable section provided")

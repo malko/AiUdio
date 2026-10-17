@@ -53,7 +53,17 @@ depth, and per-stage timings (`/api/metrics`).
   `noiseSuppression`, `autoGainControl`, so hands-free barge-in works without headphones.
 - **vLLM-Omni streaming backend** (experimental): with `vllm.enabled`, CustomVoice
   streaming is served by vLLM-Omni (native codec-window PCM) via `app/vllm_backend.py`,
-  falling back to the local per-sentence engine if the service is unavailable.
+  falling back to the local per-sentence engine if the service is unavailable. Enable it
+  without editing the state file:
+
+  ```bash
+  docker compose --profile vllm up -d tts-vllm     # the service
+  curl -s -X PUT localhost:8004/api/settings -H 'Content-Type: application/json' \
+       -d '{"vllm":{"enabled":true,"base_url":"http://tts-vllm:8091"}}'
+  ```
+
+  `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
+  service is unreachable and the call fell back).
 - **Observability**: `/api/metrics` (TTFA, RTF, counters, queue depth, model
   loads/evictions/hot-swap thrash) and `/ready`.
 - **Client jitter buffer**: `PCMPlayer` buffers the first ~200 ms before starting playback

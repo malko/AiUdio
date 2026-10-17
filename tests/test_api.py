@@ -91,6 +91,18 @@ def test_settings_update_default_size(client):
     assert client.get("/api/models").json()["default_size"] == "0.6B"
 
 
+def test_settings_update_vllm(client):
+    # The experimental vLLM-Omni streaming backend is switchable from the API
+    # (there is no UI field for it).
+    r = client.put(
+        "/api/settings",
+        json={"vllm": {"enabled": True, "base_url": "http://tts-vllm:8091"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["vllm"]["enabled"] is True
+    assert client.get("/api/config").json()["vllm"]["enabled"] is True
+
+
 def test_voices(client):
     r = client.get("/api/voices?family=custom_voice")
     assert r.status_code == 200
