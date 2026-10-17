@@ -125,8 +125,9 @@ Use `ws://<host>:8004/ws/tts?api_key=<key>` when auth is enabled.
 - **Preset speakers** (`custom_voice` family): `GET /api/voices?family=custom_voice` →
   `{speakers, languages, reference_files}`.
 - **Zero-shot clone per request**: send a `data:` base64 WAV as `ref_audio` (with `family`
-  `base` or a `chatterbox*` family). Remote URLs/local paths are disabled by default.
-- **Reusable avatars** (recommended for apps): create once from the admin
+  `base` or a `chatterbox*` family). Remote URLs/local paths are disabled by default. With
+  `ref_audio` and no explicit `family`, the clone engine is chosen by `clone_backend`.
+- **Reusable voices** (recommended for apps): create once from the admin
   (`POST /api/avatars`, or a Voice Design **fingerprint** via `POST /api/avatars/fingerprint`),
   then synthesize by id:
 
@@ -135,9 +136,12 @@ Use `ws://<host>:8004/ws/tts?api_key=<key>` when auth is enabled.
     -d '{"text":"Hello","avatar":"narrator"}' -o out.wav
   ```
 
-  `GET /api/avatars` lists them; `GET /api/avatars/{id}/audio` returns the reference clip.
-  The engine used to synthesize clones is chosen globally (`models.clone_backend`:
-  `qwen3` or `chatterbox`).
+  `GET /api/avatars` lists them (ids), `GET /v1/audio/voices` returns both preset `voices`
+  and voice-bank `avatars`, and `GET /api/avatars/{id}/audio` returns the reference clip.
+  A voice-bank id also works through `voice`/`speaker`
+  (`{"text":"Hello","voice":"narrator"}`), so OpenAI SDK callers can use it directly.
+  The clone engine is `models.clone_backend` by default and can be overridden **per request**
+  with `clone_backend` (or `engine`): `{"avatar":"narrator","clone_backend":"chatterbox"}`.
 
 ## 4. Speech-to-text
 

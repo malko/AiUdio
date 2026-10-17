@@ -44,7 +44,7 @@ admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at 
 | POST | `/api/models/unload` | `{"family": "..."}` or `{}` to unload everything |
 | GET | `/api/voices?family=custom_voice` | Speakers, languages, reference files |
 | POST | `/api/voices/load` | `{"avatar": "id"}` or `{"family": "custom_voice"}` — warm a conversation voice |
-| GET | `/v1/audio/voices` | OpenAI-compatible list |
+| GET | `/v1/audio/voices` | OpenAI-compatible list (`voices` + `avatars` = voice-bank ids) |
 
 ## TTS
 
@@ -61,6 +61,8 @@ Body (`TTSRequest`, aliases accepted):
 | `instruct` / `instructions` | str | — | Style/emotion (`custom_voice`, `voice_design`) |
 | `ref_audio` | str | — | Path / URL / data-URL (`base`, `chatterbox*`) |
 | `ref_text` | str | — | Reference transcript (ICL mode; Qwen only) |
+| `avatar` | str | — | Voice-bank id (see Avatars). `voice`/`speaker` also accepts a voice-bank id. |
+| `clone_backend` / `engine` | str | `models.clone_backend` | Clone engine for this request: `qwen3` or `chatterbox` |
 | `x_vector_only_mode` | bool | false | Speaker embedding only (Qwen only) |
 | `stream` | bool | false | Progressive PCM streaming (single text only) |
 | `format` / `response_format` | str | `audio.format` | `wav` or `pcm` (forced to `pcm` when `stream`) |
@@ -78,11 +80,12 @@ Client events: `{"type":"session.config", ...}` then `{"type":"input.text","text
 then `{"type":"input.done"}`.
 Server events: `audio.start`, binary PCM16 frames, `audio.done`, `session.done`, `error`.
 
-## Avatars (voices)
+## Avatars (voice bank)
 
-All avatars are **clones**. The engine that synthesizes them is chosen globally with
-`models.clone_backend` (`qwen3` or `chatterbox`); an explicit clone-capable `family`
-(`base`, `chatterbox`, `chatterbox_turbo`, `chatterbox_nano`) on the request takes precedence.
+The UI calls this the **Voice Bank**; the API uses `avatars`. All avatars are **clones**. The
+engine that synthesizes them defaults to `models.clone_backend` (`qwen3` or `chatterbox`) and
+can be overridden per request with `clone_backend`/`engine`; an explicit clone-capable `family`
+(`base`, `chatterbox`, `chatterbox_turbo`, `chatterbox_nano`) also takes precedence.
 
 | Method | Path | Description |
 |---|---|---|

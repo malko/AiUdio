@@ -30,39 +30,54 @@ Playback | scheduling | client `PCMPlayer` with a small prebuffer (~200 ms / 250
 Measurable targets: **time-to-first-audio (TTFA)**, real-time factor (RTF), scheduler queue
 depth, and per-stage timings (`/api/metrics`).
 
-## Implemented (Phase 1 — quick wins)
+## Implemented (Phase 1 + 2/3 quick wins)
 
 - **Streaming bypasses micro-batching**: `_stream_pcm` calls
   `BatchScheduler.submit_streaming()`, which runs immediately instead of waiting for the
   batch window (`generation.batch_window_ms`). Batching still applies to non-streaming REST.
-- **Tunable chunking**: `chat.min_chars` / `chat.max_chars` (config) control the TTFA/size
-  trade-off without code changes.
+- **Tunable chunking**: `chat.min_chars` / `chat.max_chars` / `chat.first_chunk_chars`
+  control the TTFA/size trade-off without code changes; the first chunk can be released
+  earlier than the rest.
 - **Preload + optional warm-up**: `startup.tts_family` preloads a family at boot;
   `startup.warmup: true` runs a tiny synthesis to absorb CUDA init. `residency: multi`
   keeps several families hot.
-- **Observability**: `/api/metrics` (TTFA, RTF, request/session counters, queue depth) and
-  `/ready`.
+- **Adaptive client endpointing**: the VAD shortens the silence window when the streaming
+  transcript already ends with sentence punctuation (faster turn-taking).
+- **Browser echo cancellation**: the mic is opened with `echoCancellation`,
+  `noiseSuppression`, `autoGainControl`, so hands-free barge-in works without headphones.
+- **vLLM-Omni streaming backend** (experimental): with `vllm.enabled`, CustomVoice
+  streaming is served by vLLM-Omni (native codec-window PCM) via `app/vllm_backend.py`,
+  falling back to the local per-sentence engine if the service is unavailable.
+- **Observability**: `/api/metrics` (TTFA, RTF, counters, queue depth, model
+  loads/evictions/hot-swap thrash) and `/ready`.
 - **Client jitter buffer**: `PCMPlayer` buffers the first ~200 ms before starting playback
   (forced flush after 250 ms for very short clips) to avoid underruns.
 
+### Diagnosing a slow engine (Qwen3-TTS vs Chatterbox)
+
+A large, constant per-request TTFA on Qwen (while Chatterbox feels instant) points at the
+model family, not the pipeline. Check `GET /api/metrics`:
+
+- `counters.model_loads` growing every turn ⇒ the family is being **reloaded**. The common
+  cause is oscillating between two families (e.g. a preset `custom_voice` voice and a cloned
+  `base` avatar) under `residency: single`. Fix: `residency: multi` with both in
+  `models.resident` (the shipped default), or pin a single voice.
+- `counters.model_hot_swap_thrash` > 0 confirms it (a model was evicted within 120 s of its
+  last use). The engine logs `Hot-swap thrash: evicting …`.
+- If loads stay flat but `ttfa_seconds.avg` is high, it is the engine itself: use the 0.6B
+  family, cap response length, and/or route CustomVoice through the `vllm` profile.
+
 ## Roadmap
 
-### Phase 2 — throughput and quality
-- Priority streaming lane; synthesize the first chunk as soon as possible and cap
-  `max_new_tokens` for conversation.
-- Use the **0.6B** family for chat; tune dtype/attention (`bfloat16`, `sdpa`), try
-  `torch.compile` / CUDA graphs.
-- **Server-side VAD/endpointing** (e.g. NeMo) to replace the fixed client silence window and
-  cut the ~900 ms endpoint delay.
-- **Speculative start**: begin the LLM request on streaming STT partials.
+### Phase 2 — remaining
+- Server-side VAD/endpointing (the current implementation is a client-side energy VAD).
+- Speculative start: begin the LLM request on streaming STT partials.
 - Optional **Opus** encoding for WAN clients.
-- Chatterbox: half precision / Turbo for lower per-utterance latency.
+- `torch.compile` / CUDA graphs for the Qwen families.
 
-### Phase 3 — true streaming
-- Introduce a streaming engine interface (`synthesize_stream`) so a backend can emit
-  **codec-window PCM** instead of whole sentences; wire the `vllm` profile
-  (`vllm.enabled`) to it, falling back to per-sentence.
-- Echo cancellation / echo reference so barge-in works without headphones.
+### Phase 3 — remaining
+- Validate the vLLM-Omni path against a real deployment and expose it per family.
+- Full-duplex AEC reference so barge-in is robust on speakers (current: browser AEC).
 
 ## Tips for integrators
 

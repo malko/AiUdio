@@ -48,7 +48,7 @@ served by a single `docker compose` stack, reachable on the LAN or on the Docker
   `/v1/audio/voices`), **WebSocket** (`/ws/tts`, vLLM-Omni-style protocol).
 - **STT**: file transcription (OpenAI-compatible `/v1/audio/transcriptions`), realtime
   streaming (WebSocket), diarization.
-- **Web UI**: Conversation / Synthesis / Avatars / Transcription / Settings tabs,
+- **Web UI**: Conversation / Synthesis / Voice Bank / Transcription / Settings tabs,
   same-origin (no CORS), browser microphone, gapless PCM playback.
 - **Conversation**: plug in an external LLM (llama.cpp, Ollama, vLLM, OpenAI...) and run
   the STT → LLM → TTS cascade in streaming mode, without serving the LLM. Push-to-talk or
@@ -177,7 +177,7 @@ everything else by Qwen3-TTS. You can therefore run Chatterbox **instead of** Qw
   ```
 
 - **Cloned voices / avatars** — set the global clone engine to `chatterbox`
-  (`models.clone_backend`, or the **Avatars** tab) so avatars are synthesized by Chatterbox.
+  (`models.clone_backend` in Settings, or the per-conversation engine selector) so cloned voices are synthesized by Chatterbox.
 
 Voice Design (description-based voices) and the Qwen preset speakers always use Qwen3-TTS.
 
@@ -222,23 +222,27 @@ models:
 
 Loading strategy in `config.yaml`:
 
-- `models.residency: single` (default) → a single model in VRAM, automatic hot-swap.
-- `models.residency: multi` + `models.resident: [custom_voice, base]` → keep several models
-  loaded (more VRAM, no reload).
+- `models.residency: multi` (default, `resident: [custom_voice, base]`) → keeps the chat
+  family and the clone family loaded, so switching between preset and cloned voices does not
+  reload (and re-warm up) the model.
+- `models.residency: single` → a single model in VRAM, automatic hot-swap (less VRAM, but
+  every family switch pays a full load).
 
 The **web UI (Synthesis tab)** exposes a model + version selector with plain-language
 descriptions and a **Load** button (models load lazily on first use anyway). The **Transcription
 tab** lists the downloadable STT models with descriptions, sizes and cache status.
 
-**Voices / avatars (Avatars tab)**: all avatars are **clones**. You can either upload a
-reference clip, or generate a ~10 s **fingerprint** from a Voice Design description and save it
-as a clone (`POST /api/avatars/fingerprint`). Each avatar can have a photo/name, be regenerated
-from its description, and is selectable in the **Conversation** tab. The **clone engine**
-(`models.clone_backend`: `qwen3` or `chatterbox`) chooses which backend synthesizes cloned
-voices. Voice Design itself always uses Qwen3-TTS. Avatars are stored as `<name>.wav` +
-`<name>.json` (+ `<name>.png`) under `voices/avatars/` (persistent). API: `GET/POST/PUT/DELETE
-/api/avatars`, `POST /api/avatars/fingerprint`, `POST /api/avatars/{id}/regenerate`,
-`GET /api/avatars/{id}/audio|photo`.
+**Voice Bank tab**: all voices in the bank are **clones**. You can either upload a reference
+clip, or generate a ~10 s **fingerprint** from a Voice Design description and save it as a clone
+(`POST /api/avatars/fingerprint`). Each voice can have a photo/name, be regenerated from its
+description, and is selectable in the **Conversation** tab. The **clone engine**
+(`models.clone_backend`: `qwen3` or `chatterbox`, editable in Settings or per conversation and
+overridable per API request with `clone_backend`) chooses which backend synthesizes cloned
+voices; Voice Design always uses Qwen3-TTS. Voices are stored as `<name>.wav` + `<name>.json` (+
+`<name>.png`) under `voices/avatars/` (persistent). API: `GET/POST/PUT/DELETE /api/avatars`,
+`POST /api/avatars/fingerprint`, `POST /api/avatars/{id}/regenerate`,
+`GET /api/avatars/{id}/audio|photo`. A voice-bank id can be used as `avatar` or as
+`voice`/`speaker` in `/api/tts` and `/v1/audio/speech`.
 
 **Conversation is the home page** and lets you pick the voice (presets or an avatar) and the
 STT model. In **Settings → Startup** you can mark an STT model and a voice to preload when the

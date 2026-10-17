@@ -97,8 +97,11 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
 
 - **Gateway (native)**: **per-sentence** streaming (PCM16). Reduced perceived latency but no
   token-level streaming (not exposed by `qwen-tts`).
-- **`vllm` profile** (official vLLM-Omni image): `stream=true` + `response_format=pcm` → PCM
-  chunks decoded on the fly; WebSocket `/v1/audio/speech/stream`. Experimental, NVIDIA.
+- **`vllm` profile** (official vLLM-Omni image): set `vllm.enabled: true` and the gateway
+  routes streaming CustomVoice requests to it (`POST {vllm.base_url}/v1/audio/speech` with
+  `stream=true`, `response_format=pcm`) for **native codec-window PCM**; the local
+  per-sentence engine is used as a fallback if the service is unreachable. Experimental,
+  NVIDIA. See `app/vllm_backend.py`.
 - **STT**: NeMo-Speech.cpp exposes a realtime WebSocket
   (`/v1/audio/transcriptions/realtime`, ~160 ms with Nemotron 3.5). Parakeet TDT v3 stays
   offline (no cache-aware streaming).

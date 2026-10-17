@@ -18,6 +18,11 @@ conversation loop over an external LLM. The bundled web UI is a **demo/admin** f
 | Key routes | TTS `/api/tts` (streaming PCM with `stream:true`), OpenAI `/v1/audio/speech`, TTS WS `/ws/tts`, chat WS `/ws/chat`, STT `/v1/audio/transcriptions` + WS `/ws/stt` |
 | Language/stack | Python 3.12, FastAPI, pydantic; static vanilla-JS UI in `ui/` |
 
+Terminology: the UI's **Voice Bank** holds reusable cloned voices; the API calls them
+`avatars` (`/api/avatars`, request field `avatar`). A voice-bank id can also be passed as
+`voice`/`speaker`. The clone engine defaults to `models.clone_backend` and can be overridden
+per request with `clone_backend`/`engine`.
+
 ## Run it (for manual testing)
 
 ```bash
