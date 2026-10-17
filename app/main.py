@@ -1355,11 +1355,11 @@ def _pop_chat_chunks(
     prosody.
 
     ``early_first`` (used for the *first* chunk of a turn only) allows one earlier
-    release so the voice starts while the LLM is still writing: at the first clause
-    (comma, semicolon, colon) past ``_CHAT_FIRST_CHARS``, or — when the opening has
-    no such clause — at the first word end past that length. Word boundaries are
-    never cut in the middle of a word, and only this first chunk uses the rule:
-    the rest of the reply stays sentence-aligned.
+    release so the voice can start while the LLM is still writing: at the first
+    clause (comma, semicolon, colon) past ``_CHAT_FIRST_CHARS``. Without such a
+    clause the first complete sentence is used instead — a word-end cut was tried
+    and the engine gives that fragment a closing intonation, which is heard as a
+    chopped phrase even when it happens only once.
 
     A sentence that never ends (no punctuation) is cut at the last clause/space
     boundary past ``max_chars`` — a last resort, so a long paragraph cannot stall
@@ -1374,18 +1374,16 @@ def _pop_chat_chunks(
             start = match.end()
     text = text[start:]
     if early_first and not chunks:
+        # First chunk only: a comma is a genuine prosodic break, so releasing it
+        # early is free. Cutting at a word end (no comma) was tried and sounds
+        # wrong: the engine gives the fragment a closing intonation, mid-sentence.
+        # Without a comma we therefore wait for the first complete sentence.
         window = text[:max_chars]
-        clause = next(
-            (m.start() for m in _CHAT_CLAUSE_RE.finditer(window) if m.start() >= _CHAT_FIRST_CHARS),
-            None,
+        cut = next(
+            (m.start() + 1 for m in _CHAT_CLAUSE_RE.finditer(window)
+             if m.start() >= _CHAT_FIRST_CHARS),
+            0,
         )
-        space = window.find(" ", _CHAT_FIRST_CHARS)
-        word_end = space if space > 0 else None
-        cut = 0
-        if clause is not None and (word_end is None or clause < word_end):
-            cut = clause + 1  # keep the comma as a prosodic break
-        elif word_end is not None:
-            cut = word_end
         if cut:
             chunks.append(text[:cut].strip())
             text = text[cut:].lstrip()

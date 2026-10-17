@@ -37,10 +37,10 @@ depth, and per-stage timings (`/api/metrics`).
   batch window (`generation.batch_window_ms`). Batching still applies to non-streaming REST.
 - **Sentence-aligned chunking**: `_pop_chat_chunks` releases **complete sentences** —
   fragments would be synthesized as standalone utterances with their own intonation, heard as
-  chopped, word-by-word speech. The **first chunk** of a turn is the exception: it is cut at
-  the earliest natural break past ~30 chars (a comma when one comes first, otherwise the end
-  of a word — never inside a word), because the engine synthesizes audio ~4-6× slower than the
-  LLM writes text, so a whole first sentence would only be spoken once the reply is printed.
+  chopped, word-by-word speech. The **first chunk** of a turn is the exception: it may be
+  cut at the first comma past ~30 chars, because the engine synthesizes audio ~4-6× slower
+  than the LLM writes text (a word-end cut in the absence of a comma was tried and sounds
+  chopped, so the first complete sentence is used instead).
   Then each following sentence is released as soon as it is complete while the engine is idle.
   Grouping (up to ~200 chars per synthesis call) only happens while the engine still has work
   queued: sending text promptly is what prevents an audible gap between chunks (the client

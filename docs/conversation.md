@@ -66,10 +66,9 @@ Then `LLM_BASE_URL=http://host.docker.internal:8080/v1`.
   sentence by sentence as tokens arrive; each following chunk is a **complete sentence** (a
   fragment would be rendered with its own intonation, heard as chopped speech). A short opening
   sentence (< ~40 chars) is merged with the next one so playback does not drain. The **very
-  first chunk** is cut earlier — at the earliest natural break past ~30 characters: a comma
-  when one comes first (a prosodic break), otherwise the end of a word, never inside a word —
-  so a slow engine (Qwen synthesizes ~30-45 ms per character of audio, versus ~6-9 ms per
-  character for the LLM) still starts speaking while the LLM is writing. Afterwards each
+  first chunk** may be cut at the first comma past ~30 characters (a genuine prosodic break)
+  so a slow engine can start speaking while the LLM is still writing; a word-end cut was
+  tried and sounds chopped, so without a comma the first complete sentence is used. Afterwards each
   complete sentence is released as soon as it arrives **while the engine is idle** — that is
   what keeps playback gap-free, since the client only plays what it has received — and
   sentences are only grouped (up to ~200 chars) while the engine still has work queued, to

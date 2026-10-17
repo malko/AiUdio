@@ -167,19 +167,16 @@ def test_pop_chat_chunks_first_clause_starts_the_audio_early():
     assert _pop_chat_chunks(text)[0] == []
 
 
-def test_pop_chat_chunks_first_word_starts_the_audio_when_no_clause():
-    # No comma in the opening: the first chunk is cut at the earliest word end
-    # (never inside a word) so a slow engine starts speaking while the LLM writes.
+def test_pop_chat_chunks_no_early_cut_without_a_clause():
+    # A word-end cut (no comma in the opening) sounds wrong: the first chunk waits
+    # for the first complete sentence instead.
     text = ("Un long passage sans aucune virgule mais avec beaucoup de mots qui continuent "
             "encore et encore pendant un bon moment")
-    chunks, rest = _pop_chat_chunks(text, early_first=True)
-    assert len(chunks) == 1
-    first = chunks[0]
-    assert 30 <= len(first) <= 40, first
-    assert first.split()[-1] in text.split()
-    assert text.startswith(first + " ")
-    # Only the first chunk may be cut that way.
-    assert _pop_chat_chunks(text)[0] == []
+    assert _pop_chat_chunks(text, early_first=True)[0] == []
+    with_sentence = text + ". Et la suite arrive."
+    chunks, rest = _pop_chat_chunks(with_sentence, early_first=True)
+    assert chunks and chunks[0].endswith(".")
+    assert rest.startswith("Et la suite")
 
 
 def test_pop_chat_chunks_keeps_short_sentence():
