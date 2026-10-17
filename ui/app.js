@@ -1368,6 +1368,7 @@ $("#stt-upload").addEventListener("click", async () => {
 
 // ----------------------------------------------------------------- chat tab
 let chatSocket = null, chatPlayer = null, currentAssistant = null, chatBusy = false;
+let chatSentAt = 0;  // performance.now() of the last send, for the audio-start log
 
 // Replay cache: keep the last N assistant messages' PCM in memory; older ones
 // are dropped and regenerated on demand via /api/tts.
@@ -1518,6 +1519,12 @@ function onChatMessage(ev) {
   if (msg.type === "llm.delta") {
     if (currentAssistant) currentAssistant.textContent += msg.text;
   } else if (msg.type === "audio.start") {
+    // Debug aid: the time between sending the message and the first audio packet,
+    // directly comparable with the server's "chat tts: first audio" log line.
+    if (chatSentAt) {
+      console.info(`[chat] first audio ${Math.round(performance.now() - chatSentAt)} ms after send`);
+      chatSentAt = 0;
+    }
     // Ignore audio for a cancelled turn (chatBusy is false after interrupt).
     if (chatBusy && !chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
   } else if (msg.type === "llm.done") {
@@ -1549,6 +1556,7 @@ async function chatSend() {
   currentAssistant = appendTurn("assistant", "");
   $("#chat-status").textContent = "";
   chatBusy = true;
+  chatSentAt = performance.now();
   try {
     const sock = await ensureChatSocket();
     sock.send(JSON.stringify(chatConfig()));

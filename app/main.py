@@ -1390,6 +1390,8 @@ async def _chat_turn(
     first_queued: Optional[float] = None
     first_audio: Optional[float] = None
     spoken = 0
+    audio_total = 0.0
+    worst_margin: Optional[float] = None
 
     async def send_json(obj: Dict[str, Any]) -> None:
         async with send_lock:
@@ -1397,7 +1399,7 @@ async def _chat_turn(
 
     async def tts_worker() -> None:
         """Synthesize queued sentences without blocking the LLM token stream."""
-        nonlocal index, first_audio, spoken
+        nonlocal index, first_audio, spoken, audio_total, worst_margin
         while True:
             sentence = await queue.get()
             if sentence is None:
@@ -1414,6 +1416,7 @@ async def _chat_turn(
                 # The chat chunker already released whole sentences: synthesize each
                 # one as it is (no second sentence-splitting pass).
                 t_synth = time.perf_counter()
+                chunk_audio = 0.0
                 async for _, pcm, sr in _stream_pcm(
                     settings, scheduler, req, sentence, split_chunks=False
                 ):
@@ -1428,22 +1431,31 @@ async def _chat_turn(
                             "type": "audio.done", "sentence_index": index, "total_bytes": len(pcm),
                         })
                     index += 1
+                    chunk_audio += len(pcm) / (2.0 * (sr or 1))  # mono PCM16
                 spoken += 1
                 now = time.perf_counter() - started
                 synth = time.perf_counter() - t_synth
+                audio_total += chunk_audio
+                # How much audio the client still has in reserve when this chunk
+                # arrives: <= 0 means it already drained its buffer (audible gap).
+                margin = audio_total - (now - (first_audio or now))
+                if first_audio is not None:
+                    worst_margin = margin if worst_margin is None else min(worst_margin, margin)
                 if first_audio is None:
                     first_audio = now
                     log.info(
-                        "chat tts: first audio %.2fs after the turn started "
-                        "(llm first token %s, first chunk queued %s, synth %.2fs, %d chars)",
-                        now,
-                        _fmt_s(first_token), _fmt_s(first_queued), synth, len(sentence),
+                        "chat tts: first audio %.2fs after the turn started (llm first "
+                        "token %s, first chunk queued %s, synth %.2fs, %d chars, %.2fs "
+                        "of audio, margin %+.2fs)",
+                        now, _fmt_s(first_token), _fmt_s(first_queued), synth,
+                        len(sentence), chunk_audio, margin,
                     )
                 else:
                     log.info(
-                        "chat tts: chunk %d ready %.2fs after the turn started "
-                        "(synth %.2fs, %d chars)",
-                        spoken - 1, now, synth, len(sentence),
+                        "chat tts: chunk %d ready %.2fs after the turn started (synth "
+                        "%.2fs, %d chars, +%.2fs, %.2fs buffered, margin %+.2fs)",
+                        spoken - 1, now, synth, len(sentence), chunk_audio,
+                        audio_total, margin,
                     )
             except Exception as exc:  # TTS failure must not break the text conversation
                 await send_json({"type": "error", "message": f"TTS: {exc}"})
@@ -1488,12 +1500,14 @@ async def _chat_turn(
     log.info(
         "chat turn: reply %d chars, llm first token %s, last token %s, stream closed %.2fs "
         "(%+.2fs after the last token) | first chunk queued %s, first audio %s "
-        "(%+.2fs vs the last token) | %d chunks, total %.2fs",
+        "(%+.2fs vs the last token) | %d chunks, %.2fs of audio, worst margin %+.2fs, "
+        "total %.2fs",
         len(reply), _fmt_s(first_token), _fmt_s(last_token), time.perf_counter() - started,
         (time.perf_counter() - started) - (last_token or 0.0),
         _fmt_s(first_queued), _fmt_s(first_audio),
         (first_audio or 0.0) - (last_token or 0.0),
-        spoken, time.perf_counter() - started,
+        spoken, audio_total, worst_margin or 0.0,
+        time.perf_counter() - started,
     )
     return reply
 

@@ -97,9 +97,13 @@ depth, and per-stage timings (`/api/metrics`).
   (`server.log_level`, now actually applied): one line per synthesis call
   (`TTS family=… chars=… gen=… total=… rtf=…`), one per model load/eviction, and — per chat
   turn — `chat tts: first audio Xs after the turn started (llm first token …s, first chunk
-  queued …s, synth …s, N chars)` followed by one line per following chunk and a
-  `chat turn: …` summary. That splits the user-visible wait into LLM time, chunking time and
-  synthesis time.
+  queued …s, synth …s, N chars, Ys of audio, margin +Zs)` followed by one line per following
+  chunk (`… +Ys, Zs buffered, margin +Ms`) and a `chat turn:` summary. The summary separates
+  the LLM's **last content token** from the moment its HTTP stream closes (with llama.cpp the
+  two differ by ~2 s, which is why `llm done` alone was misleading) and reports the worst
+  `margin` — the audio still buffered on the client when a chunk arrives, so a negative margin
+  is an audible gap. The web UI logs the same client-side figure in the browser console
+  (`[chat] first audio … ms after send`).
 - **Client jitter buffer**: `PCMPlayer` buffers the first ~200 ms before starting playback
   (forced flush after 250 ms for very short clips) to avoid underruns.
 
