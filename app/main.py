@@ -330,10 +330,27 @@ def create_app(
         store = AvatarStore(_avatar_dir(app.state.settings))
         return {"avatars": [asdict(a) for a in store.list()]}
 
+    @app.post("/api/avatars/fingerprint")
+    async def create_fingerprint(
+        prompt: str = Form(...),
+        language: str = Form("Auto"),
+    ) -> Response:
+        """Render a ~10s reference clip from a VoiceDesign description.
+
+        All avatars are clones; this lets the user preview a designed voice and
+        then save it as a clone (see ``POST /api/avatars`` with ``prompt``).
+        """
+        if not prompt.strip():
+            raise HTTPException(400, "A description is required")
+        try:
+            arr, sr = await asyncio.to_thread(engine.design_reference, prompt, language)
+        except Exception as exc:  # pragma: no cover - requires GPU
+            raise HTTPException(503, f"Fingerprint generation failed: {exc}") from exc
+        return Response(content=wav_bytes(arr, sr), media_type="audio/wav")
+
     @app.post("/api/avatars")
     async def create_avatar(
         name: str = Form(...),
-        kind: str = Form("design"),
         prompt: str = Form(""),
         language: str = Form("Auto"),
         ref_text: str = Form(""),
@@ -344,29 +361,26 @@ def create_app(
     ) -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
         aid = store.new_id(name)
-        kind = "clone" if kind == "clone" else "design"
-        # A cloned voice without a transcript must use the speaker embedding only.
-        xvec = bool(x_vector_only) or not ref_text.strip()
-        avatar = Avatar(id=aid, name=name, kind=kind,
+        avatar = Avatar(id=aid, name=name, kind="clone",
                         language=language or "Auto", prompt=prompt, ref_text=ref_text,
-                        personality=personality, x_vector_only=xvec if kind == "clone" else False)
+                        personality=personality)
         wav = store.wav_path(aid)
         try:
-            if avatar.kind == "clone":
-                if ref_audio is None:
-                    raise HTTPException(400, "A reference audio is required to clone a voice")
+            if ref_audio is not None:
                 data = await ref_audio.read()
                 try:
                     audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
                 except Exception as exc:
                     raise HTTPException(400, f"Unreadable reference audio: {exc}") from exc
                 sf.write(str(wav), audio, int(sr))
-            else:
-                if not prompt.strip():
-                    raise HTTPException(400, "A description is required to design a voice")
+            elif prompt.strip():
+                # No reference clip: render a fingerprint from the description.
                 arr, sr = await asyncio.to_thread(engine.design_reference, prompt, language)
                 sf.write(str(wav), arr, int(sr))
                 avatar.ref_text = design_ref_text(language)
+            else:
+                raise HTTPException(400, "A reference audio or a description is required")
+            avatar.x_vector_only = bool(x_vector_only) or not avatar.ref_text.strip()
             if image is not None:
                 store.photo_path(aid).write_bytes(await image.read())
         except HTTPException:
@@ -407,7 +421,7 @@ def create_app(
         elif ref_text is not None:
             # Supplying a transcript implies ICL mode; clearing it falls back to x-vector.
             avatar.x_vector_only = not bool(ref_text.strip())
-        if ref_audio is not None and avatar.kind == "clone":
+        if ref_audio is not None:
             data = await ref_audio.read()
             try:
                 audio, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
@@ -416,7 +430,7 @@ def create_app(
             sf.write(str(store.wav_path(avatar_id)), audio, int(sr))
         if image is not None:
             store.photo_path(avatar_id).write_bytes(await image.read())
-        if avatar.kind == "clone" and not avatar.ref_text.strip():
+        if not avatar.ref_text.strip():
             avatar.x_vector_only = True  # embedding-only; nothing to condition ICL on
         store.save(avatar)
         await asyncio.to_thread(engine.clear_clone_prompts)
@@ -428,11 +442,12 @@ def create_app(
         avatar = store.get(avatar_id)
         if avatar is None:
             raise HTTPException(404, f"Unknown voice: {avatar_id}")
-        if avatar.kind != "design":
-            raise HTTPException(400, "Only designed voices can be regenerated")
+        if not avatar.prompt.strip():
+            raise HTTPException(400, "This voice has no description to regenerate from")
         arr, sr = await asyncio.to_thread(engine.design_reference, avatar.prompt, avatar.language)
         sf.write(str(store.wav_path(avatar_id)), arr, int(sr))
         avatar.ref_text = design_ref_text(avatar.language)
+        avatar.x_vector_only = False
         store.save(avatar)
         await asyncio.to_thread(engine.clear_clone_prompts)
         return asdict(store.get(avatar_id))

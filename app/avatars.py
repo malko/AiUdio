@@ -1,8 +1,9 @@
-"""Reusable voices ("avatars"): cloned from audio or generated from a description.
+"""Reusable voices ("avatars"): all avatars are voice clones.
 
 Each avatar is a reference WAV (+ optional transcript) that can be used as a voice in
-the Synthesis and Conversation tabs. A "design" avatar also keeps the text prompt used
-to generate its reference, so it can be regenerated or edited.
+the Synthesis and Conversation tabs. A clone can be built from an uploaded clip or from
+a ~10s fingerprint rendered by Voice Design; ``prompt`` keeps the description used to
+render that fingerprint so it can be regenerated.
 """
 
 from __future__ import annotations

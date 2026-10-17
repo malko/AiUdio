@@ -58,6 +58,9 @@ class DummyEngine:
     def languages(self, family="custom_voice"):
         return ["French", "English"]
 
+    def design_reference(self, instruct, language):
+        return np.zeros(self.sample_rate // 10, dtype=np.float32), self.sample_rate
+
     def synthesize_batch(self, family, items):
         samples = np.zeros(self.sample_rate // 10, dtype=np.float32)
         return [(samples, self.sample_rate) for _ in items]

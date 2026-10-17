@@ -57,6 +57,22 @@ Client events: `{"type":"session.config", ...}` then `{"type":"input.text","text
 then `{"type":"input.done"}`.
 Server events: `audio.start`, binary PCM16 frames, `audio.done`, `session.done`, `error`.
 
+## Avatars (voices)
+
+All avatars are **clones**. The engine that synthesizes them is chosen globally with
+`models.clone_backend` (`qwen3` or `chatterbox`); an explicit clone-capable `family`
+(`base`, `chatterbox`, `chatterbox_turbo`, `chatterbox_nano`) on the request takes precedence.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/avatars` | List avatars |
+| POST | `/api/avatars` | Multipart: `name`, `prompt` (Voice Design description), `language`, `ref_text`, `personality`, `x_vector_only`, `ref_audio` (file), `image` (file). With `ref_audio` → clone from it; otherwise a fingerprint is rendered from `prompt` and stored. |
+| PUT | `/api/avatars/{id}` | Edit name/description/language/personality/transcript/reference audio/photo |
+| POST | `/api/avatars/fingerprint` | Multipart `prompt`, `language` → `audio/wav` (~10 s Voice Design reference, for preview) |
+| POST | `/api/avatars/{id}/regenerate` | Re-render the fingerprint from the stored description |
+| DELETE | `/api/avatars/{id}` | Delete |
+| GET | `/api/avatars/{id}/audio` \| `/photo` | Reference WAV / photo |
+
 ## STT (proxy to NeMo-Speech.cpp)
 
 ### `POST /v1/audio/transcriptions`
