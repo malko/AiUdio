@@ -11,6 +11,7 @@ import io
 import json
 import logging
 import re
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -30,6 +31,7 @@ from .chunking import chunk_text
 from .config import ConfigStore, Settings, get_store
 from .engine import TTSEngine, design_ref_text
 from .llm import LLMClient, build_messages, trim_history
+from .metrics import metrics
 from .scheduler import BatchScheduler
 from .schemas import TTSRequest
 from .security import (
@@ -113,6 +115,17 @@ async def _apply_startup(app: FastAPI) -> None:
         except Exception:
             log.exception("Startup voice load failed")
 
+    family = settings.startup.tts_family
+    if family:
+        try:
+            await asyncio.to_thread(engine.ensure, family)
+            log.info("Startup: preloaded TTS family '%s'", family)
+            if settings.startup.warmup and hasattr(engine, "warmup"):
+                await asyncio.to_thread(engine.warmup, family)
+                log.info("Startup: warmed up '%s'", family)
+        except Exception:
+            log.exception("Startup TTS preload failed")
+
 
 def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
     return {
@@ -136,6 +149,7 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
         },
         "audio": settings.audio.model_dump(),
         "chunking": settings.chunking.model_dump(),        "generation": settings.generation.model_dump(),
+        "chat": settings.chat.model_dump(),
         "stt": {
             "enabled": settings.stt.enabled,
             "realtime_path": settings.stt.realtime_path,
@@ -205,10 +219,25 @@ async def _stream_pcm(
     use_chunking = req.chunking if req.chunking is not None else settings.chunking.enabled
     max_chars = req.max_chars or settings.chunking.max_chars
     chunks = chunk_text(text, max_chars) if use_chunking and text.strip() else ([text] if text.strip() else [])
+    started = time.perf_counter()
+    first = True
+    gen_seconds = 0.0
+    audio_seconds = 0.0
     for sentence in chunks:
         item = _item_from_request(settings, req, sentence)
-        wav, sr = await scheduler.submit(item["family"], item)
+        t_gen = time.perf_counter()
+        wav, sr = await scheduler.submit_streaming(item["family"], item)
+        gen_seconds += time.perf_counter() - t_gen
+        audio_seconds += len(wav) / float(sr or 1)
+        if first:
+            metrics.observe_ttfa(time.perf_counter() - started)
+            metrics.incr("tts_stream_sessions")
+            first = False
         yield sentence, to_pcm16(wav), sr
+    if not first:
+        metrics.incr("tts_stream_chunks", len(chunks))
+        if audio_seconds:
+            metrics.observe_rtf(gen_seconds / audio_seconds)
 
 
 def create_app(
@@ -261,6 +290,7 @@ def create_app(
 
     @app.middleware("http")
     async def _auth_middleware(request: Request, call_next):
+        metrics.incr("http_requests")
         if not request_authorized(request, app.state.settings):
             return JSONResponse(
                 {"detail": "Authentication required"},
@@ -298,6 +328,29 @@ def create_app(
             {"ready": ready_ok, "version": __version__},
             status_code=200 if ready_ok else 503,
         )
+
+    @app.get("/api/metrics", tags=["Service"])
+    async def api_metrics(request: Request) -> Dict[str, Any]:
+        """Real-time metrics (admin-only when auth is enabled)."""
+        if not is_admin(
+            app.state.settings,
+            request.headers.get("authorization"),
+            request.headers.get("x-api-key"),
+            request.query_params.get("api_key"),
+        ):
+            raise HTTPException(403, "Admin authentication required")
+        snap = metrics.snapshot()
+        snap["scheduler"] = {
+            "depth": scheduler.depth(),
+            "batch_size": scheduler.batch_size,
+            "window_ms": round(scheduler.window * 1000, 1),
+        }
+        snap["models"] = {
+            "loaded": engine.loaded_families(),
+            "active_family": engine.active_family(),
+            "residency": app.state.settings.models.residency,
+        }
+        return snap
 
     @app.get("/", tags=["Service"])
     async def index() -> FileResponse:
@@ -603,7 +656,7 @@ def create_app(
 
     @app.put("/api/settings", tags=["Settings"])
     async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
-        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models"}
+        allowed = {"llm", "generation", "chunking", "chat", "audio", "stt", "ui", "startup", "models"}
         sections = {k: v for k, v in payload.items() if k in allowed}
         if not sections:
             raise HTTPException(400, "No editable section provided")
@@ -1228,7 +1281,11 @@ async def _chat_turn(
             await send_json({"type": "llm.delta", "text": token})
             if speak:
                 buffer += token
-                chunks, buffer = _pop_chat_chunks(buffer)
+                chunks, buffer = _pop_chat_chunks(
+                    buffer,
+                    max_chars=settings.chat.max_chars,
+                    min_chars=settings.chat.min_chars,
+                )
                 for sentence in chunks:
                     await queue.put(sentence)
         if speak and worker is not None:

@@ -26,6 +26,8 @@ served by a single `docker compose` stack, reachable on the LAN or on the Docker
 - [Hardware](#hardware)
 - [Models](#models)
 - [API](#api)
+- [Integration](docs/integration.md)
+- [Real-time](docs/realtime.md)
 - [STT](#stt)
 - [Conversation with an external LLM](#conversation-with-an-external-llm)
 - [Internationalization](#internationalization)
@@ -74,9 +76,15 @@ served by a single `docker compose` stack, reachable on the LAN or on the Docker
 ```
 
 Details: [`docs/architecture.md`](docs/architecture.md) · API: [`docs/api.md`](docs/api.md) ·
+integration: [`docs/integration.md`](docs/integration.md) ·
 hardware backends: [`docs/backends.md`](docs/backends.md) ·
 conversation: [`docs/conversation.md`](docs/conversation.md) ·
+real-time: [`docs/realtime.md`](docs/realtime.md) ·
 security: [`docs/security.md`](docs/security.md).
+
+> Integrating AiUdio into another application? Start with
+> [`docs/integration.md`](docs/integration.md) (the API is the product; the UI is a
+> demo/admin front). AI coding agents: see [`AGENTS.md`](AGENTS.md).
 
 ## Requirements
 

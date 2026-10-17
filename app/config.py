@@ -205,6 +205,15 @@ class StartupConfig(BaseModel):
 
     stt_model: str = ""   # STT model filename or alias to activate at startup
     voice: str = ""       # TTS family (custom_voice/voice_design/base) or "avatar:<id>"
+    tts_family: str = ""  # TTS family to preload (keeps it warm for low latency)
+    warmup: bool = False  # run a tiny synthesis after preload (absorbs CUDA init)
+
+
+class ChatConfig(BaseModel):
+    """Conversation streaming knobs (time-to-first-audio vs. chunk size)."""
+
+    min_chars: int = 40    # release the first TTS chunk past this length
+    max_chars: int = 160   # split a growing chunk above this length
 
 
 class AuthConfig(BaseModel):
@@ -247,6 +256,7 @@ class Settings(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
+    chat: ChatConfig = Field(default_factory=ChatConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)

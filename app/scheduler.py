@@ -52,6 +52,19 @@ class BatchScheduler:
         await self._queue.put(_Queued(family=family, item=item, future=future))
         return await future
 
+    async def submit_streaming(self, family: str, item: Dict[str, Any]) -> Tuple[np.ndarray, int]:
+        """Run immediately, bypassing the micro-batch window.
+
+        Live sessions care about time-to-first-audio, not throughput: waiting up
+        to ``batch_window_ms`` (and sharing a batch with unrelated callers) only
+        adds jitter. The engine lock still serializes inference.
+        """
+        results = await asyncio.to_thread(self.engine.synthesize_batch, family, [item])
+        return results[0]
+
+    def depth(self) -> int:
+        return self._queue.qsize()
+
     async def _worker(self) -> None:
         while True:
             first = await self._queue.get()

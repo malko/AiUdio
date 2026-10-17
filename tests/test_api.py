@@ -297,3 +297,24 @@ def test_openapi_is_tagged(client):
     names = {t["name"] for t in spec.get("tags", [])}
     assert {"Service", "Access", "TTS", "STT", "Chat", "Models", "Avatars"} <= names
     assert spec["paths"]["/api/tts"]["post"]["tags"] == ["TTS"]
+
+
+def test_streaming_tts_pcm(client):
+    r = client.post("/api/tts", json={"text": "One. Two.", "stream": True, "format": "pcm"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/pcm")
+    assert r.content
+
+
+def test_metrics(client):
+    client.get("/health")
+    client.post("/api/tts", json={"text": "One. Two.", "stream": True, "format": "pcm"})
+    body = client.get("/api/metrics").json()
+    assert "ttfa_seconds" in body and "rtf" in body
+    assert body["scheduler"]["batch_size"] >= 1
+    assert body["counters"].get("tts_stream_sessions", 0) >= 1
+
+
+def test_metrics_requires_admin(auth_client):
+    assert auth_client.get("/api/metrics").status_code == 401
+    assert auth_client.get("/api/metrics", auth=ADMIN).status_code == 200

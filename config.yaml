@@ -88,7 +88,7 @@ models:
   chatterbox:
     python: ''
     t3_model: v3
-    watermark: false
+    watermark: true
     default_language: English
   device: auto
   dtype: bfloat16
@@ -151,7 +151,6 @@ auth:
   username: admin
   password: ''
   api_keys: []
-  session_ttl_minutes: 480
   exempt_paths:
   - /health
   - /ready

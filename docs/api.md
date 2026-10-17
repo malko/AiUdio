@@ -8,10 +8,13 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Status (always public) |
+| GET | `/ready` | Readiness (always public) |
+| GET | `/api/capabilities` | Machine-readable capabilities (families, routes, formats) |
+| GET | `/api/metrics` | Latency/throughput metrics (admin when auth is enabled) |
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models` |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `chat`, `audio`, `stt`, `ui`, `startup`, `models` |
 
 ## Access (admin)
 

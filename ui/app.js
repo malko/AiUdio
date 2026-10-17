@@ -33,11 +33,16 @@ const fmtMB = (bytes) => ((bytes || 0) / (1024 * 1024)).toFixed(0);
 
 // ----------------------------------------------------------------- player PCM
 class PCMPlayer {
-  constructor(sampleRate) {
+  constructor(sampleRate, prebufferMs = 200) {
     this.sr = sampleRate || 24000;
+    this.prebuffer = Math.max(0, prebufferMs || 0) / 1000;
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     this.time = 0;
     this.leftover = new Uint8Array(0);
+    this.started = false;
+    this.pending = [];
+    this.pendingSeconds = 0;
+    this.flushTimer = null;
   }
   pushBytes(bytes) {
     let raw;
@@ -50,10 +55,27 @@ class PCMPlayer {
     if (usable > 0) {
       const ab = new ArrayBuffer(usable);
       new Uint8Array(ab).set(raw.subarray(0, usable));
-      this.pushInt16(new Int16Array(ab));
+      this.enqueue(new Int16Array(ab));
     }
   }
-  pushInt16(int16) {
+  // Buffer the first chunks until `prebufferMs` of audio is available (or a
+  // short timeout) so playback starts without an immediate underrun/gap.
+  enqueue(int16) {
+    if (this.started) { this.play(int16); return; }
+    this.pending.push(int16);
+    this.pendingSeconds += int16.length / this.sr;
+    if (this.pendingSeconds >= this.prebuffer) { this.flush(); return; }
+    if (!this.flushTimer) this.flushTimer = setTimeout(() => this.flush(), 250);
+  }
+  flush() {
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    if (this.started) return;
+    this.started = true;
+    const items = this.pending;
+    this.pending = []; this.pendingSeconds = 0;
+    items.forEach((it) => this.play(it));
+  }
+  play(int16) {
     const f = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) f[i] = int16[i] / 32768;
     const buf = this.ctx.createBuffer(1, f.length, this.sr);
@@ -64,7 +86,12 @@ class PCMPlayer {
     src.start(clock);
     this.time = clock + buf.duration;
   }
-  reset() { this.leftover = new Uint8Array(0); this.time = this.ctx.currentTime; }
+  reset() {
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    this.leftover = new Uint8Array(0);
+    this.started = false; this.pending = []; this.pendingSeconds = 0;
+    this.time = this.ctx.currentTime;
+  }
   stop() { try { this.ctx.close(); } catch (e) { /* already closed */ } }
 }
 
