@@ -157,14 +157,28 @@ def test_pop_chat_chunks_coalesces_after_the_first_chunk():
 
 
 def test_pop_chat_chunks_first_clause_starts_the_audio_early():
-    # A long opening sentence may be cut at a clause for the first chunk (natural
-    # prosodic break) so the audio does not wait for the whole sentence.
-    head = "This opening sentence really keeps going on with a first clause that is fairly long indeed"
-    text = f"{head}, and then it continues for a while without ever ending"
-    chunks, rest = _pop_chat_chunks(text, allow_first_clause=True)
-    assert chunks == [f"{head},"]
-    assert rest == "and then it continues for a while without ever ending"
-    # Without the flag, no clause fragment is released on its own.
+    # A comma right at the threshold is the natural break: the chunk keeps it.
+    text = "Voici une explication complete, puis la suite arrive et continue longtemps"
+    chunks, rest = _pop_chat_chunks(text, early_first=True)
+    assert chunks[0].endswith(","), chunks[0]
+    assert len(chunks[0]) >= 30
+    assert text.startswith(chunks[0])
+    # Without the flag, nothing is released on its own.
+    assert _pop_chat_chunks(text)[0] == []
+
+
+def test_pop_chat_chunks_first_word_starts_the_audio_when_no_clause():
+    # No comma in the opening: the first chunk is cut at the earliest word end
+    # (never inside a word) so a slow engine starts speaking while the LLM writes.
+    text = ("Un long passage sans aucune virgule mais avec beaucoup de mots qui continuent "
+            "encore et encore pendant un bon moment")
+    chunks, rest = _pop_chat_chunks(text, early_first=True)
+    assert len(chunks) == 1
+    first = chunks[0]
+    assert 30 <= len(first) <= 40, first
+    assert first.split()[-1] in text.split()
+    assert text.startswith(first + " ")
+    # Only the first chunk may be cut that way.
     assert _pop_chat_chunks(text)[0] == []
 
 

@@ -1310,8 +1310,8 @@ _CHAT_CLAUSE_RE = re.compile(r"[,;:]\s+")
 # Chat TTS releases whole sentences only. A fragment cut mid-sentence (at a
 # clause, let alone a single word) is synthesized as a standalone utterance with
 # its own intonation, which is heard as chopped, word-by-word speech.
-_CHAT_MIN_CHARS = 40          # first chunk: one complete sentence past this length
-_CHAT_FIRST_CLAUSE_CHARS = 40  # ... or a clause past this one, so audio starts sooner
+_CHAT_MIN_CHARS = 40          # a complete sentence is released past this length
+_CHAT_FIRST_CHARS = 30        # the first chunk may be cut earlier (comma/word end)
 _CHAT_COALESCE_CHARS = 200    # later chunks: group sentences up to this length
 _CHAT_MAX_CHARS = 240         # last resort for a sentence that never ends
 
@@ -1330,7 +1330,7 @@ def _pop_chat_chunks(
     text: str,
     max_chars: int = _CHAT_MAX_CHARS,
     min_chars: int = _CHAT_MIN_CHARS,
-    allow_first_clause: bool = False,
+    early_first: bool = False,
 ) -> Tuple[List[str], str]:
     """Split streaming LLM text into sentence-aligned TTS chunks.
 
@@ -1341,10 +1341,12 @@ def _pop_chat_chunks(
     the first sentence starts the audio early, the following ones keep a natural
     prosody.
 
-    ``allow_first_clause`` lets the *first* chunk of a turn start even earlier: if
-    the opening sentence is still running, it is cut at the first clause (comma,
-    semicolon, colon) past ``_CHAT_FIRST_CLAUSE_CHARS`` — a natural prosodic break,
-    unlike the old word-boundary cut that made the voice sound chopped.
+    ``early_first`` (used for the *first* chunk of a turn only) allows one earlier
+    release so the voice starts while the LLM is still writing: at the first clause
+    (comma, semicolon, colon) past ``_CHAT_FIRST_CHARS``, or — when the opening has
+    no such clause — at the first word end past that length. Word boundaries are
+    never cut in the middle of a word, and only this first chunk uses the rule:
+    the rest of the reply stays sentence-aligned.
 
     A sentence that never ends (no punctuation) is cut at the last clause/space
     boundary past ``max_chars`` — a last resort, so a long paragraph cannot stall
@@ -1358,12 +1360,22 @@ def _pop_chat_chunks(
             chunks.append(text[start:end].strip())
             start = match.end()
     text = text[start:]
-    if allow_first_clause and not chunks:
-        for match in _CHAT_CLAUSE_RE.finditer(text[:max_chars]):
-            if match.start() >= _CHAT_FIRST_CLAUSE_CHARS:
-                chunks.append(text[: match.start() + 1].strip())
-                text = text[match.end():]
-                break
+    if early_first and not chunks:
+        window = text[:max_chars]
+        clause = next(
+            (m.start() for m in _CHAT_CLAUSE_RE.finditer(window) if m.start() >= _CHAT_FIRST_CHARS),
+            None,
+        )
+        space = window.find(" ", _CHAT_FIRST_CHARS)
+        word_end = space if space > 0 else None
+        cut = 0
+        if clause is not None and (word_end is None or clause < word_end):
+            cut = clause + 1  # keep the comma as a prosodic break
+        elif word_end is not None:
+            cut = word_end
+        if cut:
+            chunks.append(text[:cut].strip())
+            text = text[cut:].lstrip()
     while len(text) > max_chars:
         cut = _last_boundary(text, max_chars)
         if cut <= 0:
@@ -1480,7 +1492,7 @@ async def _chat_turn(
                 busy = queue.qsize() > 0
                 minimum = _CHAT_COALESCE_CHARS if (queued and busy) else _CHAT_MIN_CHARS
                 chunks, buffer = _pop_chat_chunks(
-                    buffer, min_chars=minimum, allow_first_clause=not queued
+                    buffer, min_chars=minimum, early_first=not queued
                 )
                 for sentence in chunks:
                     if first_queued is None:

@@ -63,15 +63,17 @@ Then `LLM_BASE_URL=http://host.docker.internal:8080/v1`.
 - **Replay**: every assistant bubble has a 🔊 button. The last 8 replies' PCM is kept in the
   browser; older ones are re-synthesized on demand via `POST /api/tts` with the current voice.
 - **Time to first audio**: TTS does **not** wait for the full LLM reply. The server synthesizes
-  sentence by sentence as tokens arrive; only **complete sentences** are released (never a
-  word, which the engine would render as a chopped utterance with its own intonation). A short
-  opening sentence (< ~40 chars) is merged with the next one so playback does not drain; a
-  long opening sentence is started at its first clause past ~40 chars (a comma, i.e. a natural
-  prosodic break) so the audio does not wait for the whole sentence. Afterwards each complete
-  sentence is released as soon as it arrives **while the engine is idle** — that is what keeps
-  playback gap-free, since the client only plays what it has received — and sentences are only
-  grouped (up to ~200 chars) while the engine still has work queued, to limit the number of
-  synthesis calls (`_pop_chat_chunks`).
+  sentence by sentence as tokens arrive; each following chunk is a **complete sentence** (a
+  fragment would be rendered with its own intonation, heard as chopped speech). A short opening
+  sentence (< ~40 chars) is merged with the next one so playback does not drain. The **very
+  first chunk** is cut earlier — at the earliest natural break past ~30 characters: a comma
+  when one comes first (a prosodic break), otherwise the end of a word, never inside a word —
+  so a slow engine (Qwen synthesizes ~30-45 ms per character of audio, versus ~6-9 ms per
+  character for the LLM) still starts speaking while the LLM is writing. Afterwards each
+  complete sentence is released as soon as it arrives **while the engine is idle** — that is
+  what keeps playback gap-free, since the client only plays what it has received — and
+  sentences are only grouped (up to ~200 chars) while the engine still has work queued, to
+  limit the number of synthesis calls (`_pop_chat_chunks`).
 
 ## Endpoints
 
