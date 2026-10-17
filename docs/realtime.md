@@ -150,6 +150,12 @@ then `GET /api/metrics`:
 - `counters.model_hot_swap_thrash` > 0 confirms it (a model was evicted within 120 s of its
   last use). The engine logs `Hot-swap thrash: evicting …` and says whether the victim was
   pinned by `models.resident`.
+- `counters.tts_cuda_oom` counts `CUDA out of memory` raised by a synthesis call. On a shared
+  card this is usually *another* process holding the memory (typically a vLLM-Omni service
+  whose reservation grew), not our own footprint: the engine logs the family/chars and the
+  action to take. Note that vLLM sizes its KV pool from the **free** memory at startup, so
+  start it before the gateway loads its models, and cap it with
+  `--gpu-memory-utilization`/`--max-model-len` (see [backends](backends.md)).
 - If loads stay flat, `chat tts: first audio … synth Xs` gives the synthesis cost of the
   first chunk: with the cost model above, a ~30-char first chunk costs ~0.6 s + 0.42 × 1.7 s
   ≈ 1.3 s, while a 70-char one costs ~2.2 s. A first audio that arrives only once the LLM

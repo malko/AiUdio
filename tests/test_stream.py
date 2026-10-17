@@ -80,3 +80,16 @@ def test_vllm_failure_falls_back_to_the_local_engine(monkeypatch):
     assert used == ["Bonjour tout le monde."]  # local engine produced the audio
     assert out
     assert unloaded == []  # nothing was dropped: vLLM never delivered
+
+
+def test_note_cuda_oom_counts_and_logs(caplog):
+    from app.metrics import metrics
+    from app.scheduler import note_cuda_oom
+
+    before = metrics.snapshot()["counters"].get("tts_cuda_oom", 0)
+    note_cuda_oom(RuntimeError("CUDA out of memory. Tried to allocate 20.00 MiB."),
+                  "base", [{"text": "Bonjour tout le monde"}])
+    assert metrics.snapshot()["counters"]["tts_cuda_oom"] == before + 1
+    # A different error is left alone.
+    note_cuda_oom(RuntimeError("boom"), "base", [{"text": "x"}])
+    assert metrics.snapshot()["counters"]["tts_cuda_oom"] == before + 1

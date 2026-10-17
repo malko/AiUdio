@@ -15,7 +15,27 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from .metrics import metrics
+
 log = logging.getLogger(__name__)
+
+
+def note_cuda_oom(exc: BaseException, family: str, items: List[Dict[str, Any]]) -> None:
+    """Count and explain a CUDA OOM raised by a synthesis call.
+
+    On a shared GPU this is usually *not* our process growing: another workload
+    (a vLLM service, a model left loaded elsewhere) holds the memory. A plain
+    traceback is not enough to tell that apart, hence the explicit log.
+    """
+    if "out of memory" not in str(exc).lower():
+        return
+    metrics.incr("tts_cuda_oom")
+    log.error(
+        "CUDA out of memory while synthesizing '%s' (n=%d, %d chars): another process may "
+        "be holding the GPU. Free VRAM, unload the local models (POST /api/models/unload) "
+        "or lower the vLLM-Omni reservation.",
+        family, len(items), sum(len(i.get("text") or "") for i in items),
+    )
 
 
 @dataclass
@@ -59,7 +79,11 @@ class BatchScheduler:
         to ``batch_window_ms`` (and sharing a batch with unrelated callers) only
         adds jitter. The engine lock still serializes inference.
         """
-        results = await asyncio.to_thread(self.engine.synthesize_batch, family, [item])
+        try:
+            results = await asyncio.to_thread(self.engine.synthesize_batch, family, [item])
+        except RuntimeError as exc:
+            note_cuda_oom(exc, family, [item])
+            raise
         return results[0]
 
     def depth(self) -> int:
@@ -92,6 +116,7 @@ class BatchScheduler:
                     if not entry.future.done():
                         entry.future.set_result(result)
             except Exception as exc:  # propagate the error to every caller
+                note_cuda_oom(exc, family, items)
                 log.exception("Generation failed (family=%s, n=%d)", family, len(entries))
                 for entry in entries:
                     if not entry.future.done():
