@@ -97,12 +97,19 @@ services:
     networks: [speech]
 
   # Optional: vLLM-Omni (official image) for native PCM streaming.
+  # CLI: `docker compose --profile vllm up -d` (or `up -d tts-vllm`).
+  # Managers that cannot pass a profile (Web UI, Dockge, Portainer...): delete the
+  # `profiles` line below so the service belongs to the default stack, then
+  # start/stop the container from the UI. It reserves its own VRAM, so keep it
+  # stopped when unused.
   tts-vllm:
     image: ${VLLM_OMNI_IMAGE:-vllm/vllm-omni:latest}
     profiles: ["vllm"]
     command: >
       vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
       --omni --host 0.0.0.0 --port 8091
+    # vLLM needs a large shared-memory segment (Docker's default is 64 MB).
+    shm_size: "8gb"
     ports:
       - "8005:8091"
     volumes:

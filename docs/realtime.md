@@ -62,6 +62,31 @@ depth, and per-stage timings (`/api/metrics`).
        -d '{"vllm":{"enabled":true,"base_url":"http://tts-vllm:8091"}}'
   ```
 
+  A manager that cannot pass a profile (Web UI, Dockge, Portainer…) should **delete the
+  `profiles: ["vllm"]` line** of the `tts-vllm` service instead: it then belongs to the
+  default stack and can be started/stopped from the UI. Keep `shm_size: "8gb"` (vLLM needs
+  a large `/dev/shm`; Docker's default is 64 MB) and remember that the service reserves its
+  own VRAM (see [backends](backends.md)), so keep it stopped when unused.
+
+  Without Compose, the same service can be started standalone on the stack network:
+
+  ```bash
+  docker run -d --name tts-vllm --gpus all --shm-size=8gb --network aiudio-net \
+    -v "$PWD/hf_cache:/root/.cache/huggingface" -p 8005:8091 \
+    vllm/vllm-omni:latest \
+    vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --omni --host 0.0.0.0 --port 8091
+  ```
+
+  Check the service on its own before switching the gateway over:
+
+  ```bash
+  curl -s localhost:8005/v1/models | head -c 200
+  curl -s localhost:8005/v1/audio/speech -H 'Content-Type: application/json' \
+       -d '{"input":"Bonjour, ceci est un test.","voice":"Vivian","response_format":"pcm","stream":true}' \
+       -o /tmp/test.pcm -w '%{http_code} %{size_download}\n'
+  ffplay -f s16le -ar 24000 -ac 1 /tmp/test.pcm    # should be intelligible
+  ```
+
   `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
   service is unreachable and the call fell back).
 - **Observability**: `/api/metrics` (TTFA, RTF, counters, queue depth, model
