@@ -158,6 +158,7 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
         "models": {
             "families": engine.available(),
             "variants": [v.model_dump() for v in settings.models.variants],
+            "registry": dict(settings.models.registry),
             "default_family": settings.models.default_family,
             "default_size": settings.models.default_size,
             "residency": settings.models.residency,

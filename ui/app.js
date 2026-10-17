@@ -260,7 +260,9 @@ function cloneEngineChoices() {
   const base = tt("chat.backendQwen", "Qwen3-TTS (Base)");
   const choices = [{ value: "chatterbox", label: tt("chat.backendChatterbox", "Chatterbox") }];
   const variants = ((CONFIG && CONFIG.models && CONFIG.models.variants) || [])
-    .filter((v) => v.family === "base");
+    .filter((v) => v.family === "base")
+    .slice()
+    .sort((a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id)));
   if (variants.length) {
     variants.forEach((v) => choices.push({
       value: `qwen3:${v.label || v.id}`, label: `${base} ${v.label || v.id}`, repo: v.repo,
@@ -288,10 +290,19 @@ function fillCloneEngineSelect(sel) {
 function cloneEngineValue(models) {
   const m = models || {};
   if ((m.clone_backend || "qwen3") === "chatterbox") return "chatterbox";
-  const repo = (m.registry || {}).base || "";
   const choices = cloneEngineChoices();
-  const match = repo ? choices.find((c) => c.repo === repo) : null;
-  return (match || choices[1] || { value: "qwen3" }).value;
+  const baseChoices = choices.slice(1);
+  const repo = (m.registry || {}).base || "";
+  if (repo) {
+    const match = choices.find((c) => c.repo === repo);
+    if (match) return match.value;
+  }
+  // No registry entry for this repo (older config): fall back to the recorded size.
+  const size = String(m.default_size || "").trim().toLowerCase();
+  const bySize = size
+    ? baseChoices.find((c) => c.value.toLowerCase().endsWith(`:${size}`))
+    : null;
+  return (bySize || baseChoices[0] || { value: "qwen3" }).value;
 }
 
 // Partial settings patch for a clone-engine choice (the API merges nested dicts).

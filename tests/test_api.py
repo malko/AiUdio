@@ -30,6 +30,8 @@ def test_config_endpoint(client):
     assert r.status_code == 200
     body = r.json()
     assert "families" in body["models"]
+    # The UI needs the registry to show which variant each family is set to.
+    assert body["models"]["registry"]["base"]
     assert body["audio"]["sample_rate"] == 24000
 
 
@@ -86,10 +88,13 @@ def test_models_select_variant(client):
 
 
 def test_settings_update_default_size(client):
-    r = client.put("/api/settings", json={"models": {"default_size": "0.6B"}})
+    # `default_size` is a label now: the registry is what the service loads.
+    r = client.put("/api/settings", json={"models": {"registry": {"base": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"}}})
     assert r.status_code == 200, r.text
-    assert r.json()["models"]["default_size"] == "0.6B"
-    assert client.get("/api/models").json()["default_size"] == "0.6B"
+    assert r.json()["models"]["registry"]["base"].endswith("1.7B-Base")
+    # The size chosen for one family does not leak to the others.
+    assert r.json()["models"]["registry"]["custom_voice"].endswith("CustomVoice")
+    assert client.get("/api/config").json()["models"]["registry"]["base"].endswith("1.7B-Base")
 
 
 def test_settings_update_vllm(client):
