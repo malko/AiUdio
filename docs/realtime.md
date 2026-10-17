@@ -36,13 +36,14 @@ depth, and per-stage timings (`/api/metrics`).
   `BatchScheduler.submit_streaming()`, which runs immediately instead of waiting for the
   batch window (`generation.batch_window_ms`). Batching still applies to non-streaming REST.
 - **Sentence-aligned chunking**: `_pop_chat_chunks` releases **complete sentences** only.
-  Fragments (clauses or single words) are never sent to the engine on their own: each one
-  would be synthesized as a standalone utterance with its own intonation, which is heard as
-  chopped, word-by-word speech. The first sentence past ~40 chars starts the audio, then the
-  following sentences are grouped up to ~200 chars per synthesis call. A sentence that never
-  ends is cut at the last clause/space boundary past ~240 chars (last resort). Chat units are
-  synthesized as-is: `_stream_pcm` does not re-split them (that pass, `chunking.*`, applies to
-  the TTS API/WebSocket routes).
+  Single words are never sent to the engine on their own: each fragment would be synthesized
+  as a standalone utterance with its own intonation, heard as chopped, word-by-word speech.
+  The first chunk starts at the first sentence past ~40 chars — or at the first clause
+  (comma) past ~60 chars when the opening sentence is long, so the audio does not wait for it
+  — then the following sentences are grouped up to ~200 chars per synthesis call. A sentence
+  that never ends is cut at the last clause/space boundary past ~240 chars (last resort). Chat
+  units are synthesized as-is: `_stream_pcm` does not re-split them (that pass, `chunking.*`,
+  applies to the TTS API/WebSocket routes).
 - **Preload + optional warm-up**: `startup.tts_family` preloads a family at boot;
   `startup.warmup: true` runs a tiny synthesis to absorb CUDA init. `residency: multi`
   keeps several families hot (more VRAM; `TTS_RESIDENCY=multi`, `single` by default).

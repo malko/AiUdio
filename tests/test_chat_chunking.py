@@ -88,6 +88,18 @@ def test_pop_chat_chunks_coalesces_after_the_first_chunk():
     assert rest2 == rest
 
 
+def test_pop_chat_chunks_first_clause_starts_the_audio_early():
+    # A long opening sentence may be cut at a clause for the first chunk (natural
+    # prosodic break) so the audio does not wait for the whole sentence.
+    head = "This opening sentence really keeps going on with a first clause that is fairly long indeed"
+    text = f"{head}, and then it continues for a while without ever ending"
+    chunks, rest = _pop_chat_chunks(text, allow_first_clause=True)
+    assert chunks == [f"{head},"]
+    assert rest == "and then it continues for a while without ever ending"
+    # Without the flag, no clause fragment is released on its own.
+    assert _pop_chat_chunks(text)[0] == []
+
+
 def test_pop_chat_chunks_keeps_short_sentence():
     chunks, rest = _pop_chat_chunks("Hi, ok")
     assert chunks == []

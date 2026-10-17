@@ -64,11 +64,12 @@ Then `LLM_BASE_URL=http://host.docker.internal:8080/v1`.
   browser; older ones are re-synthesized on demand via `POST /api/tts` with the current voice.
 - **Time to first audio**: TTS does **not** wait for the full LLM reply. The server synthesizes
   sentence by sentence as tokens arrive; only **complete sentences** are released (never a
-  clause or a word, which the engine would render as a chopped utterance with its own
-  intonation). A short opening sentence (< ~40 chars) is merged with the next one so playback
-  does not drain, and once the first chunk is out the following sentences are grouped up to
-  ~200 chars (`_pop_chat_chunks`), so a reply costs a few synthesis calls rather than one per
-  sentence.
+  word, which the engine would render as a chopped utterance with its own intonation). A short
+  opening sentence (< ~40 chars) is merged with the next one so playback does not drain; a
+  long opening sentence is started at its first clause past ~60 chars (a comma, i.e. a natural
+  prosodic break) so the audio does not wait for the whole sentence. Once the first chunk is
+  out, the following sentences are grouped up to ~200 chars (`_pop_chat_chunks`), so a reply
+  costs a few synthesis calls rather than one per sentence.
 
 ## Endpoints
 
