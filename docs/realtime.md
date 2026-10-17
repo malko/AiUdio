@@ -74,6 +74,19 @@ model family, not the pipeline. Check `GET /api/metrics`:
 - If loads stay flat but `ttfa_seconds.avg` is high, it is the engine itself: use the 0.6B
   family, cap response length, and/or route CustomVoice through the `vllm` profile.
 
+## STT sessions
+
+`/ws/stt` proxies to a single upstream realtime session per client socket
+(`_open_stt_upstream` tolerates a slow handshake and retries once). The upstream service
+serves one session at a time, so a client that leaves its socket open keeps the slot busy
+and the next handshake times out (`TimeoutError: timed out during opening handshake`).
+
+`GET /api/metrics` counters:
+
+- `stt_ws_opened` / `stt_ws_closed` — a growing gap means a client is leaking sessions;
+- `stt_ws_failed` — upstream handshake timeouts (STT service busy, restarting or
+  unreachable; check `docker compose logs stt`).
+
 ## Roadmap
 
 ### Phase 2 — remaining

@@ -1052,11 +1052,14 @@ def create_app(
             return
         await websocket.accept()
         try:
-            import websockets
-
             url = _ws_url(cfg.base_url, cfg.realtime_path, cfg.api_key)
-            async with websockets.connect(url, max_size=None) as upstream:
-                await _relay(websocket, upstream)
+            upstream = await _open_stt_upstream(url)
+            metrics.incr("stt_ws_opened")
+            try:
+                async with upstream:
+                    await _relay(websocket, upstream)
+            finally:
+                metrics.incr("stt_ws_closed")
         except Exception as exc:  # pragma: no cover - depends on the STT service
             log.exception("STT WebSocket proxy error")
             try:
@@ -1198,6 +1201,31 @@ def _ws_url(base_url: str, path: str, api_key: str = "") -> str:
     return url
 
 
+async def _open_stt_upstream(url: str):
+    """Open the STT realtime socket, tolerating a slow or busy upstream.
+
+    NeMo-Speech.cpp serves one realtime session at a time and can need a moment
+    to release the previous one; the library's default 10 s handshake timeout is
+    then too short, and a single attempt surfaces as an opaque backend error.
+    """
+    import websockets
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            return await websockets.connect(url, max_size=None, open_timeout=30.0)
+        except (TimeoutError, OSError, websockets.exceptions.WebSocketException) as exc:
+            last_exc = exc
+            log.warning(
+                "STT upstream handshake failed (attempt %d/2, url=%s): %s",
+                attempt + 1, url, exc,
+            )
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+    metrics.incr("stt_ws_failed")
+    raise last_exc if last_exc is not None else RuntimeError("STT upstream unavailable")
+
+
 async def _relay(client: WebSocket, upstream) -> None:
     async def client_to_upstream() -> None:
         while True:
@@ -1220,6 +1248,9 @@ async def _relay(client: WebSocket, upstream) -> None:
     _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
+    # Await the cancellations so the upstream session is fully released before the
+    # caller closes it (a lingering reader would keep the STT service busy).
+    await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text: str) -> None:

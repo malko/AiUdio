@@ -1673,6 +1673,11 @@ function startVadLoop() {
 
 async function startDictation(useVad = false) {
   try {
+    // Never stack sessions: a previous one must be released upstream first.
+    if (dictateSocket) {
+      try { dictateSocket.close(); } catch (e) { /* ignore */ }
+      dictateSocket = null;
+    }
     const cap = await startMicCapture((samples, sr) => {
       if (!dictateSocket || dictateSocket.readyState !== 1) return;
       // In VAD mode, do not feed the assistant's own TTS back into the STT.
@@ -1727,6 +1732,13 @@ function finishDictation() {
   if (dictateSink) dictateSink.disconnect();
   if (dictateCtx) dictateCtx.close();
   if (dictateStream) dictateStream.getTracks().forEach((track) => track.stop());
+  // Always close the STT socket: leaving it open keeps the upstream realtime
+  // session busy, and the STT service stops accepting new ones after a few.
+  const sock = dictateSocket;
+  if (sock) {
+    try { if (sock.readyState === 1) sock.send(JSON.stringify({ type: "input_audio_buffer.commit" })); } catch (e) { /* ignore */ }
+    try { sock.close(); } catch (e) { /* ignore */ }
+  }
   dictateSocket = null; dictateCtx = null; dictateStream = null;
   dictateSource = null; dictateNode = null; dictateSink = null; dictateAnalyser = null;
   dictateActive = false;
