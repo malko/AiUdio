@@ -1402,7 +1402,12 @@ async def _chat_turn(
             if sentence is None:
                 return
             sentence = sentence.strip()
-            if not sentence:
+            # Nothing to say: the sentence splitter leaves a lone final "." (or "…")
+            # in the buffer, and synthesizing it costs a full call (and can emit a
+            # stray blip) for no audible content.
+            if not sentence or not any(ch.isalnum() for ch in sentence):
+                if sentence:
+                    log.debug("chat tts: skipping punctuation-only chunk %r", sentence)
                 continue
             try:
                 # The chat chunker already released whole sentences: synthesize each
