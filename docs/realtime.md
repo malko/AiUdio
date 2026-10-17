@@ -39,7 +39,7 @@ depth, and per-stage timings (`/api/metrics`).
   Single words are never sent to the engine on their own: each fragment would be synthesized
   as a standalone utterance with its own intonation, heard as chopped, word-by-word speech.
   The first chunk starts at the first sentence past ~40 chars — or at the first clause
-  (comma) past ~60 chars when the opening sentence is long, so the audio does not wait for it
+  (comma) past ~40 chars when the opening sentence is long, so the audio does not wait for it
   — then each following sentence is released as soon as it is complete while the engine is
   idle. Grouping (up to ~200 chars per synthesis call) only happens while the engine still has
   work queued: sending text promptly is what prevents an audible gap between chunks (the

@@ -1311,7 +1311,7 @@ _CHAT_CLAUSE_RE = re.compile(r"[,;:]\s+")
 # clause, let alone a single word) is synthesized as a standalone utterance with
 # its own intonation, which is heard as chopped, word-by-word speech.
 _CHAT_MIN_CHARS = 40          # first chunk: one complete sentence past this length
-_CHAT_FIRST_CLAUSE_CHARS = 60  # ... or a clause past this one, so audio starts sooner
+_CHAT_FIRST_CLAUSE_CHARS = 40  # ... or a clause past this one, so audio starts sooner
 _CHAT_COALESCE_CHARS = 200    # later chunks: group sentences up to this length
 _CHAT_MAX_CHARS = 240         # last resort for a sentence that never ends
 
@@ -1386,6 +1386,7 @@ async def _chat_turn(
     queued = False
     started = time.perf_counter()
     first_token: Optional[float] = None
+    last_token: Optional[float] = None
     first_queued: Optional[float] = None
     first_audio: Optional[float] = None
     spoken = 0
@@ -1452,6 +1453,7 @@ async def _chat_turn(
         async for token in llm.stream(messages):
             if first_token is None:
                 first_token = time.perf_counter() - started
+            last_token = time.perf_counter() - started
             reply += token
             await send_json({"type": "llm.delta", "text": token})
             if speak:
@@ -1484,10 +1486,14 @@ async def _chat_turn(
         if worker is not None and not worker.done():
             worker.cancel()
     log.info(
-        "chat turn: llm done %.2fs (%d chunks queued, first at %s, first audio %s), "
-        "reply %d chars, total %.2fs",
-        time.perf_counter() - started, spoken, _fmt_s(first_queued), _fmt_s(first_audio),
-        len(reply), time.perf_counter() - started,
+        "chat turn: reply %d chars, llm first token %s, last token %s, stream closed %.2fs "
+        "(%+.2fs after the last token) | first chunk queued %s, first audio %s "
+        "(%+.2fs vs the last token) | %d chunks, total %.2fs",
+        len(reply), _fmt_s(first_token), _fmt_s(last_token), time.perf_counter() - started,
+        (time.perf_counter() - started) - (last_token or 0.0),
+        _fmt_s(first_queued), _fmt_s(first_audio),
+        (first_audio or 0.0) - (last_token or 0.0),
+        spoken, time.perf_counter() - started,
     )
     return reply
 
