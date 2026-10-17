@@ -35,6 +35,10 @@ python3 -m ruff check app tests
 
 The first request to a model family downloads several GB of weights.
 
+`config.yaml` is mounted read-only as **defaults**; runtime settings (UI/API) persist in
+the writable `aiudio_state` volume (`CONFIG_PATH=/app/state/config.yaml`). To re-apply
+defaults, remove that volume (`docker compose down && docker volume rm aiudio_aiudio_state`).
+
 ## Minimal integration contract
 
 To integrate AiUdio into a host application, you only need:

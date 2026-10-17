@@ -66,6 +66,28 @@ def test_api_key_persisted_hashed(tmp_path):
     assert saved.hash and raw not in reloaded.path.read_text(encoding="utf-8")
 
 
+def test_seeds_runtime_config_from_defaults(tmp_path, monkeypatch):
+    defaults = tmp_path / "defaults.yaml"
+    defaults.write_text("generation:\n  temperature: 0.5\n", encoding="utf-8")
+    target = tmp_path / "state" / "config.yaml"
+    monkeypatch.setenv("CONFIG_DEFAULTS", str(defaults))
+
+    store = ConfigStore(target)
+    assert target.exists()
+    assert store.settings.generation.temperature == 0.5
+
+    # Once the state file exists, it wins (defaults are only a seed).
+    target.write_text("generation:\n  temperature: 0.9\n", encoding="utf-8")
+    assert ConfigStore(target).settings.generation.temperature == 0.9
+
+
+def test_no_defaults_no_seed(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONFIG_DEFAULTS", raising=False)
+    store = ConfigStore(tmp_path / "config.yaml")
+    assert not store.path.exists()
+    assert store.settings.generation.temperature == Settings().generation.temperature
+
+
 def test_update_section(tmp_path):
     store = ConfigStore(tmp_path / "config.yaml")
     store.update(chunking={"max_chars": 321})

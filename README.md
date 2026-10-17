@@ -122,6 +122,23 @@ curl -s localhost:8004/health | jq
 > The first call to a model family triggers the weight download (several GB). The cache
 > is persisted in the `hf_cache` volume.
 
+### Configuration & persistence
+
+`config.yaml` is mounted **read-only** as defaults and the service persists its runtime
+settings (edited from the UI/API) to the writable **`aiudio_state`** volume
+(`CONFIG_PATH=/app/state/config.yaml`). The repository file is therefore never rewritten by
+the container. On first run the state is **seeded** from `config.yaml`; afterwards the state
+wins, so to re-apply changes made to `config.yaml`, reset the state:
+
+```bash
+docker compose down
+docker volume rm aiudio_aiudio_state   # namespaced: <project>_aiudio_state
+docker compose up -d
+```
+
+For local (non-Docker) development the app reads/writes `config.yaml` directly; set
+`CONFIG_PATH`/`CONFIG_DEFAULTS` to use the same split locally.
+
 ## Hardware
 
 One **CUDA** compose (the default `docker-compose.yml`, CUDA 13), works with any NVIDIA

@@ -23,7 +23,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/app/hf_cache \
     PIP_NO_CACHE_DIR=1 \
-    PIP_BREAK_SYSTEM_PACKAGES=1
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    # config.yaml is read-only defaults; runtime settings persist in /app/state.
+    CONFIG_DEFAULTS=/app/config.yaml \
+    CONFIG_PATH=/app/state/config.yaml
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libsndfile1 ffmpeg sox libsox-fmt-all git curl \
@@ -64,7 +67,7 @@ COPY app ./app
 COPY ui ./ui
 COPY config.yaml ./config.yaml
 
-RUN mkdir -p outputs logs voices reference_audio hf_cache
+RUN mkdir -p outputs logs voices reference_audio hf_cache state
 
 EXPOSE 8004
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -11,7 +13,15 @@ from pydantic import BaseModel, Field, field_validator
 
 from .apikeys import ApiKey, from_legacy
 
+log = logging.getLogger(__name__)
+
 DEFAULT_CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
+
+
+def _defaults_path() -> Optional[Path]:
+    """Read-only defaults file (env ``CONFIG_DEFAULTS``), if configured."""
+    value = os.environ.get("CONFIG_DEFAULTS")
+    return Path(value) if value else None
 
 
 class ServerConfig(BaseModel):
@@ -322,11 +332,31 @@ def _apply_env(settings: Settings) -> Settings:
 
 
 class ConfigStore:
-    """Thread-safe access to the configuration persisted in config.yaml."""
+    """Thread-safe access to the writable configuration (``CONFIG_PATH``).
+
+    In Docker, ``config.yaml`` is shipped read-only as **defaults**
+    (``CONFIG_DEFAULTS``) and the runtime state lives in a writable volume
+    (``CONFIG_PATH``). On first run the defaults are copied to the state file;
+    afterwards only the state file is read/written, so the repository file is
+    never clobbered by the service.
+    """
 
     def __init__(self, path: Path = DEFAULT_CONFIG_PATH):
         self.path = Path(path)
+        self._seed()
         self.settings = self.load()
+
+    def _seed(self) -> None:
+        """Copy defaults to the writable config the first time it is missing."""
+        defaults = _defaults_path()
+        if self.path.exists() or defaults is None or not defaults.exists():
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(defaults, self.path)
+            log.info("Seeded %s from defaults %s", self.path, defaults)
+        except OSError:
+            log.warning("Could not seed %s from %s", self.path, defaults, exc_info=True)
 
     def load(self) -> Settings:
         if self.path.exists():
@@ -347,6 +377,7 @@ class ConfigStore:
     def save(self, settings: Optional[Settings] = None) -> None:
         if settings is not None:
             self.settings = settings
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             yaml.safe_dump(
                 self.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False

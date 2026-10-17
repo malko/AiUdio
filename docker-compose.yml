@@ -31,19 +31,26 @@ services:
     ports:
       - "${PORT:-8004}:8004"
     volumes:
-      - ./config.yaml:/app/config.yaml
+      # config.yaml is mounted READ-ONLY as defaults; the service writes its
+      # runtime settings to the writable aiudio_state volume instead, so the
+      # repository file is never rewritten by the container.
+      - ./config.yaml:/app/config.defaults.yaml:ro
+      - aiudio_state:/app/state
       - ./voices:/app/voices
       - ./reference_audio:/app/reference_audio
       - ./outputs:/app/outputs
       - ./logs:/app/logs
       - hf_cache:/app/hf_cache
     environment:
+      - CONFIG_DEFAULTS=/app/config.defaults.yaml
+      - CONFIG_PATH=/app/state/config.yaml
       - HF_TOKEN=${HF_TOKEN:-}
       - HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-1}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       # LLM/Auth: only override when explicitly set in .env, otherwise the values
-      # persisted in config.yaml (edited from the UI) are kept across restarts.
+      # persisted in the aiudio_state volume (edited from the UI) are kept across
+      # restarts.
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-}
@@ -109,3 +116,4 @@ networks:
 
 volumes:
   hf_cache:
+  aiudio_state:
