@@ -71,8 +71,7 @@ depth, and per-stage timings (`/api/metrics`).
   ```
 
   For **cloned voices**, start the service on a Base checkpoint and point `family` at it —
-  the voice bank keeps working, only the reference clip travels differently (inline
-  `ref_audio` data URL + `ref_text`, `task_type=Base`):
+  the voice bank keeps working, and the reference clip travels either way below:
 
   ```yaml
   # docker-compose.yml, tts-vllm
@@ -80,16 +79,36 @@ depth, and per-stage timings (`/api/metrics`).
       vllm serve Qwen/Qwen3-TTS-12Hz-0.6B-Base      # or 1.7B-Base
       --omni --host 0.0.0.0 --port 8091
       --max-model-len 2048 --enforce-eager
+      --allowed-local-media-path /svc/voices
+    volumes:
+      - ./voices:/svc/voices:ro     # the same voice bank as the gateway, read-only
   ```
 
   ```bash
   curl -s -X PUT localhost:8004/api/settings -H 'Content-Type: application/json' \
-       -d '{"vllm":{"enabled":true,"family":"base"}}'
+       -d '{"vllm":{"enabled":true,"family":"base","ref_root":"/svc/voices"}}'
   ```
 
+  **Sharing the files** is the cheapest option: with `--allowed-local-media-path` on the
+  service side and `vllm.ref_root` (the path *as the service sees it*) on ours, clips from
+  the voice bank are sent as `file:///svc/voices/avatars/<id>.wav`. The service reads the very
+  same file as our engine and reloads it when it changes (its cache key folds `mtime_ns` and
+  size), so **nothing is transferred per request**. Without that mount the clip is inlined as
+  a base64 `data:` URL instead (~300 KB per sentence, decoded once and cached service-side);
+  both work, `ref_root` is just leaner. Everything else is unchanged: `task_type=Base`,
+  `ref_text` for in-context cloning, `x_vector_only_mode` when an avatar has no transcript.
+
   The preset speakers (`vivian`, `serena`…) then stay local, and so do Chatterbox clones
-  (`models.clone_backend: chatterbox` is not what a Base checkpoint serves). An avatar
-  without a transcript clones from the speaker embedding only (`x_vector_only_mode`).
+  (`models.clone_backend: chatterbox` is not what a Base checkpoint serves).
+
+  **Managing the service from the UI** (optional): with the Docker socket mounted and
+  `docker.control` enabled, **Settings → vLLM-Omni** starts/stops/restarts the container and
+  switches the checkpoint it serves (`GET /api/vllm/service`, `POST /api/vllm/service/{start|stop|restart}`,
+  `PUT /api/vllm/service/model`) — the gateway copies the container's own configuration, keeps
+  its flags and only replaces the `vllm serve <model>` argument, and it flips `vllm.family` to
+  match the checkpoint it just loaded. Note the socket is root-equivalent power over the host
+  ([security](security.md)); the container's command is authoritative until the next
+  `docker compose up`, which would recreate it from the compose file.
 
   A manager that cannot pass a profile (Web UI, Dockge, Portainer…) should **delete the
   `profiles: ["vllm"]` line** of the `tts-vllm` service instead: it then belongs to the

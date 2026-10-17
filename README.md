@@ -154,7 +154,9 @@ One **CUDA** compose (the default `docker-compose.yml`, CUDA 13), works with any
 - **TTS gateway**: `pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime` (official image).
 - **STT**: `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (official NVIDIA NGC image, CUDA, multi-arch), wrapped with busybox for the wait entrypoint.
 - Optional: `docker compose --profile vllm up -d` for the experimental vLLM-Omni streaming service
-  (preset voices with a `-CustomVoice` checkpoint, cloned voices with a `-Base` one).
+  (preset voices with a `-CustomVoice` checkpoint, cloned voices with a `-Base` one; with the
+  Docker socket mounted + `DOCKER_CONTROL=1`, the UI starts/stops it and switches the
+  checkpoint — see [security](docs/security.md)).
 
 Non-NVIDIA hardware uses **additive overrides** (the CUDA default is unchanged):
 

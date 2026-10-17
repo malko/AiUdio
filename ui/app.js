@@ -235,6 +235,8 @@ function applyVllmFields(cfg) {
   const v = (cfg && cfg.vllm) || {};
   if ($("#set-vllm-enabled")) $("#set-vllm-enabled").checked = !!v.enabled;
   if ($("#set-vllm-family")) $("#set-vllm-family").value = v.family === "base" ? "base" : "custom_voice";
+  fillVllmModels();
+  refreshVllmService();
   if ($("#set-vllm-url")) $("#set-vllm-url").value = v.base_url || "";
   if ($("#set-vllm-path")) $("#set-vllm-path").value = v.path || "/v1/audio/speech";
 }
@@ -2071,6 +2073,62 @@ $("#set-log-save").addEventListener("click", async () => {
   }
 });
 
+// ------------------------------------------------------------ vLLM-Omni card
+var VLLM_SERVICE = null;
+
+function vllmFamilyForRepo(repo) {
+  return /-Base$/i.test(repo || "") ? "base" : "custom_voice";
+}
+
+function fillVllmModels() {
+  const select = $("#set-vllm-model");
+  if (!select) return;
+  const variants = (CONFIG.models && CONFIG.models.variants) || [];
+  const current = select.value;
+  select.innerHTML = "";
+  for (const variant of variants) {
+    if (variant.family !== "custom_voice" && variant.family !== "base") continue;
+    const option = document.createElement("option");
+    option.value = variant.repo;
+    option.textContent = `${variant.label || ""} ${variant.repo.split("/").pop()}`.trim();
+    select.appendChild(option);
+  }
+  // Fall back to whatever the local registry holds for the routed family.
+  const wanted = current || ((CONFIG.models && CONFIG.models.registry) || {})[
+    (CONFIG.vllm && CONFIG.vllm.family) === "base" ? "base" : "custom_voice"
+  ];
+  if (wanted) select.value = wanted;
+}
+
+function wantToSwitchModel(wanted, running) {
+  return !!(CONFIG.docker && CONFIG.docker.control && wanted && wanted !== running);
+}
+
+async function refreshVllmService() {
+  const status = $("#set-vllm-status");
+  const control = !!(CONFIG.docker && CONFIG.docker.control);
+  for (const id of ["#set-vllm-start", "#set-vllm-stop", "#set-vllm-restart"]) {
+    if ($(id)) $(id).disabled = !control;
+  }
+  if (!status || !control) return;
+  try {
+    const r = await getJSON("/api/vllm/service");
+    VLLM_SERVICE = r;
+    if (r.state) {
+      const state = r.state.running ? t("vllm.running") : t("vllm.stopped");
+      status.textContent = `${r.container}: ${state}${r.state.model ? ` — ${r.state.model}` : ""}`;
+      if (r.state.model && $("#set-vllm-model")) {
+        $("#set-vllm-model").value = r.state.model;
+        if ($("#set-vllm-family")) $("#set-vllm-family").value = vllmFamilyForRepo(r.state.model);
+      }
+    } else if (r.error) {
+      status.textContent = r.error;
+    }
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+}
+
 $("#set-vllm-save").addEventListener("click", async () => {
   const status = $("#set-vllm-status");
   status.textContent = "…";
@@ -2093,10 +2151,52 @@ $("#set-vllm-save").addEventListener("click", async () => {
     CONFIG = Object.assign({}, CONFIG, { vllm: cfg.vllm });
     applyVllmFields(cfg);
     status.textContent = t("status.saved");
+    // The container can only load one checkpoint: if the admin picked another
+    // one, recreate it with it (needs docker.control).
+    const wanted = $("#set-vllm-model") ? $("#set-vllm-model").value : "";
+    const running = VLLM_SERVICE && VLLM_SERVICE.state ? VLLM_SERVICE.state.model : null;
+    if (wantToSwitchModel(wanted, running)) await switchVllmModel(wanted);
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }
 });
+
+$("#set-vllm-model") && $("#set-vllm-model").addEventListener("change", () => {
+  // The checkpoint implies the family the gateway has to route to it.
+  if ($("#set-vllm-family")) $("#set-vllm-family").value = vllmFamilyForRepo($("#set-vllm-model").value);
+});
+
+for (const [id, action] of [["#set-vllm-start", "start"], ["#set-vllm-stop", "stop"], ["#set-vllm-restart", "restart"]]) {
+  const button = $(id);
+  if (!button) continue;
+  button.addEventListener("click", async () => {
+    const status = $("#set-vllm-status");
+    status.textContent = t("status.testing");
+    try {
+      const r = await apiFetch(`/api/vllm/service/${action}`, { method: "POST" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || r.status);
+      VLLM_SERVICE = body;
+      await refreshVllmService();
+      if (action !== "stop") status.textContent = `${status.textContent} — ${t("vllm.loading")}`;
+    } catch (e) {
+      status.textContent = `${t("status.error")} ${e}`;
+    }
+  });
+}
+
+async function switchVllmModel(model) {
+  const status = $("#set-vllm-status");
+  status.textContent = `${t("vllm.switching")} ${model}…`;
+  const r = await apiFetch("/api/vllm/service/model", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.status);
+  if (body.vllm) CONFIG = Object.assign({}, CONFIG, { vllm: body.vllm });
+  await refreshVllmService();
+  status.textContent = `${t("vllm.loading")} ${model}…`;
+}
 
 $("#set-vllm-test").addEventListener("click", async () => {
   const status = $("#set-vllm-status");

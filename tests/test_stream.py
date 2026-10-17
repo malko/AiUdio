@@ -274,3 +274,24 @@ def test_family_for_model_reads_the_served_checkpoint():
     assert family_for_model("Qwen/Qwen3-TTS-12Hz-0.6B-Base") == "base"
     assert family_for_model("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice") == "custom_voice"
     assert family_for_model("Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign") is None
+
+
+def test_shared_voice_bank_is_sent_as_a_file_uri(tmp_path):
+    from app.main import _vllm_payload
+
+    settings = _settings_with_avatar(tmp_path)
+    settings.vllm.enabled = True
+    settings.vllm.family = "base"
+    # The service container mounts the gateway's `voices/` read-only there.
+    settings.vllm.ref_root = "/svc/voices"
+
+    payload = _vllm_payload(settings, TTSRequest(text="Bonjour", avatar="bugatti"), "Bonjour")
+    # No audio travels: the service reads the very same file and reloads it when
+    # it changes (the locator is the path).
+    assert payload["ref_audio"] == "file:///svc/voices/avatars/bugatti.wav"
+    assert "base64" not in payload["ref_audio"]
+
+    # Without the shared mount, the clip is inlined instead.
+    settings.vllm.ref_root = ""
+    inline = _vllm_payload(settings, TTSRequest(text="Bonjour", avatar="bugatti"), "Bonjour")
+    assert inline["ref_audio"].startswith("data:audio/wav;base64,")

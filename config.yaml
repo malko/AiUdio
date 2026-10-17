@@ -145,6 +145,17 @@ vllm:
   # base (voice cloning from a reference clip). Requests of the other family stay
   # on the local engine — the service loads a single model.
   family: custom_voice
+  # Path the *service* sees the voice bank at (read-only mount), e.g. /svc/voices:
+  # reference clips are then sent as file:// URIs instead of inline base64.
+  ref_root: ''
+docker:
+  # Pilot the vLLM-Omni container (start/stop/switch its checkpoint) from the UI.
+  # Off by default: it requires the Docker socket, i.e. root-equivalent power over
+  # the host. See docs/security.md.
+  control: false
+  socket: /var/run/docker.sock
+  container: tts-vllm
+  start_timeout: 300.0
 ui:
   title: AiUdio Server
   show_stt_tab: true

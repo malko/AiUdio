@@ -412,3 +412,23 @@ def test_vllm_health_probe_is_safe_when_unreachable(client):
     body = r.json()
     assert body["ok"] is False          # nothing listening at tts-vllm:8091
     assert body["base_url"].startswith("http")
+
+
+def test_vllm_service_control_is_off_by_default(client):
+    r = client.get("/api/vllm/service")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["control"] is False and body["container"] == "tts-vllm"
+    assert "error" in body  # explains how to enable it
+    # Acting on a container without the control enabled is refused, not attempted.
+    assert client.post("/api/vllm/service/start").status_code == 409
+    assert client.post("/api/vllm/service/explode").status_code == 400
+    r = client.put("/api/vllm/service/model", json={"model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"})
+    assert r.status_code == 409
+
+
+def test_vllm_model_must_be_a_qwen3_tts_checkpoint(client):
+    r = client.put("/api/vllm/service/model", json={"model": "meta-llama/Llama-3"})
+    assert r.status_code == 400
+    assert "CustomVoice" in r.json()["detail"]
+    assert client.put("/api/vllm/service/model", json={}).status_code == 400

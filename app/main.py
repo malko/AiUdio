@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, apikeys, vllm_backend
+from . import __version__, apikeys, docker_ctl, vllm_backend
 from .audio import to_pcm16, wav_bytes
 from .avatars import Avatar, AvatarStore
 from .chatterbox_backend import is_available as is_chatterbox_available
@@ -176,6 +176,10 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
         "version": __version__,
         "ui": settings.ui.model_dump(),
         "startup": settings.startup.model_dump(),
+        "docker": {
+            "control": settings.docker.control,
+            "container": settings.docker.container,
+        },
         "auth_required": settings.auth.enabled,
         "models": {
             "families": engine.available(),
@@ -359,6 +363,24 @@ def _ref_locator(value: str) -> str:
     return cached
 
 
+def _clip_locator(settings: Settings, path: Path) -> str:
+    """Locator for a local clip, shared by path when the service can see it.
+
+    With ``vllm.ref_root`` set (the voice bank mounted read-only inside the
+    service container), clips under it are sent as ``file://`` URIs: the service
+    then reads the very same file as our engine and reloads it when it changes —
+    no base64 travelling on every request. Everything else is inlined.
+    """
+    root = str(getattr(settings.vllm, "ref_root", "") or "").strip()
+    if root:
+        try:
+            relative = path.resolve().relative_to(Path(settings.paths.voices).resolve())
+            return f"file://{root.rstrip('/')}/{relative.as_posix()}"
+        except (ValueError, OSError):
+            pass
+    return _ref_locator(str(path))
+
+
 def _vllm_reference(
     settings: Settings, req: TTSRequest
 ) -> Optional[Tuple[str, Optional[str], bool]]:
@@ -366,13 +388,16 @@ def _vllm_reference(
     avatar = _resolve_avatar(settings, req)
     if avatar is not None:
         wav = AvatarStore(_avatar_dir(settings)).wav_path(avatar.id)
-        locator = _ref_locator(str(wav))
+        locator = _clip_locator(settings, wav)
         if not locator:
             return None
         ref_text = (avatar.ref_text or "").strip() or None
         return locator, ref_text, bool(avatar.x_vector_only) or not ref_text
     if req.ref_audio:
-        locator = _ref_locator(req.ref_audio)
+        if req.ref_audio.startswith(("http://", "https://", "data:")):
+            locator = req.ref_audio
+        else:
+            locator = _clip_locator(settings, Path(req.ref_audio))
         if not locator:
             return None
         ref_text = (req.ref_text or "").strip() or None
@@ -947,7 +972,7 @@ def create_app(
     @app.put("/api/settings", tags=["Settings"])
     async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
         allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models",
-                   "vllm", "server"}
+                   "vllm", "server", "docker"}
         sections = {k: v for k, v in payload.items() if k in allowed}
         # `server` is huge (host, port, CORS...): only the log level is editable, and
         # it is applied immediately (no restart).
@@ -1016,6 +1041,90 @@ def create_app(
         except Exception as exc:  # unreachable / not vLLM
             out["error"] = str(exc)
         return out
+
+    @app.get("/api/vllm/service", tags=["Settings"])
+    async def api_vllm_service(request: Request) -> Dict[str, Any]:
+        """State of the vLLM-Omni container (needs `docker.control`)."""
+        _admin_ok(request)
+        settings = app.state.settings
+        cfg = settings.docker
+        out: Dict[str, Any] = {
+            "control": cfg.control,
+            "container": cfg.container,
+            "family": _vllm_family(settings),
+            "enabled": settings.vllm.enabled,
+        }
+        if not cfg.control:
+            out["error"] = (
+                "container control is disabled — set docker.control (or DOCKER_CONTROL=1) "
+                "and mount the Docker socket in the gateway"
+            )
+            return out
+        try:
+            out["state"] = await docker_ctl.status(cfg.socket, cfg.container)
+        except docker_ctl.DockerError as exc:
+            out["error"] = str(exc)
+        return out
+
+    @app.post("/api/vllm/service/{action}", tags=["Settings"])
+    async def api_vllm_service_action(action: str, request: Request) -> Dict[str, Any]:
+        """Start / stop / restart the vLLM-Omni container (needs `docker.control`)."""
+        _admin_ok(request)
+        settings = app.state.settings
+        cfg = settings.docker
+        action = (action or "").strip().lower()
+        if action not in ("start", "stop", "restart"):
+            raise HTTPException(400, "action must be start, stop or restart")
+        if not cfg.control:
+            raise HTTPException(409, "Container control is disabled (docker.control)")
+        try:
+            state = await getattr(docker_ctl, action)(cfg.socket, cfg.container)
+        except docker_ctl.DockerError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        if action in ("start", "restart"):
+            # vLLM needs ~1 min to bring its two stages up: prime it in the
+            # background so the next turn does not pay the cold start.
+            asyncio.create_task(_warm_vllm(settings, attempts=20, delay=15.0))
+        if action == "stop":
+            # Nothing is served while it is down; free our own copy too, otherwise
+            # the VRAM stays reserved for a service that is not running.
+            log.info("vLLM-Omni container stopped from the UI")
+        return {"control": True, "container": cfg.container, "state": state}
+
+    @app.put("/api/vllm/service/model", tags=["Settings"])
+    async def api_vllm_service_model(
+        payload: Dict[str, Any], request: Request
+    ) -> Dict[str, Any]:
+        """Serve another checkpoint: the container is recreated with it."""
+        _admin_ok(request)
+        model = str((payload or {}).get("model") or "").strip()
+        if not model:
+            raise HTTPException(400, "model is required")
+        family = vllm_backend.family_for_model(model)
+        if family is None:
+            raise HTTPException(
+                400, f"{model!r} is not a Qwen3-TTS CustomVoice/Base checkpoint"
+            )
+        cfg = app.state.settings.docker
+        if not cfg.control:
+            raise HTTPException(409, "Container control is disabled (docker.control)")
+        try:
+            state = await docker_ctl.set_model(cfg.socket, cfg.container, model)
+        except docker_ctl.DockerError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        # The gateway must route the family this checkpoint serves.
+        updated = store.update(vllm={"family": family})
+        app.state.settings = updated
+        engine.settings = updated
+        await _release_vllm_family(engine, family, "switched to another checkpoint")
+        asyncio.create_task(_warm_vllm(updated, attempts=20, delay=15.0))
+        log.info("vLLM-Omni now serves %s (family %s)", model, family)
+        return {
+            "model": model,
+            "family": family,
+            "state": state,
+            "vllm": updated.vllm.model_dump(),
+        }
 
     # --------------------------------------------------- admin: keys / session
     def _admin_ok(request: Request) -> None:

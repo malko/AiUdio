@@ -117,6 +117,14 @@ Question: **is it risky to build or run these containers on a user's machine?**
   consent). Mitigations: only load trusted `Qwen/*` repos, never enable
   `trust_remote_code`, and/or pre-download weights and run with `HF_HUB_OFFLINE=1`.
 - **Reference audio**: see the SSRF/file-disclosure section above.
+- **Container control** (`docker.control`, off by default): the "pilot the vLLM-Omni
+  container" features (start/stop/restart, switching its served checkpoint) need
+  `/var/run/docker.sock` mounted into the gateway. **That socket is root-equivalent power
+  over the host**: anyone who can reach the admin API (or exploit the gateway process) can
+  then control every container and mount any host path. Only enable it on a trusted LAN
+  with authentication on, and prefer a socket proxy (e.g. `tecnativa/docker-socket-proxy`
+  limited to `containers:start|stop|create|delete`) over the raw socket. The gateway only
+  ever touches the container named by `docker.container`.
 - **Devices**: NVIDIA uses `count: all`; ROCm/Vulkan add `/dev/kfd` and `/dev/dri`. No
   `--privileged` is used. These grants are standard for GPU inference.
 

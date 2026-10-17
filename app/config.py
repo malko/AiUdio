@@ -214,6 +214,12 @@ class VLLMConfig(BaseModel):
     # voice cloning from a reference clip ("-Base" repos, `task_type=Base`).
     # Requests of the other family stay on the local engine.
     family: str = "custom_voice"
+    # Read-only view of the voice bank *as the service sees it* (e.g.
+    # `/svc/voices` when the gateway's `voices/` directory is mounted into the
+    # container). When set, reference clips are sent as `file://` URIs — the
+    # service reloads them automatically when the file changes — instead of being
+    # inlined as base64 in every request.
+    ref_root: str = ""
 
     @field_validator("family")
     @classmethod
@@ -222,6 +228,19 @@ class VLLMConfig(BaseModel):
         aliases = {"customvoice": "custom_voice", "clone": "base", "cloning": "base"}
         normalized = aliases.get(normalized, normalized)
         return normalized if normalized in ("custom_voice", "base") else "custom_voice"
+
+
+class DockerConfig(BaseModel):
+    """Pilot the vLLM-Omni container from the API/UI.
+
+    Off by default: it needs the Docker socket mounted in the gateway container,
+    which is root-equivalent power over the host (see docs/security.md).
+    """
+
+    control: bool = False
+    socket: str = "/var/run/docker.sock"
+    container: str = "tts-vllm"
+    start_timeout: float = 300.0  # vLLM needs ~1 min to load its two stages
 
 
 class UIConfig(BaseModel):
@@ -283,6 +302,7 @@ class Settings(BaseModel):
     stt: STTConfig = Field(default_factory=STTConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     vllm: VLLMConfig = Field(default_factory=VLLMConfig)
+    docker: DockerConfig = Field(default_factory=DockerConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     startup: StartupConfig = Field(default_factory=StartupConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
@@ -352,6 +372,16 @@ def _apply_env(settings: Settings) -> Settings:
             log.warning("Ignoring TTS_RESIDENCY=%r (expected 'single' or 'multi')", v)
     if v := os.environ.get("TTS_CHATTERBOX_PYTHON"):
         settings.models.chatterbox.python = v
+    # Container control (see docs/security.md): enabling it implies the gateway
+    # can reach the Docker socket, which is a privileged decision.
+    if v := os.environ.get("DOCKER_CONTROL"):
+        settings.docker.control = v.strip().lower() in {"1", "true", "yes", "on"}
+    if v := os.environ.get("DOCKER_CONTAINER"):
+        settings.docker.container = v.strip()
+    if v := os.environ.get("DOCKER_SOCKET"):
+        settings.docker.socket = v.strip()
+    if v := os.environ.get("VLLM_REF_ROOT"):
+        settings.vllm.ref_root = v.strip()
     return settings
 
 
