@@ -89,7 +89,11 @@ depth, and per-stage timings (`/api/metrics`).
   service is up but one of its two stages died: restart the container and check that both
   stages report *EngineCore running*. The **first call after a restart is much slower**
   (tens of seconds: kernel/graph warm-up and the speech caches); the gateway therefore
-  primes it with a tiny request when vLLM is enabled or at startup (`tts_vllm_warmups`).
+  primes it with a tiny request when vLLM is enabled or at startup. That probe retries for
+  ~2 minutes (the gateway usually boots before the vLLM service listens) and only logs a
+  warning if it never answers; a turn that finds vLLM unavailable **falls back to the local
+  engine** and counts `tts_vllm_fallbacks` (`tts_vllm_sessions` = served, `tts_vllm_warmups`
+  = primed).
   Measured once warm (1.7B CustomVoice, `--enforce-eager`, `--max-model-len 2048`):
   TTFB ≈ 0.05 s and RTF ≈ 0.22, i.e. the audio starts almost immediately and is produced
   ~4× faster than it plays.

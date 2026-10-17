@@ -347,6 +347,10 @@ async def _stream_pcm(
             yield out
         if streamed:
             return
+        # Nothing came back: `_stream_vllm` already logged the reason. Fall back to
+        # the local engine (the turn still works) and count it so a misconfigured or
+        # overloaded vLLM service is visible in /api/metrics.
+        metrics.incr("tts_vllm_fallbacks")
 
     started = time.perf_counter()
     first = True
@@ -1289,16 +1293,20 @@ def _ws_url(base_url: str, path: str, api_key: str = "") -> str:
     return url
 
 
-async def _warm_vllm(settings: Settings) -> None:
+async def _warm_vllm(settings: Settings, attempts: int = 8, delay: float = 15.0) -> bool:
     """Best effort: absorb the vLLM-Omni cold start.
 
     The first call after a restart can take tens of seconds (kernel/graph warm-up
     and the speech caches being filled): a tiny request primes it so the first
     real turn is not the one paying for it.
+
+    The gateway usually starts before the vLLM service is listening (vLLM needs
+    ~1 min), so the probe retries instead of failing once. Returns True on success;
+    an unreachable service is only worth a warning, never an error.
     """
     cfg = settings.vllm
     if not cfg.enabled:
-        return
+        return False
     payload = {
         "input": "a.",
         "response_format": "pcm",
@@ -1306,16 +1314,28 @@ async def _warm_vllm(settings: Settings) -> None:
         "stream_format": "audio",
         "sample_rate": settings.audio.sample_rate,
     }
-    try:
-        started = time.perf_counter()
-        async for _ in vllm_backend.stream_pcm(
-            cfg.base_url, payload, path=cfg.path, timeout=180.0
-        ):
-            pass
-        metrics.incr("tts_vllm_warmups")
-        log.info("vLLM-Omni warm-up done in %.2fs", time.perf_counter() - started)
-    except Exception:
-        log.warning("vLLM-Omni warm-up failed (service unreachable?)", exc_info=True)
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            started = time.perf_counter()
+            async for _ in vllm_backend.stream_pcm(
+                cfg.base_url, payload, path=cfg.path, timeout=180.0
+            ):
+                pass
+            metrics.incr("tts_vllm_warmups")
+            log.info("vLLM-Omni warm-up done in %.2fs", time.perf_counter() - started)
+            return True
+        except Exception as exc:
+            if attempt >= attempts:
+                log.warning(
+                    "vLLM-Omni warm-up gave up after %d attempts (%s): the service at %s "
+                    "is not reachable; turns will fall back to the local engine. Check it "
+                    "with GET /api/vllm/health.",
+                    attempts, exc, cfg.base_url,
+                )
+                return False
+            log.debug("vLLM-Omni not ready (attempt %d/%d): %s", attempt, attempts, exc)
+            await asyncio.sleep(delay)
+    return False
 
 
 async def _open_stt_upstream(url: str):

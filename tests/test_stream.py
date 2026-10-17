@@ -133,14 +133,37 @@ def test_warm_vllm_is_a_noop_when_disabled(monkeypatch):
     assert called == []
 
 
-def test_warm_vllm_swallows_an_unreachable_service(monkeypatch):
+def test_warm_vllm_retries_then_gives_up_quietly(monkeypatch):
     from app.main import _warm_vllm
 
+    calls = []
+
     async def boom(*a, **kw):
+        calls.append(1)
         raise OSError("connection refused")
         yield b""  # pragma: no cover - makes it an async generator
 
     monkeypatch.setattr("app.vllm_backend.stream_pcm", boom)
     settings = Settings()
     settings.vllm.enabled = True
-    asyncio.run(_warm_vllm(settings))  # must not raise
+    ok = asyncio.run(_warm_vllm(settings, attempts=3, delay=0))  # must not raise
+    assert ok is False
+    assert len(calls) == 3  # the service may still be starting: retry
+
+
+def test_warm_vllm_succeeds_after_a_retry(monkeypatch):
+    from app.main import _warm_vllm
+
+    calls = []
+
+    async def flaky(*a, **kw):
+        calls.append(1)
+        if len(calls) < 2:
+            raise OSError("connection refused")
+        yield b"\x00\x00"
+
+    monkeypatch.setattr("app.vllm_backend.stream_pcm", flaky)
+    settings = Settings()
+    settings.vllm.enabled = True
+    assert asyncio.run(_warm_vllm(settings, attempts=3, delay=0)) is True
+    assert len(calls) == 2
