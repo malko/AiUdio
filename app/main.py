@@ -148,8 +148,8 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
             },
         },
         "audio": settings.audio.model_dump(),
-        "chunking": settings.chunking.model_dump(),        "generation": settings.generation.model_dump(),
-        "chat": settings.chat.model_dump(),
+        "chunking": settings.chunking.model_dump(),
+        "generation": settings.generation.model_dump(),
         "stt": {
             "enabled": settings.stt.enabled,
             "realtime_path": settings.stt.realtime_path,
@@ -1242,8 +1242,9 @@ async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text
 _CHAT_SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
 _CHAT_CLAUSE_RE = re.compile(r"[,;:—–]\s+")
 
-# Release a short first chunk at a clause boundary once the buffer reaches this
-# length, so TTS can start before the whole sentence has been generated.
+# Sentences shorter than this are merged with the following ones before being
+# released; the first chunk of a long opening sentence is released at the first
+# clause/word boundary past this length, so TTS starts before the sentence ends.
 _CHAT_MIN_CHARS = 40
 
 
@@ -1278,10 +1279,7 @@ def _first_break(text: str, at_least: int, within: int) -> int:
     return idx + 1 if 0 <= idx < within else 0
 
 
-def _pop_chat_chunks(
-    text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN_CHARS,
-    first_min_chars: int = 0,
-) -> Tuple[List[str], str]:
+def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN_CHARS) -> Tuple[List[str], str]:
     """Split streaming LLM text into TTS chunks.
 
     Sentence ends first, then clause/space boundaries once a chunk grows too long.
@@ -1294,11 +1292,9 @@ def _pop_chat_chunks(
     """
     chunks: List[str] = []
     start = 0
-    first_min = first_min_chars or min_chars
     for match in _CHAT_SENTENCE_RE.finditer(text):
         end = match.start()  # end of the sentence (before the separating whitespace)
-        need = first_min if not chunks else min_chars
-        if len(text[start:end].strip()) >= need:
+        if len(text[start:end].strip()) >= min_chars:
             chunks.append(text[start:end].strip())
             start = match.end()
     text = text[start:]
@@ -1308,8 +1304,8 @@ def _pop_chat_chunks(
             break
         chunks.append(text[:cut].strip())
         text = text[cut:].lstrip()
-    if not chunks and len(text) >= first_min:
-        cut = _first_break(text, first_min, max_chars)
+    if not chunks and len(text) >= min_chars:
+        cut = _first_break(text, min_chars, max_chars)
         if cut > 0:
             chunks.append(text[:cut].strip())
             text = text[cut:].lstrip()
@@ -1364,12 +1360,7 @@ async def _chat_turn(
             await send_json({"type": "llm.delta", "text": token})
             if speak:
                 buffer += token
-                chunks, buffer = _pop_chat_chunks(
-                    buffer,
-                    max_chars=settings.chat.max_chars,
-                    min_chars=settings.chat.min_chars,
-                    first_min_chars=settings.chat.first_chunk_chars,
-                )
+                chunks, buffer = _pop_chat_chunks(buffer)
                 for sentence in chunks:
                     await queue.put(sentence)
         if speak and worker is not None:

@@ -22,7 +22,7 @@ Stage | Latency source | Current handling
 ---|---|---
 STT | streaming decode | Nemotron 3.5 realtime (~160 ms); endpointing is **client-side** (RMS + ~900 ms silence)
 LLM | time-to-first-token | external; streamed token by token
-Chunking | wait for a boundary | first chunk released at the first clause/word boundary past `chat.min_chars`
+Chunking | wait for a boundary | first chunk released at the first clause/word boundary past ~40 chars (shorter sentences are merged)
 TTS | model load + per-chunk synth | **per-sentence**, not token-level (`qwen-tts` exposes no codec streaming)
 Transport | PCM16 over HTTP/WS | uncompressed mono 24 kHz
 Playback | scheduling | client `PCMPlayer` with a small prebuffer (~200 ms / 250 ms timeout)
@@ -35,9 +35,10 @@ depth, and per-stage timings (`/api/metrics`).
 - **Streaming bypasses micro-batching**: `_stream_pcm` calls
   `BatchScheduler.submit_streaming()`, which runs immediately instead of waiting for the
   batch window (`generation.batch_window_ms`). Batching still applies to non-streaming REST.
-- **Tunable chunking**: `chat.min_chars` / `chat.max_chars` / `chat.first_chunk_chars`
-  control the TTFA/size trade-off without code changes; the first chunk can be released
-  earlier than the rest.
+- **Sentence-aware chunking**: `_pop_chat_chunks` releases a chunk at the first sentence
+  boundary, merging sentences shorter than ~40 chars with the next one (a tiny first chunk
+  such as "Bonjour !" would drain the playback buffer and cause an audible pause). Long
+  run-on openings are still cut early at the first clause or word boundary.
 - **Preload + optional warm-up**: `startup.tts_family` preloads a family at boot;
   `startup.warmup: true` runs a tiny synthesis to absorb CUDA init. `residency: multi`
   keeps several families hot.

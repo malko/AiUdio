@@ -113,10 +113,6 @@ chunking:
   enabled: true
   max_chars: 240
   silence_ms: 120
-chat:
-  min_chars: 40
-  max_chars: 160
-  first_chunk_chars: 24
 audio:
   format: wav
   sample_rate: 24000

@@ -219,14 +219,6 @@ class StartupConfig(BaseModel):
     warmup: bool = False  # run a tiny synthesis after preload (absorbs CUDA init)
 
 
-class ChatConfig(BaseModel):
-    """Conversation streaming knobs (time-to-first-audio vs. chunk size)."""
-
-    min_chars: int = 40    # release the first TTS chunk past this length
-    max_chars: int = 160   # split a growing chunk above this length
-    first_chunk_chars: int = 0  # first chunk threshold (0 = same as min_chars)
-
-
 class AuthConfig(BaseModel):
     """API and UI access control.
 
@@ -267,7 +259,6 @@ class Settings(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
-    chat: ChatConfig = Field(default_factory=ChatConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
