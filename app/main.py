@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, apikeys
+from . import __version__, apikeys, vllm_backend
 from .audio import to_pcm16, wav_bytes
 from .avatars import Avatar, AvatarStore
 from .chatterbox_backend import is_available as is_chatterbox_available
@@ -167,23 +167,45 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
     }
 
 
+def _clone_family(settings: Settings, backend: Optional[str] = None) -> str:
+    """Family used to synthesize cloned avatars.
+
+    ``backend`` (per-request ``clone_backend``/``engine``) overrides the admin
+    ``models.clone_backend`` default.
+    """
+    value = (backend or settings.models.clone_backend or "qwen3").strip().lower()
+    return "chatterbox" if value in ("chatterbox", "cb") else "base"
+
+
+CLONE_FAMILIES = ("base", "chatterbox", "chatterbox_turbo", "chatterbox_nano")
+
+
 def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[str, Any]:
     gen = req.generation.to_kwargs() if req.generation else {}
 
-    if req.avatar:
+    # A voice-bank id may be passed as `avatar`, or as `voice`/`speaker` (so the
+    # OpenAI route works with voice-bank ids too).
+    avatar_id = req.avatar
+    if not avatar_id:
+        candidate = req.resolve_speaker()
+        if candidate:
+            store = AvatarStore(_avatar_dir(settings))
+            if store.get(candidate) is not None:
+                avatar_id = candidate
+    if avatar_id:
         store = AvatarStore(_avatar_dir(settings))
-        avatar = store.get(req.avatar)
-        wav = store.wav_path(req.avatar)
+        avatar = store.get(avatar_id)
+        wav = store.wav_path(avatar_id)
         if avatar is None or not wav.is_file():
-            raise HTTPException(404, f"Unknown voice: {req.avatar}")
+            raise HTTPException(404, f"Unknown voice: {avatar_id}")
         language = req.language if isinstance(req.language, str) else None
         if not language or language == "Auto":
             language = avatar.language or "Auto"
-        # The global clone engine is the default, but an explicit clone-capable
-        # family (e.g. from the Synthesis tab) takes precedence.
-        family = _clone_family(settings)
+        # Per-request clone engine, then an explicit clone-capable family, then
+        # the admin default.
+        family = _clone_family(settings, req.resolve_clone_backend())
         requested = req.requested_family()
-        if requested in ("base", "chatterbox", "chatterbox_turbo", "chatterbox_nano"):
+        if requested in CLONE_FAMILIES:
             family = requested
         return {
             "family": family,
@@ -199,6 +221,10 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
         }
 
     family = req.resolve_family(settings.models.default_family)
+    # A reference clip without an explicit family means "clone", using the
+    # requested (or default) clone engine.
+    if req.ref_audio and req.requested_family() is None:
+        family = _clone_family(settings, req.resolve_clone_backend())
     return {
         "family": family,
         "text": text,
@@ -212,6 +238,44 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
     }
 
 
+def _vllm_eligible(settings: Settings, req: TTSRequest) -> bool:
+    """vLLM-Omni serves the CustomVoice family only (no clone/design)."""
+    if not settings.vllm.enabled:
+        return False
+    if req.avatar:
+        return False
+    speaker = req.resolve_speaker()
+    if speaker and AvatarStore(_avatar_dir(settings)).get(speaker) is not None:
+        return False
+    return req.resolve_family(settings.models.default_family) == "custom_voice"
+
+
+async def _stream_vllm(
+    settings: Settings, req: TTSRequest, text: str
+) -> AsyncIterator[Tuple[str, bytes, int]]:
+    """Yield native PCM from vLLM-Omni; yields nothing (to fall back) on failure."""
+    payload = vllm_backend.speech_payload(req, text)
+    started = time.perf_counter()
+    stream = vllm_backend.stream_pcm(settings.vllm.base_url, payload)
+    try:
+        first = await stream.__anext__()
+    except StopAsyncIteration:
+        await stream.aclose()
+        return
+    except Exception:
+        log.warning("vLLM-Omni streaming unavailable; using the local engine", exc_info=True)
+        await stream.aclose()
+        return
+    metrics.observe_ttfa(time.perf_counter() - started)
+    metrics.incr("tts_vllm_sessions")
+    try:
+        yield "", first, settings.audio.sample_rate
+        async for chunk in stream:
+            yield "", chunk, settings.audio.sample_rate
+    finally:
+        await stream.aclose()
+
+
 async def _stream_pcm(
     settings: Settings, scheduler: BatchScheduler, req: TTSRequest, text: str
 ) -> AsyncIterator[Tuple[str, bytes, int]]:
@@ -219,6 +283,16 @@ async def _stream_pcm(
     use_chunking = req.chunking if req.chunking is not None else settings.chunking.enabled
     max_chars = req.max_chars or settings.chunking.max_chars
     chunks = chunk_text(text, max_chars) if use_chunking and text.strip() else ([text] if text.strip() else [])
+
+    # Optional: native codec-window streaming through a vLLM-Omni service.
+    if chunks and _vllm_eligible(settings, req):
+        streamed = False
+        async for out in _stream_vllm(settings, req, text):
+            streamed = True
+            yield out
+        if streamed:
+            return
+
     started = time.perf_counter()
     first = True
     gen_seconds = 0.0
@@ -806,7 +880,11 @@ def create_app(
     @app.get("/v1/audio/voices", tags=["Models"])
     async def openai_voices() -> Dict[str, Any]:
         speakers = await asyncio.to_thread(engine.speakers, "custom_voice")
-        return {"voices": speakers}
+        store = AvatarStore(_avatar_dir(app.state.settings))
+        avatars = [
+            {"id": a.id, "name": a.name, "language": a.language} for a in store.list()
+        ]
+        return {"voices": speakers, "avatars": avatars}
 
     # -------------------------------------------------------------- WS TTS
     @app.websocket("/ws/tts")
@@ -1200,7 +1278,10 @@ def _first_break(text: str, at_least: int, within: int) -> int:
     return idx + 1 if 0 <= idx < within else 0
 
 
-def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN_CHARS) -> Tuple[List[str], str]:
+def _pop_chat_chunks(
+    text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN_CHARS,
+    first_min_chars: int = 0,
+) -> Tuple[List[str], str]:
     """Split streaming LLM text into TTS chunks.
 
     Sentence ends first, then clause/space boundaries once a chunk grows too long.
@@ -1213,9 +1294,11 @@ def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN
     """
     chunks: List[str] = []
     start = 0
+    first_min = first_min_chars or min_chars
     for match in _CHAT_SENTENCE_RE.finditer(text):
         end = match.start()  # end of the sentence (before the separating whitespace)
-        if len(text[start:end].strip()) >= min_chars:
+        need = first_min if not chunks else min_chars
+        if len(text[start:end].strip()) >= need:
             chunks.append(text[start:end].strip())
             start = match.end()
     text = text[start:]
@@ -1225,8 +1308,8 @@ def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN
             break
         chunks.append(text[:cut].strip())
         text = text[cut:].lstrip()
-    if not chunks and len(text) >= min_chars:
-        cut = _first_break(text, min_chars, max_chars)
+    if not chunks and len(text) >= first_min:
+        cut = _first_break(text, first_min, max_chars)
         if cut > 0:
             chunks.append(text[:cut].strip())
             text = text[cut:].lstrip()
@@ -1285,6 +1368,7 @@ async def _chat_turn(
                     buffer,
                     max_chars=settings.chat.max_chars,
                     min_chars=settings.chat.min_chars,
+                    first_min_chars=settings.chat.first_chunk_chars,
                 )
                 for sentence in chunks:
                     await queue.put(sentence)

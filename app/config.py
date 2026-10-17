@@ -214,6 +214,7 @@ class ChatConfig(BaseModel):
 
     min_chars: int = 40    # release the first TTS chunk past this length
     max_chars: int = 160   # split a growing chunk above this length
+    first_chunk_chars: int = 0  # first chunk threshold (0 = same as min_chars)
 
 
 class AuthConfig(BaseModel):

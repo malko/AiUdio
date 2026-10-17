@@ -19,8 +19,12 @@ import numpy as np
 
 from . import languages as lang
 from .chatterbox_backend import ChatterboxClient, resolve_python
+from .metrics import metrics
 
 log = logging.getLogger(__name__)
+
+# A model evicted this soon after its last use signals a hot-swap thrash loop.
+_THRASH_WINDOW_S = 120.0
 
 # Fixed sentences used to render a VoiceDesign reference clip (one per language),
 # which is then cloned to keep the voice stable across generations.
@@ -147,7 +151,18 @@ class TTSEngine:
         limit = self.max_resident()
         while len(self._handles) >= limit and incoming not in self._handles:
             victim = min(self._handles.values(), key=lambda h: h.last_used).family
-            log.info("Evicting model '%s' (hot-swap)", victim)
+            age = time.time() - self._handles[victim].last_used
+            log.info("Evicting model '%s' (hot-swap, idle %.1fs)", victim, age)
+            # Evicting a model used moments ago usually means the app oscillates
+            # between families (e.g. a preset voice and a cloned avatar): every
+            # switch pays a full model load + first-call warm-up again.
+            if age < _THRASH_WINDOW_S:
+                metrics.incr("model_hot_swap_thrash")
+                log.warning(
+                    "Hot-swap thrash: evicting '%s' (idle %.1fs < %.0fs); "
+                    "consider models.residency: multi with it in models.resident",
+                    victim, age, _THRASH_WINDOW_S,
+                )
             self._unload(victim)
 
     def unload(self, family: Optional[str] = None) -> None:
@@ -160,6 +175,7 @@ class TTSEngine:
         self._clone_prompts.clear()
         if handle is None:
             return
+        metrics.incr("model_evictions")
         if isinstance(handle.model, ChatterboxClient):
             handle.model.close()
         del handle.model
@@ -190,6 +206,7 @@ class TTSEngine:
             kwargs["attn_implementation"] = attn
         log.info("Loading %s (%s) on %s [%s]", family, repo, device, attn)
         started = time.perf_counter()
+        metrics.incr("model_loads")
         model = Qwen3TTSModel.from_pretrained(repo, **kwargs)
         log.info("Loaded %s in %.2fs", family, time.perf_counter() - started)
         return ModelHandle(family=family, repo_id=repo, model=model, backend="qwen3")
@@ -207,6 +224,7 @@ class TTSEngine:
         started = time.perf_counter()
         log.info("Loading %s (%s) via Chatterbox on %s (python=%s, watermark=%s)",
                  family, repo, device, python, cfg.watermark)
+        metrics.incr("model_loads")
         client = ChatterboxClient(
             python, family, repo, t3_model=cfg.t3_model,
             device=device, watermark=cfg.watermark,

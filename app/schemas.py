@@ -50,6 +50,10 @@ class TTSRequest(BaseModel):
     ref_audio: Optional[str] = None
     ref_text: Optional[str] = None
     avatar: Optional[str] = None
+    # Per-request clone engine ("qwen3" | "chatterbox"); overrides the admin
+    # default. `engine` is accepted as an alias.
+    clone_backend: Optional[str] = None
+    engine: Optional[str] = None
     x_vector_only_mode: bool = False
     stream: bool = False
     format: Optional[str] = None
@@ -84,6 +88,19 @@ class TTSRequest(BaseModel):
 
     def resolve_speaker(self) -> Optional[str]:
         return self.speaker or self.voice
+
+    def resolve_clone_backend(self) -> Optional[str]:
+        """Normalize the per-request clone engine (None when unspecified)."""
+        value = self.clone_backend or self.engine
+        if value is None:
+            return None
+        value = str(value).strip().lower().replace("-", "_")
+        aliases = {
+            "qwen": "qwen3", "qwen3_tts": "qwen3", "qwen3tts": "qwen3",
+            "qwen3_base": "qwen3", "base": "qwen3",
+            "cb": "chatterbox", "chatterbox_multilingual": "chatterbox",
+        }
+        return aliases.get(value, value)
 
     def resolve_instruct(self) -> Optional[str]:
         return self.instruct if self.instruct is not None else self.instructions

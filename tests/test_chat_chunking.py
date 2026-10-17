@@ -65,3 +65,18 @@ def test_pop_chat_chunks_keeps_short_sentence():
     chunks, rest = _pop_chat_chunks("Hi, ok")
     assert chunks == []
     assert rest == "Hi, ok"
+
+
+def test_pop_chat_chunks_first_chunk_can_be_shorter():
+    # A smaller first-chunk threshold starts the audio earlier.
+    text = "Yes indeed, this is a longer opening sentence that keeps going"
+    chunks, _ = _pop_chat_chunks(text, min_chars=40, first_min_chars=10)
+    assert chunks
+    assert len(chunks[0]) < 40
+
+
+def test_pop_chat_chunks_first_min_falls_back_to_min():
+    text = "Hi there. A second sentence that is long enough to be released."
+    with_first, _ = _pop_chat_chunks(text, first_min_chars=0)
+    without, _ = _pop_chat_chunks(text)
+    assert with_first == without

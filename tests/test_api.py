@@ -318,3 +318,43 @@ def test_metrics(client):
 def test_metrics_requires_admin(auth_client):
     assert auth_client.get("/api/metrics").status_code == 401
     assert auth_client.get("/api/metrics", auth=ADMIN).status_code == 200
+
+
+def test_vllm_streaming_used(client, monkeypatch):
+    from app import vllm_backend
+
+    seen = {}
+
+    async def fake_stream(base_url, payload, **kwargs):
+        seen["payload"] = payload
+        yield b"VLLMPCM1"
+        yield b"VLLMPCM2"
+
+    monkeypatch.setattr(vllm_backend, "stream_pcm", fake_stream)
+    client.app.state.settings.vllm.enabled = True
+    r = client.post("/api/tts", json={"text": "Hello there.", "stream": True, "format": "pcm"})
+    assert r.status_code == 200
+    assert r.content == b"VLLMPCM1VLLMPCM2"
+    assert seen["payload"]["stream"] is True
+    assert seen["payload"]["response_format"] == "pcm"
+
+
+def test_vllm_falls_back_to_local(client, monkeypatch):
+    from app import vllm_backend
+
+    async def failing_stream(base_url, payload, **kwargs):
+        raise RuntimeError("down")
+        yield b""  # pragma: no cover
+
+    monkeypatch.setattr(vllm_backend, "stream_pcm", failing_stream)
+    client.app.state.settings.vllm.enabled = True
+    r = client.post("/api/tts", json={"text": "One. Two.", "stream": True, "format": "pcm"})
+    assert r.status_code == 200
+    assert r.content  # local engine fallback
+
+
+def test_openai_voices_includes_avatars(client):
+    r = client.post("/api/avatars", data={"name": "Narrator", "prompt": "calm", "language": "English"})
+    assert r.status_code == 200, r.text
+    body = client.get("/v1/audio/voices").json()
+    assert any(a["name"] == "Narrator" for a in body["avatars"])

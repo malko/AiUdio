@@ -77,6 +77,44 @@ def test_avatar_explicit_family_overrides_clone_backend(tmp_path):
     assert item["family"] == "chatterbox"
 
 
+def test_voice_can_be_selected_by_id(tmp_path):
+    # The voice-bank id works through `voice`/`speaker` too (OpenAI route).
+    settings = Settings()
+    settings.paths.voices = str(tmp_path / "voices")
+    store = AvatarStore(pathlib.Path(settings.paths.voices) / "avatars")
+    store.save(Avatar(id="narrator", name="Narrator", kind="clone", ref_text="hi"))
+    store.wav_path("narrator").write_bytes(b"RIFF....WAVE")
+    item = _item_from_request(settings, TTSRequest(text="hi", voice="narrator"), "hi")
+    assert item["family"] == "base"
+    assert item["ref_audio"].endswith("narrator.wav")
+
+
+def test_per_request_clone_backend_overrides_default(tmp_path):
+    settings = Settings()  # admin default = qwen3
+    settings.paths.voices = str(tmp_path / "voices")
+    store = AvatarStore(pathlib.Path(settings.paths.voices) / "avatars")
+    store.save(Avatar(id="narrator", name="Narrator", kind="clone", ref_text="hi"))
+    store.wav_path("narrator").write_bytes(b"RIFF....WAVE")
+    item = _item_from_request(
+        settings, TTSRequest(text="hi", avatar="narrator", clone_backend="chatterbox"), "hi"
+    )
+    assert item["family"] == "chatterbox"
+    # `engine` is accepted as an alias, and qwen aliases map back to base.
+    item = _item_from_request(
+        settings, TTSRequest(text="hi", avatar="narrator", engine="qwen3"), "hi"
+    )
+    assert item["family"] == "base"
+
+
+def test_ref_audio_without_family_uses_clone_engine(tmp_path):
+    settings = Settings()
+    item = _item_from_request(
+        settings, TTSRequest(text="hi", ref_audio="data:audio/wav;base64,AAAA",
+                             clone_backend="chatterbox"), "hi"
+    )
+    assert item["family"] == "chatterbox"
+
+
 def test_avatar_personality_roundtrip(tmp_path):
     store = AvatarStore(tmp_path / "avatars")
     avatar = Avatar(id="ai", name="AI", personality="You are a witty assistant.")

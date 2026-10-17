@@ -80,15 +80,16 @@ models:
     backend: chatterbox
   default_family: custom_voice
   default_size: 0.6B
-  residency: single
+  residency: multi
   resident:
   - custom_voice
+  - base
   clone_backend: qwen3
   stabilize_voice_design: false
   chatterbox:
     python: ''
     t3_model: v3
-    watermark: true
+    watermark: false
     default_language: English
   device: auto
   dtype: bfloat16
@@ -112,6 +113,10 @@ chunking:
   enabled: true
   max_chars: 240
   silence_ms: 120
+chat:
+  min_chars: 40
+  max_chars: 160
+  first_chunk_chars: 24
 audio:
   format: wav
   sample_rate: 24000
@@ -146,11 +151,14 @@ ui:
 startup:
   stt_model: nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
   voice: avatar:bugatti
+  tts_family: ''
+  warmup: false
 auth:
   enabled: false
   username: admin
   password: ''
   api_keys: []
+  session_ttl_minutes: 480
   exempt_paths:
   - /health
   - /ready
