@@ -46,23 +46,8 @@ class LLMClient:
                 "POST", self._url("chat/completions"), json=payload, headers=self._headers()
             ) as resp:
                 resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta") or {}
-                    content = delta.get("content")
-                    if content:
-                        yield content
+                async for content in _content_deltas(resp.aiter_lines()):
+                    yield content
 
     async def complete(self, messages: List[Dict[str, str]]) -> str:
         payload = self._payload(messages, stream=False)
@@ -81,6 +66,36 @@ class LLMClient:
             return {"ok": resp.status_code < 400, "status": resp.status_code, "url": self.cfg.base_url}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "url": self.cfg.base_url}
+
+
+async def _content_deltas(lines: AsyncIterator[str]) -> AsyncIterator[str]:
+    """Yield the content deltas of an OpenAI-style SSE stream.
+
+    Stops at the ``[DONE]`` sentinel *or* at the chunk carrying a
+    ``finish_reason``: llama.cpp (and other servers) can keep the connection open
+    for a second or two after the generation is complete, and waiting for the
+    closed stream delays the UI's `llm.done` (and therefore the next turn).
+    """
+    async for line in lines:
+        if not line or not line.startswith("data:"):
+            continue
+        data = line[len("data:"):].strip()
+        if data == "[DONE]":
+            return
+        try:
+            chunk = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        content = delta.get("content")
+        if content:
+            yield content
+        if choice.get("finish_reason"):
+            return
 
 
 def build_messages(system_prompt: str, history: List[Dict[str, str]], user_text: str) -> List[Dict[str, str]]:

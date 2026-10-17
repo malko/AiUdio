@@ -111,7 +111,11 @@ depth, and per-stage timings (`/api/metrics`).
 ### Diagnosing a slow engine (Qwen3-TTS vs Chatterbox)
 
 A large, constant per-request TTFA on Qwen (while Chatterbox feels instant) points at the
-model family, not the pipeline. Check the chat log line above, then `GET /api/metrics`:
+model family, not the pipeline. Measured on a 0.6B CustomVoice clone, synthesis costs
+roughly `gen ≈ 0.6 s + 0.42 × audio_seconds` per call, against ~6-9 ms per character for a
+fast LLM: a whole first sentence therefore starts playing *after* the reply is printed,
+which is what the ~30-char first chunk (above) compensates for. Check the chat log line,
+then `GET /api/metrics`:
 
 - `counters.model_loads` growing every turn ⇒ the family is being **reloaded** (log:
   `Loaded … in X s`). The common cause is oscillating between two families (e.g. a preset
@@ -124,10 +128,9 @@ model family, not the pipeline. Check the chat log line above, then `GET /api/me
   last use). The engine logs `Hot-swap thrash: evicting …` and says whether the victim was
   pinned by `models.resident`.
 - If loads stay flat, `chat tts: first audio … synth Xs` gives the synthesis cost of the
-  first chunk: high `rtf.avg` means the engine itself is the bottleneck (use the 0.6B
-  family, shorter chunks, or route CustomVoice through the `vllm` profile), and a first
-  audio that arrives only once the LLM reply is complete means the first chunk's synthesis
-  is longer than the whole reply.
+  first chunk: with the cost model above, a ~30-char first chunk costs ~0.6 s + 0.42 × 1.7 s
+  ≈ 1.3 s, while a 70-char one costs ~2.2 s. A first audio that arrives only once the LLM
+  reply is complete means the first chunk's synthesis is longer than the whole reply.
 
 ## STT sessions
 
