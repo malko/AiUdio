@@ -36,6 +36,16 @@
           <select id="chat-language"></select>
         </label>
         <div id="chat-voice-list" class="voice-list"></div>
+        <div class="chat-clone-engine">
+          <h3 data-i18n="chat.engineTitle">Engine</h3>
+          <label id="chat-engine-select-wrap"><span data-i18n="chat.cloneBackendShort">Cloned voices</span>
+            <select id="chat-clone-engine">
+              <option value="qwen3" data-i18n="chat.backendQwen">Qwen3-TTS (Base)</option>
+              <option value="chatterbox" data-i18n="chat.backendChatterbox">Chatterbox</option>
+            </select>
+          </label>
+          <div id="chat-engine-fixed" class="muted" data-i18n="chat.engineFixed">Built-in voices always run on Qwen3-TTS (fixed).</div>
+        </div>
       </aside>
       <div class="card chat-main">
         <h2 data-i18n="chat.title">Conversation (external LLM)</h2>
@@ -159,19 +169,6 @@
         <div class="row"><button id="av-new" class="primary" data-i18n="avatars.createBtn">Create a voice</button></div>
         <div id="avatars-list" class="avatars"></div>
       </div>
-      <div class="card">
-        <h2 data-i18n="avatars.engineTitle">Clone engine</h2>
-        <label><span data-i18n="avatars.cloneBackend">Engine used to clone avatars</span>
-          <select id="set-clone-backend">
-            <option value="qwen3" data-i18n="avatars.backendQwen">Qwen3-TTS (Base)</option>
-            <option value="chatterbox" data-i18n="avatars.backendChatterbox">Chatterbox</option>
-          </select>
-        </label>
-        <label class="inline cb-only"><input id="set-cb-watermark" type="checkbox" /> <span data-i18n="avatars.watermark">Watermark output (PerTh)</span></label>
-        <div class="muted" data-i18n="avatars.engineHint">Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.</div>
-        <button id="set-clone-save" class="primary" data-i18n="settings.save">Save</button>
-        <div id="set-clone-status" class="muted"></div>
-      </div>
     </div>
   </section>
 
@@ -248,9 +245,28 @@
           <label class="grow"><span data-i18n="settings.startupVoice">Voice to load</span>
             <select id="set-startup-voice"></select>
           </label>
+          <label class="grow" id="set-startup-engine-wrap" hidden><span data-i18n="chat.cloneBackendShort">Cloned voices</span>
+            <select id="set-startup-engine">
+              <option value="qwen3" data-i18n="chat.backendQwen">Qwen3-TTS (Base)</option>
+              <option value="chatterbox" data-i18n="chat.backendChatterbox">Chatterbox</option>
+            </select>
+          </label>
         </div>
         <button id="set-startup-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="set-startup-status" class="muted"></div>
+      </div>
+      <div class="card">
+        <h2 data-i18n="settings.cloneEngineTitle">Clone engine (default)</h2>
+        <label><span data-i18n="chat.cloneBackend">Engine used to synthesize cloned voices</span>
+          <select id="set-clone-backend">
+            <option value="qwen3" data-i18n="chat.backendQwen">Qwen3-TTS (Base)</option>
+            <option value="chatterbox" data-i18n="chat.backendChatterbox">Chatterbox</option>
+          </select>
+        </label>
+        <label class="inline cb-only"><input id="set-cb-watermark" type="checkbox" /> <span data-i18n="chat.watermark">Watermark output (PerTh)</span></label>
+        <div class="muted" data-i18n="chat.cloneEngineHint">Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.</div>
+        <button id="set-clone-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="set-clone-status" class="muted"></div>
       </div>
       <div class="card">
         <h2 data-i18n="settings.llmTitle">External LLM</h2>

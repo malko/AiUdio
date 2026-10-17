@@ -214,3 +214,6 @@ button.danger:hover { background: var(--err); border-color: var(--err); color: #
   border: 1px solid var(--border); word-break: break-all;
 }
 #set-key-new button { margin-left: 8px; }
+
+.chat-clone-engine { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+.chat-clone-engine h3 { margin: 0 0 8px; font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }

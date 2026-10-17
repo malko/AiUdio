@@ -187,6 +187,7 @@ async function init() {
   if ($("#chat-language")) $("#chat-language").value = "Auto";
 
   applySettingsFields(CONFIG);
+  initCloneEngineSelects();
 
   applyAccessState();
   if (CONFIG.auth_required && !apiKey()) {
@@ -881,6 +882,7 @@ function renderVoiceList() {
   const cur = selectedVoice();
   const wrap = $("#chat-lang-wrap");
   if (wrap) wrap.hidden = !cur || cur.kind === "avatar";
+  updateChatEngineControl();
 }
 
 function voiceLoadBody(v) {
@@ -923,10 +925,30 @@ function chatLang() {
   return s && s.value ? s.value : "Auto";
 }
 
+function chatCloneEngine() {
+  const sel = $("#chat-clone-engine");
+  return (sel && sel.value) || (CONFIG && CONFIG.models && CONFIG.models.clone_backend) || "qwen3";
+}
+
+// Cloned voices let the user pick the engine per session; built-in voices have a
+// forced engine (Qwen3-TTS) so the selector is hidden.
+function updateChatEngineControl() {
+  const v = selectedVoice();
+  const isClone = !!(v && v.kind === "avatar");
+  if ($("#chat-engine-select-wrap")) $("#chat-engine-select-wrap").hidden = !isClone;
+  if ($("#chat-engine-fixed")) $("#chat-engine-fixed").hidden = isClone;
+}
+
+function initCloneEngineSelects() {
+  const backend = (CONFIG && CONFIG.models && CONFIG.models.clone_backend) || "qwen3";
+  if ($("#chat-clone-engine")) $("#chat-clone-engine").value = backend;
+  if ($("#set-startup-engine")) $("#set-startup-engine").value = backend;
+}
+
 function voiceConfig() {
   const v = selectedVoice();
   if (!v) return { family: "custom_voice", language: chatLang() };
-  if (v.kind === "avatar") return { avatar: v.avatarId };
+  if (v.kind === "avatar") return { avatar: v.avatarId, clone_backend: chatCloneEngine() };
   return { family: "custom_voice", speaker: v.speaker, language: chatLang() };
 }
 
@@ -1208,14 +1230,19 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
 }
 
 async function openMicStream() {
-  if (!micDeviceId) return navigator.mediaDevices.getUserMedia({ audio: true });
+  // Enable browser echo cancellation / noise suppression: this is what makes
+  // hands-free barge-in usable without headphones.
+  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  if (!micDeviceId) return navigator.mediaDevices.getUserMedia({ audio });
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micDeviceId } } });
+    return await navigator.mediaDevices.getUserMedia({
+      audio: Object.assign({ deviceId: { exact: micDeviceId } }, audio),
+    });
   } catch (e) {
     if (e && ["OverconstrainedError", "NotFoundError", "DevicesNotFoundError"].includes(e.name)) {
       micDeviceId = "";
       const sel = $("#stt-mic-device"); if (sel) sel.value = "";
-      return navigator.mediaDevices.getUserMedia({ audio: true });
+      return navigator.mediaDevices.getUserMedia({ audio });
     }
     throw e;
   }
@@ -1538,6 +1565,7 @@ $("#chat-send").addEventListener("click", chatSend);
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") chatSend(); });
 $("#chat-speak").addEventListener("change", sendChatConfig);
 $("#chat-language").addEventListener("change", sendChatConfig);
+$("#chat-clone-engine").addEventListener("change", sendChatConfig);
 $("#chat-stop").addEventListener("click", () => interruptChat(t("chat.stopped")));
 
 // Chat dictation: push-to-talk, or continuous with voice-activity detection (VAD).
@@ -1549,6 +1577,14 @@ const VAD_THRESHOLD = 0.015;        // RMS above which we consider speech
 const VAD_SILENCE_MS = 900;         // silence after speech => end of utterance
 const VAD_BARGE_THRESHOLD = 0.03;   // louder threshold to interrupt the assistant
 const VAD_BARGE_MS = 300;           // sustained speech needed to barge in
+
+// Endpoint sooner when the streaming transcript already looks like a complete
+// sentence (lower time-to-response without cutting the user off mid-phrase).
+function vadSilenceMs() {
+  const partial = (dictatePartial || "").trim();
+  if (partial && /[.!?…。！？]$/.test(partial)) return Math.round(VAD_SILENCE_MS * 0.5);
+  return VAD_SILENCE_MS;
+}
 
 function takeUtteranceText() {
   const text = (dictateText + dictatePartial).trim();
@@ -1625,7 +1661,7 @@ function startVadLoop() {
           if ($("#chat-status")) $("#chat-status").textContent = t("chat.vadListening");
         }
         vadLastVoice = now;
-      } else if (vadSpeaking && now - vadLastVoice > VAD_SILENCE_MS) {
+      } else if (vadSpeaking && now - vadLastVoice > vadSilenceMs()) {
         vadSpeaking = false;
         endUtterance();
       }
@@ -1734,24 +1770,50 @@ function buildStartupVoiceSelect() {
   add("base", ttsName("base"));
   avatars.forEach((a) => add(`avatar:${a.id}`, `${t("avatars.voicePrefix")}: ${a.name}`));
   sel.value = current || "";
+  toggleStartupEngine();
 }
 
+// The startup engine only matters for cloned voices; built-in families force
+// Qwen3-TTS.
+function toggleStartupEngine() {
+  const sel = $("#set-startup-voice");
+  const wrap = $("#set-startup-engine-wrap");
+  if (!sel || !wrap) return;
+  wrap.hidden = !(sel.value || "").startsWith("avatar:");
+}
+
+$("#set-startup-voice").addEventListener("change", toggleStartupEngine);
+
 $("#set-startup-save").addEventListener("click", async () => {
-  $("#set-startup-status").textContent = "…";
+  const status = $("#set-startup-status");
+  status.textContent = "…";
+  const voice = $("#set-startup-voice").value;
+  const payload = {
+    startup: { stt_model: settingsSttPicker ? settingsSttPicker.value : "", voice },
+  };
+  if (voice.startsWith("avatar:") && $("#set-startup-engine")) {
+    // Same setting as the conversation default; leaving it untouched keeps the
+    // service default engine.
+    payload.models = { clone_backend: $("#set-startup-engine").value };
+  }
   try {
     const r = await apiFetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startup: { stt_model: settingsSttPicker ? settingsSttPicker.value : "", voice: $("#set-startup-voice").value } }),
+      body: JSON.stringify(payload),
     });
     const text = await r.text();
     if (!r.ok) {
       let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
       throw new Error(detail);
     }
-    $("#set-startup-status").textContent = t("status.saved");
+    const cfg = JSON.parse(text);
+    CONFIG = Object.assign({}, CONFIG, { startup: cfg.startup, models: cfg.models });
+    applyCloneEngineFields(cfg);
+    initCloneEngineSelects();
+    status.textContent = t("status.saved");
   } catch (e) {
-    $("#set-startup-status").textContent = `${t("status.error")} ${e}`;
+    status.textContent = `${t("status.error")} ${e}`;
   }
 });
 
@@ -1850,6 +1912,7 @@ $("#set-clone-save").addEventListener("click", async () => {
     const cfg = JSON.parse(text);
     CONFIG = Object.assign({}, CONFIG, { models: cfg.models });
     applyCloneEngineFields(cfg);
+    initCloneEngineSelects();
     status.textContent = t("status.saved");
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
