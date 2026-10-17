@@ -24,8 +24,14 @@ deps: ## Install development dependencies (without the models)
 test: ## Run the test suite
 	pytest -q
 
+test-docker: ## Run the test suite inside the built image (no GPU needed)
+	$(COMPOSE) run --rm --no-deps --entrypoint pytest aiudio -q
+
 lint: ## Check style (ruff, if available)
 	ruff check app tests || true
+
+lint-docker: ## Run ruff inside the built image
+	$(COMPOSE) run --rm --no-deps --entrypoint ruff aiudio check app tests
 
 audit: ## Audit dependencies for known vulnerabilities (pip-audit)
 	pip-audit -r requirements.txt --no-deps --disable-pip || true

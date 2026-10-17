@@ -17,6 +17,8 @@ htmlcov/
 # --- Project runtime data ---
 outputs/
 !outputs/.gitkeep
+state/
+!state/.gitkeep
 logs/
 !logs/.gitkeep
 *.log

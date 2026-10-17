@@ -136,8 +136,15 @@ docker volume rm aiudio_aiudio_state   # namespaced: <project>_aiudio_state
 docker compose up -d
 ```
 
-For local (non-Docker) development the app reads/writes `config.yaml` directly; set
-`CONFIG_PATH`/`CONFIG_DEFAULTS` to use the same split locally.
+### Validating changes (Docker)
+
+The stack is the reference environment — validation runs **in the image**, not on the host:
+
+```bash
+make test-docker   # pytest inside the built aiudio image (no GPU needed)
+make lint-docker   # ruff inside the image
+make up            # full stack
+```
 
 ## Hardware
 
@@ -388,13 +395,16 @@ assessment** and a dependency audit are in [`docs/security.md`](docs/security.md
 
 ## Development
 
+The stack runs in Docker; validate changes in the built image (no GPU needed for tests):
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-pytest -q                      # tests without GPU (mocked engine)
-uvicorn app.main:app --reload  # dev server (the real TTS engine needs qwen-tts + GPU)
-make lint
+make test-docker   # pytest inside the aiudio image
+make lint-docker   # ruff inside the image
+make up            # start the stack
 ```
+
+(For editor tooling, `pip install -r requirements.txt -r requirements-dev.txt` and running
+`pytest`/`ruff` directly also works, but Docker is the reference.)
 
 ## Commit conventions (gitmoji)
 

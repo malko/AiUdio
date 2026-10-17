@@ -25,12 +25,13 @@ per request with `clone_backend`/`engine`.
 
 ## Run it (for manual testing)
 
+Everything runs in Docker, including validation:
+
 ```bash
-cp .env.example .env          # set PORT, HF_TOKEN, optional AUTH_*, LLM_*
-docker compose up -d --build   # gateway :8004, STT :8080
-# tests / lint (no GPU needed):
-python3 -m pytest -q
-python3 -m ruff check app tests
+cp .env.example .env            # set PORT, HF_TOKEN, optional AUTH_*, LLM_*
+docker compose up -d --build    # gateway :8004, STT :8080
+make test-docker                # pytest inside the built image (no GPU needed)
+make lint-docker                # ruff inside the image
 ```
 
 The first request to a model family downloads several GB of weights.
@@ -38,6 +39,8 @@ The first request to a model family downloads several GB of weights.
 `config.yaml` is mounted read-only as **defaults**; runtime settings (UI/API) persist in
 the writable `aiudio_state` volume (`CONFIG_PATH=/app/state/config.yaml`). To re-apply
 defaults, remove that volume (`docker compose down && docker volume rm aiudio_aiudio_state`).
+Outside Docker the default config path is `state/config.yaml`, so a bare run never rewrites
+the repository file.
 
 ## Minimal integration contract
 

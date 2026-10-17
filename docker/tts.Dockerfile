@@ -42,7 +42,8 @@ RUN pip install --upgrade pip \
         && if [ -n "$TORCH_SPEC" ]; then \
              pip install --force-reinstall --no-deps $TORCH_SPEC --index-url ${TORCH_INDEX_URL} ; \
            fi ; \
-    fi
+    fi \
+ && pip install pytest ruff
 
 # Chatterbox backend: isolated venv (its own transformers, but reuses the base
 # image's CUDA 13 torch). Placed before COPY app so app changes do not invalidate

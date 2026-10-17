@@ -15,7 +15,10 @@ from .apikeys import ApiKey, from_legacy
 
 log = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
+# Writable runtime config. Defaults to a state path so a bare run never writes
+# the repository's config.yaml (which is used read-only as CONFIG_DEFAULTS in
+# Docker). Override with CONFIG_PATH (docker-compose sets /app/state/config.yaml).
+DEFAULT_CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "state/config.yaml"))
 
 
 def _defaults_path() -> Optional[Path]:
