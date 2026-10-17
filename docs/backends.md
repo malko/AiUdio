@@ -116,5 +116,5 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
 | STT Nemotron 3.5 Q8 (ggml) | < 1 GB |
 | vLLM-Omni (1.7B + caches) | ~8–12 GB |
 
-With `residency: single`, only one TTS model is loaded at a time → target 8 GB+ for
-TTS + STT. For multi-residency, add up the models.
+With `residency: single` (the default), only one TTS model is loaded at a time → target 8 GB+
+for TTS + STT. For multi-residency (`TTS_RESIDENCY=multi`), add up the models.

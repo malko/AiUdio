@@ -175,6 +175,8 @@ Override the repositories via `config.yaml` (`models.registry`) or the environme
 variables `TTS_CUSTOM_VOICE`, `TTS_VOICE_DESIGN`, `TTS_BASE`. 0.6B variants are supported.
 Select the clone engine with `models.clone_backend` (`TTS_CLONE_BACKEND`) and point the
 isolated Chatterbox venv with `models.chatterbox.python` (`TTS_CHATTERBOX_PYTHON`).
+Residency is `single` by default; set `TTS_RESIDENCY=multi` to keep every family in
+`models.resident` loaded.
 
 Pick a per-family version in the Synthesis tab (**Model → Version**), or set the global Qwen
 size with `models.default_size` (`0.6B` or `1.7B`). Families without a matching variant keep
@@ -239,11 +241,12 @@ models:
 
 Loading strategy in `config.yaml`:
 
-- `models.residency: multi` (default, `resident: [custom_voice, base]`) → keeps the chat
-  family and the clone family loaded, so switching between preset and cloned voices does not
-  reload (and re-warm up) the model.
-- `models.residency: single` → a single model in VRAM, automatic hot-swap (less VRAM, but
-  every family switch pays a full load).
+- `models.residency: single` (default, `resident: [custom_voice]`) → a single model in VRAM
+  at a time, automatic hot-swap: less VRAM, but every family switch pays a full load.
+- `models.residency: multi` → keeps the models listed in `models.resident` loaded (e.g.
+  `[custom_voice, base]`), so switching between preset and cloned voices does not reload (and
+  re-warm up) the model. Needs room for all of them at once; set it with
+  `TTS_RESIDENCY=multi` (see below) or edit `config.yaml`.
 
 The **web UI (Synthesis tab)** exposes a model + version selector with plain-language
 descriptions and a **Load** button (models load lazily on first use anyway). The **Transcription
@@ -404,7 +407,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | Symptom | Hint |
 |---|---|
 | `CDI device injection failed` | NVIDIA runtime/plugin; use `runtime: nvidia` or update the toolkit |
-| `CUDA out of memory` | `models.residency: single`, rely on hot-swap, or use 0.6B |
+| `CUDA out of memory` | keep `models.residency: single` (default), or use 0.6B |
 | Very long first call | weights are downloading (check logs / `hf_cache`) |
 | Authenticated WS fails | use an API key (Basic does not work over browser WebSocket) |
 | STT unreachable | `docker compose logs stt`; the upstream build may need a path adjustment (`cmake --install`) |

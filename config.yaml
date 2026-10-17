@@ -80,10 +80,11 @@ models:
     backend: chatterbox
   default_family: custom_voice
   default_size: 0.6B
-  residency: multi
+  # single: one family in VRAM at a time (hot-swap). multi: keep models.resident
+  # loaded (more VRAM); also settable with TTS_RESIDENCY=multi.
+  residency: single
   resident:
   - custom_voice
-  - base
   clone_backend: qwen3
   stabilize_voice_design: false
   chatterbox:

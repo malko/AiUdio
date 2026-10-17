@@ -44,6 +44,14 @@ def test_env_override(tmp_path, monkeypatch):
     assert store.settings.auth.enabled is True
 
 
+def test_residency_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("TTS_RESIDENCY", "multi")
+    assert ConfigStore(tmp_path / "a.yaml").settings.models.residency == "multi"
+    # An unknown value is ignored (the file/default wins), not an error.
+    monkeypatch.setenv("TTS_RESIDENCY", "bogus")
+    assert ConfigStore(tmp_path / "b.yaml").settings.models.residency == "single"
+
+
 def test_legacy_plaintext_keys_are_hashed(tmp_path):
     from app.apikeys import hash_key
 

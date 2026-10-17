@@ -43,10 +43,10 @@ Protocol modeled on vLLM-Omni for compatibility/passthrough:
 
 ## Model management
 
-- **Hot-swap** (`residency: single`): before loading a new family, the current model is
-  evicted LRU (`del` + `gc.collect()` + `torch.cuda.empty_cache()`).
-- **Multi-residency** (`residency: multi`): keeps `resident` loaded; others are evicted on
-  demand.
+- **Hot-swap** (`residency: single`, default): before loading a new family, the current model
+  is evicted LRU (`del` + `gc.collect()` + `torch.cuda.empty_cache()`).
+- **Multi-residency** (`residency: multi`, opt-in via `TTS_RESIDENCY=multi`): keeps
+  `models.resident` loaded; others are evicted on demand (needs more VRAM).
 - **Lock**: inference and hot-swap are serialized by an `RLock`; blocking calls run through
   `asyncio.to_thread` so the event loop is never blocked.
 - **Clone prompt cache**: `create_voice_clone_prompt` is memoized by hash (reference).

@@ -41,7 +41,7 @@ depth, and per-stage timings (`/api/metrics`).
   run-on openings are still cut early at the first clause or word boundary.
 - **Preload + optional warm-up**: `startup.tts_family` preloads a family at boot;
   `startup.warmup: true` runs a tiny synthesis to absorb CUDA init. `residency: multi`
-  keeps several families hot.
+  keeps several families hot (more VRAM; `TTS_RESIDENCY=multi`, `single` by default).
 - **Adaptive client endpointing**: the VAD shortens the silence window when the streaming
   transcript already ends with sentence punctuation (faster turn-taking).
 - **Browser echo cancellation**: the mic is opened with `echoCancellation`,
@@ -61,8 +61,10 @@ model family, not the pipeline. Check `GET /api/metrics`:
 
 - `counters.model_loads` growing every turn ⇒ the family is being **reloaded**. The common
   cause is oscillating between two families (e.g. a preset `custom_voice` voice and a cloned
-  `base` avatar) under `residency: single`. Fix: `residency: multi` with both in
-  `models.resident` (the shipped default), or pin a single voice.
+  `base` avatar) under `residency: single` (the default). Fix: `TTS_RESIDENCY=multi` (or set
+  `models.residency: multi`) with both families in `models.resident`, or pin a single voice.
+  On a small GPU, staying on `single` and accepting the swap is the safer trade-off (two
+  families plus STT in VRAM can exhaust it).
 - `counters.model_hot_swap_thrash` > 0 confirms it (a model was evicted within 120 s of its
   last use). The engine logs `Hot-swap thrash: evicting …`.
 - If loads stay flat but `ttfa_seconds.avg` is high, it is the engine itself: use the 0.6B

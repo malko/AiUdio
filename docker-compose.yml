@@ -46,6 +46,10 @@ services:
       - CONFIG_PATH=/app/state/config.yaml
       - HF_TOKEN=${HF_TOKEN:-}
       - HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-1}
+      # Model residency: 'single' (default, one family in VRAM at a time) or
+      # 'multi' (keep models.resident loaded; needs more VRAM). Unset keeps the
+      # value persisted in the state volume.
+      - TTS_RESIDENCY=${TTS_RESIDENCY:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       # LLM/Auth: only override when explicitly set in .env, otherwise the values

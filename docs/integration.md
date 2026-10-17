@@ -201,8 +201,9 @@ If you prefer to own the orchestration, chain the pieces yourself:
 
 - **Prefer streaming** (`stream=true` or `/ws/tts`) for interactive apps; the server emits
   audio per sentence so time-to-first-audio stays low.
-- **Pre-warm** the voice/model at session start (`POST /api/voices/load`) and keep the model
-  resident (`models.residency: multi`).
+- **Pre-warm** the voice/model at session start (`POST /api/voices/load`) and, when the GPU
+  has room, keep several families resident (`TTS_RESIDENCY=multi`; the default `single`
+  hot-swaps and reloads on every family switch).
 - **Jitter buffer**: buffer ~150–300 ms (or 2 chunks) before starting playback to absorb
   variation between chunks; concatenate to an `AudioContext`/`AudioTrack` at the sample
   rate from `X-Sample-Rate`.

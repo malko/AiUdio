@@ -317,6 +317,14 @@ def _apply_env(settings: Settings) -> Settings:
             settings.models.registry[family] = v
     if v := os.environ.get("TTS_CLONE_BACKEND"):
         settings.models.clone_backend = v.strip().lower()
+    # Keep a single model in VRAM by default (local installs); opt into keeping
+    # several families resident (chat + clone) when the GPU has room for it.
+    if v := os.environ.get("TTS_RESIDENCY"):
+        residency = v.strip().lower()
+        if residency in {"single", "multi"}:
+            settings.models.residency = residency
+        else:
+            log.warning("Ignoring TTS_RESIDENCY=%r (expected 'single' or 'multi')", v)
     if v := os.environ.get("TTS_CHATTERBOX_PYTHON"):
         settings.models.chatterbox.python = v
     return settings
