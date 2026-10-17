@@ -225,7 +225,25 @@ def create_app(
     )
     llm = LLMClient(settings.llm)
 
-    app = FastAPI(title="AiUdio Server", version=__version__)
+    app = FastAPI(
+        title="AiUdio Server",
+        version=__version__,
+        description=(
+            "Self-hosted TTS/STT gateway. The web UI is a demo/admin front; this "
+            "API is the integration contract. TTS/STT/chat are also exposed with "
+            "OpenAI-compatible routes."
+        ),
+        openapi_tags=[
+            {"name": "Service", "description": "Health, readiness and capability discovery."},
+            {"name": "Access", "description": "API keys and admin sessions."},
+            {"name": "Models", "description": "TTS model families, versions and voices."},
+            {"name": "TTS", "description": "Text-to-speech (REST, OpenAI-compatible, WebSocket)."},
+            {"name": "Avatars", "description": "Reusable cloned voices."},
+            {"name": "STT", "description": "Speech-to-text (file, realtime WebSocket, diarization)."},
+            {"name": "Chat", "description": "STT -> external LLM -> TTS conversation."},
+            {"name": "Settings", "description": "Runtime configuration."},
+        ],
+    )
     app.state.store = store
     app.state.settings = settings
     app.state.engine = engine
@@ -262,7 +280,7 @@ def create_app(
         await scheduler.stop()
 
     # ------------------------------------------------------------------ pages
-    @app.get("/health")
+    @app.get("/health", tags=["Service"])
     async def health() -> Dict[str, Any]:
         return {
             "status": "ok",
@@ -272,16 +290,71 @@ def create_app(
             "loaded": engine.loaded_families(),
         }
 
-    @app.get("/")
+    @app.get("/ready", tags=["Service"])
+    async def ready() -> Response:
+        """Readiness: the scheduler is running and the app finished starting up."""
+        ready_ok = getattr(scheduler, "_task", None) is not None
+        return JSONResponse(
+            {"ready": ready_ok, "version": __version__},
+            status_code=200 if ready_ok else 503,
+        )
+
+    @app.get("/", tags=["Service"])
     async def index() -> FileResponse:
         return FileResponse(UI_DIR / "index.html")
 
     # ------------------------------------------------------------- config API
-    @app.get("/api/config")
+    @app.get("/api/config", tags=["Service"])
     async def api_config() -> Dict[str, Any]:
         return _public_config(app.state.settings, engine)
 
-    @app.get("/api/models")
+    @app.get("/api/capabilities", tags=["Service"])
+    async def api_capabilities() -> Dict[str, Any]:
+        """Machine-readable capabilities, for dynamic clients and AI agents."""
+        s = app.state.settings
+        families = [
+            {"family": f["family"], "backend": f["backend"], "repo": f["repo_id"]}
+            for f in engine.available()
+        ]
+        return {
+            "name": "AiUdio Server",
+            "version": __version__,
+            "auth": {"required": s.auth.enabled, "scheme": "basic+api_key"},
+            "api": {
+                "openapi": "/openapi.json",
+                "docs": "/docs",
+                "health": "/health",
+                "ready": "/ready",
+            },
+            "tts": {
+                "families": families,
+                "clone_backend": s.models.clone_backend,
+                "formats": ["wav", "pcm"],
+                "sample_rate": s.audio.sample_rate,
+                "streaming": "sentence-level PCM",
+                "http": "/api/tts",
+                "openai": "/v1/audio/speech",
+                "websocket": "/ws/tts",
+                "voices": "/api/voices",
+            },
+            "avatars": {
+                "rest": "/api/avatars",
+                "fingerprint": "/api/avatars/fingerprint",
+            },
+            "stt": {
+                "enabled": s.stt.enabled,
+                "http": "/v1/audio/transcriptions",
+                "diarization": "/api/stt/diarize",
+                "websocket": "/ws/stt",
+            },
+            "chat": {
+                "websocket": "/ws/chat",
+                "sse": "/api/chat",
+                "llm": "external OpenAI-compatible",
+            },
+        }
+
+    @app.get("/api/models", tags=["Models"])
     async def api_models() -> Dict[str, Any]:
         return {
             "families": engine.available(),
@@ -291,7 +364,7 @@ def create_app(
             "loaded": engine.loaded_families(),
         }
 
-    @app.post("/api/models/select")
+    @app.post("/api/models/select", tags=["Models"])
     async def api_models_select(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Set the global model size (0.6B/1.7B) from a variant id."""
         wanted = str(payload.get("variant") or payload.get("id") or payload.get("repo") or "").strip()
@@ -320,7 +393,7 @@ def create_app(
             "loaded": engine.loaded_families(),
         }
 
-    @app.post("/api/models/load")
+    @app.post("/api/models/load", tags=["Models"])
     async def api_models_load(payload: Dict[str, Any]) -> Dict[str, Any]:
         family = str(payload.get("family", "")).strip()
         if family not in app.state.settings.models.registry:
@@ -332,13 +405,13 @@ def create_app(
             raise HTTPException(503, f"Load failed: {exc}") from exc
         return {"loaded": engine.loaded_families(), "active_family": engine.active_family()}
 
-    @app.post("/api/models/unload")
+    @app.post("/api/models/unload", tags=["Models"])
     async def api_models_unload(payload: Dict[str, Any]) -> Dict[str, Any]:
         family = payload.get("family")
         await asyncio.to_thread(engine.unload, family)
         return {"loaded": engine.loaded_families()}
 
-    @app.get("/api/voices")
+    @app.get("/api/voices", tags=["Models"])
     async def api_voices(family: str = "custom_voice") -> Dict[str, Any]:
         refs = sorted(
             p.name for p in Path(app.state.settings.paths.reference_audio).glob("*") if p.is_file()
@@ -350,7 +423,7 @@ def create_app(
         }
 
     # ------------------------------------------------------------- avatars
-    @app.post("/api/voices/load")
+    @app.post("/api/voices/load", tags=["Models"])
     async def api_voices_load(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Warm a conversation voice: load the model and prepare its clone prompt."""
         avatar_id = str(payload.get("avatar") or "").strip()
@@ -380,12 +453,12 @@ def create_app(
             raise HTTPException(503, f"Load failed: {exc}") from exc
         return {"loaded": engine.loaded_families(), "active_family": engine.active_family()}
 
-    @app.get("/api/avatars")
+    @app.get("/api/avatars", tags=["Avatars"])
     async def list_avatars() -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
         return {"avatars": [asdict(a) for a in store.list()]}
 
-    @app.post("/api/avatars/fingerprint")
+    @app.post("/api/avatars/fingerprint", tags=["Avatars"])
     async def create_fingerprint(
         prompt: str = Form(...),
         language: str = Form("Auto"),
@@ -403,7 +476,7 @@ def create_app(
             raise HTTPException(503, f"Fingerprint generation failed: {exc}") from exc
         return Response(content=wav_bytes(arr, sr), media_type="audio/wav")
 
-    @app.post("/api/avatars")
+    @app.post("/api/avatars", tags=["Avatars"])
     async def create_avatar(
         name: str = Form(...),
         prompt: str = Form(""),
@@ -445,7 +518,7 @@ def create_app(
         await asyncio.to_thread(engine.clear_clone_prompts)
         return asdict(store.get(aid))
 
-    @app.put("/api/avatars/{avatar_id}")
+    @app.put("/api/avatars/{avatar_id}", tags=["Avatars"])
     async def update_avatar(
         avatar_id: str,
         name: Optional[str] = Form(None),
@@ -491,7 +564,7 @@ def create_app(
         await asyncio.to_thread(engine.clear_clone_prompts)
         return asdict(store.get(avatar_id))
 
-    @app.post("/api/avatars/{avatar_id}/regenerate")
+    @app.post("/api/avatars/{avatar_id}/regenerate", tags=["Avatars"])
     async def regenerate_avatar(avatar_id: str) -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
         avatar = store.get(avatar_id)
@@ -507,28 +580,28 @@ def create_app(
         await asyncio.to_thread(engine.clear_clone_prompts)
         return asdict(store.get(avatar_id))
 
-    @app.delete("/api/avatars/{avatar_id}")
+    @app.delete("/api/avatars/{avatar_id}", tags=["Avatars"])
     async def delete_avatar(avatar_id: str) -> Dict[str, Any]:
         store = AvatarStore(_avatar_dir(app.state.settings))
         store.delete(avatar_id)
         await asyncio.to_thread(engine.clear_clone_prompts)
         return {"deleted": avatar_id}
 
-    @app.get("/api/avatars/{avatar_id}/audio")
+    @app.get("/api/avatars/{avatar_id}/audio", tags=["Avatars"])
     async def avatar_audio(avatar_id: str) -> FileResponse:
         path = AvatarStore(_avatar_dir(app.state.settings)).wav_path(avatar_id)
         if not path.is_file():
             raise HTTPException(404, "No audio")
         return FileResponse(str(path), media_type="audio/wav")
 
-    @app.get("/api/avatars/{avatar_id}/photo")
+    @app.get("/api/avatars/{avatar_id}/photo", tags=["Avatars"])
     async def avatar_photo(avatar_id: str) -> FileResponse:
         path = AvatarStore(_avatar_dir(app.state.settings)).photo_path(avatar_id)
         if not path.is_file():
             raise HTTPException(404, "No photo")
         return FileResponse(str(path))
 
-    @app.put("/api/settings")
+    @app.put("/api/settings", tags=["Settings"])
     async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
         allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models"}
         sections = {k: v for k, v in payload.items() if k in allowed}
@@ -565,7 +638,7 @@ def create_app(
                 headers={"WWW-Authenticate": 'Basic realm="aiudio"'},
             )
 
-    @app.post("/api/session")
+    @app.post("/api/session", tags=["Access"])
     async def create_session(request: Request) -> Dict[str, Any]:
         """Mint a short-lived admin key from the HTTP Basic credentials.
 
@@ -579,7 +652,7 @@ def create_app(
         log.info("Admin session key issued (ttl=%s min)", ttl)
         return {"key": raw, "id": record.id, "expires_at": record.expires_at, "admin": True}
 
-    @app.post("/api/session/logout")
+    @app.post("/api/session/logout", tags=["Access"])
     async def close_session(request: Request) -> Dict[str, Any]:
         token = presented_key(
             request.headers.get("authorization"),
@@ -591,7 +664,7 @@ def create_app(
             apikeys.drop_session(record.id)
         return {"revoked": record is not None}
 
-    @app.get("/api/api-keys")
+    @app.get("/api/api-keys", tags=["Access"])
     async def list_api_keys(request: Request) -> Dict[str, Any]:
         if not app.state.settings.auth.enabled:
             return {"enabled": False, "keys": []}
@@ -600,7 +673,7 @@ def create_app(
         keys.sort(key=lambda k: k["created_at"], reverse=True)
         return {"enabled": True, "keys": keys}
 
-    @app.post("/api/api-keys")
+    @app.post("/api/api-keys", tags=["Access"])
     async def create_api_key(request: Request) -> Dict[str, Any]:
         _admin_ok(request)
         try:
@@ -618,7 +691,7 @@ def create_app(
         )
         return {"key": raw, **apikeys.public(record)}
 
-    @app.delete("/api/api-keys/{key_id}")
+    @app.delete("/api/api-keys/{key_id}", tags=["Access"])
     async def delete_api_key(key_id: str, request: Request) -> Dict[str, Any]:
         _admin_ok(request)
         current = app.state.settings.auth.api_keys
@@ -631,7 +704,7 @@ def create_app(
         return {"deleted": key_id}
 
     # ------------------------------------------------------------------- TTS
-    @app.post("/api/tts")
+    @app.post("/api/tts", tags=["TTS"])
     async def api_tts(req: TTSRequest) -> Response:
         texts = req.resolve_texts()
         if not texts:
@@ -673,11 +746,11 @@ def create_app(
             log.exception("Streaming error")
             yield b""
 
-    @app.post("/v1/audio/speech")
+    @app.post("/v1/audio/speech", tags=["TTS"])
     async def openai_speech(req: TTSRequest) -> Response:
         return await api_tts(req)
 
-    @app.get("/v1/audio/voices")
+    @app.get("/v1/audio/voices", tags=["Models"])
     async def openai_voices() -> Dict[str, Any]:
         speakers = await asyncio.to_thread(engine.speakers, "custom_voice")
         return {"voices": speakers}
@@ -719,7 +792,7 @@ def create_app(
                 pass
 
     # -------------------------------------------------------------- STT proxy
-    @app.get("/api/stt/health")
+    @app.get("/api/stt/health", tags=["STT"])
     async def stt_health() -> Dict[str, Any]:
         cfg = app.state.settings.stt
         if not cfg.enabled:
@@ -731,7 +804,7 @@ def create_app(
         except Exception as exc:
             return {"enabled": True, "error": str(exc)}
 
-    @app.get("/api/stt/models")
+    @app.get("/api/stt/models", tags=["STT"])
     async def stt_models() -> Dict[str, Any]:
         cfg = app.state.settings.stt
         if not cfg.enabled:
@@ -746,7 +819,7 @@ def create_app(
             "models": index.with_status(cfg.models_dir, active),
         }
 
-    @app.post("/api/stt/download")
+    @app.post("/api/stt/download", tags=["STT"])
     async def stt_download(payload: Dict[str, Any]) -> StreamingResponse:
         cfg = app.state.settings.stt
         if not cfg.enabled:
@@ -774,7 +847,7 @@ def create_app(
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    @app.post("/v1/audio/transcriptions")
+    @app.post("/v1/audio/transcriptions", tags=["STT"])
     async def proxy_transcription(
         file: UploadFile = File(...),
         response_format: str = Form("json"),
@@ -809,7 +882,7 @@ def create_app(
             media_type=resp.headers.get("content-type", "application/json"),
         )
 
-    @app.post("/api/stt/diarize")
+    @app.post("/api/stt/diarize", tags=["STT"])
     async def proxy_diarize(file: UploadFile = File(...)) -> Response:
         cfg = app.state.settings.stt
         if not cfg.enabled:
@@ -854,11 +927,11 @@ def create_app(
                 pass
 
     # ------------------------------------------------------------- LLM / chat
-    @app.get("/api/llm/ping")
+    @app.get("/api/llm/ping", tags=["Chat"])
     async def llm_ping() -> Dict[str, Any]:
         return await app.state.llm.ping()
 
-    @app.post("/api/chat")
+    @app.post("/api/chat", tags=["Chat"])
     async def api_chat(payload: Dict[str, Any]) -> StreamingResponse:
         text = str(payload.get("text") or payload.get("input") or "").strip()
         history = payload.get("history") or []

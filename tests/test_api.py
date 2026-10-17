@@ -276,3 +276,24 @@ def test_client_key_cannot_manage_keys(auth_client):
 def test_api_keys_disabled(client):
     body = client.get("/api/api-keys").json()
     assert body == {"enabled": False, "keys": []}
+
+
+def test_capabilities(client):
+    body = client.get("/api/capabilities").json()
+    assert body["name"] == "AiUdio Server"
+    assert body["tts"]["websocket"] == "/ws/tts"
+    assert body["chat"]["websocket"] == "/ws/chat"
+    assert any(f["family"] == "chatterbox" for f in body["tts"]["families"])
+
+
+def test_ready(client):
+    r = client.get("/ready")
+    assert r.status_code == 200
+    assert r.json()["ready"] is True
+
+
+def test_openapi_is_tagged(client):
+    spec = client.get("/openapi.json").json()
+    names = {t["name"] for t in spec.get("tags", [])}
+    assert {"Service", "Access", "TTS", "STT", "Chat", "Models", "Avatars"} <= names
+    assert spec["paths"]["/api/tts"]["post"]["tags"] == ["TTS"]
