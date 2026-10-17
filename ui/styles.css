@@ -82,6 +82,7 @@ button.primary:hover { background: var(--accent-2); border-color: var(--accent-2
 button:disabled { opacity: .5; cursor: not-allowed; }
 
 .row > button { flex: 0 0 auto; }
+#chat-vad { min-width: auto; padding: 6px 10px; font-size: .8rem; font-weight: 600; }
 .grow { flex: 1 1 220px; }
 
 progress { width: 100%; margin-top: 8px; accent-color: var(--accent); }
@@ -169,6 +170,15 @@ summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 .bubble.user { background: var(--accent); color: #201203; border-bottom-right-radius: 4px; }
 .bubble.assistant { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 .bubble.cancelled { opacity: .5; }
+.bubble-stack { display: flex; flex-direction: column; align-items: flex-start; max-width: 78%; }
+.bubble-stack .bubble { max-width: 100%; }
+.bubble-actions { display: flex; gap: 6px; margin-top: 3px; }
+.bubble-replay {
+  padding: 1px 8px; font-size: .8rem; line-height: 1.5; cursor: pointer;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border); border-radius: 10px;
+}
+.bubble-replay:hover { color: var(--text); }
+.bubble-replay:disabled { opacity: .6; cursor: default; }
 .bubble-icon {
   width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto;
   background: var(--bg) center/cover; border: 1px solid var(--border);

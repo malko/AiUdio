@@ -172,10 +172,36 @@ function applySettingsFields(cfg) {
   $("#set-llm-url").value = cfg.llm.base_url || "";
   $("#set-llm-model").value = cfg.llm.model || "";
   $("#set-llm-system").value = cfg.llm.system_prompt || "";
-  $("#set-temp").value = cfg.generation.temperature;
-  $("#set-batch").value = cfg.generation.batch_size;
-  $("#set-maxchars").value = cfg.chunking.max_chars;
   $("#set-apikey").value = apiKey();
+  applyGenerationFields(cfg);
+  applyCloneEngineFields(cfg);
+}
+
+function applyGenerationFields(cfg) {
+  const g = cfg.generation || {};
+  const set = (id, v) => { if ($(id) && v !== undefined && v !== null) $(id).value = v; };
+  set("#gen-temp", g.temperature);
+  set("#gen-topp", g.top_p);
+  set("#gen-reppen", g.repetition_penalty);
+  set("#gen-exag", g.exaggeration);
+  set("#gen-cfg", g.cfg_weight);
+  set("#gen-minp", g.min_p);
+  set("#gen-batch", g.batch_size);
+  set("#gen-maxchars", (cfg.chunking || {}).max_chars);
+  set("#gen-format", (cfg.audio || {}).format);
+  set("#gen-samplerate", (cfg.audio || {}).sample_rate);
+}
+
+function applyCloneEngineFields(cfg) {
+  const m = (cfg && cfg.models) || {};
+  if ($("#set-clone-backend")) $("#set-clone-backend").value = m.clone_backend || "qwen3";
+  if ($("#set-cb-watermark")) $("#set-cb-watermark").checked = !!(m.chatterbox && m.chatterbox.watermark);
+  toggleCloneEngineFields();
+}
+
+function toggleCloneEngineFields() {
+  const cb = $("#set-clone-backend") && $("#set-clone-backend").value === "chatterbox";
+  document.querySelectorAll(".cb-only").forEach((el) => { el.style.display = cb ? "" : "none"; });
 }
 
 // -------------------------------------------------------------- TTS model UI
@@ -186,55 +212,87 @@ function tt(key, fallback) {
 function ttsName(family) { return tt(`tts.model.${family}.name`, family); }
 function ttsDesc(family) { return tt(`tts.model.${family}.desc`, ""); }
 
-function selectedVariant() {
-  const id = $("#tts-family").value;
-  return (CONFIG.models.variants || []).find((v) => v.id === id)
-    || (CONFIG.models.variants || [])[0] || null;
-}
-
-function loadedFamilySet() {
-  return new Set((CONFIG.models.families || []).filter((f) => f.loaded).map((f) => f.family));
+function selectedFamily() {
+  const sel = $("#tts-family");
+  if (sel && sel.value) return sel.value;
+  const fams = CONFIG.models.families || [];
+  return fams[0] ? fams[0].family : "custom_voice";
 }
 
 function buildTtsFamilySelect() {
-  const fam = $("#tts-family");
-  const variants = CONFIG.models.variants || [];
-  const current = fam.value || (variants[0] ? variants[0].id : "");
-  const loaded = loadedFamilySet();
-  fam.innerHTML = "";
+  const sel = $("#tts-family");
+  const families = CONFIG.models.families || [];
+  const current = sel.value;
+  sel.innerHTML = "";
+  families.forEach((f) => {
+    const o = document.createElement("option");
+    o.value = f.family;
+    const tag = f.loaded ? ` ✓ ${t("models.loaded")}` : "";
+    o.textContent = `${ttsName(f.family)}${tag}`;
+    sel.appendChild(o);
+  });
+  if (current && families.some((f) => f.family === current)) sel.value = current;
+  else if (families.length) sel.value = families[0].family;
+  buildVariantSelect();
+  updateTtsModelDesc();
+  updateTtsVoiceControls();
+}
+
+function buildVariantSelect() {
+  const sel = $("#tts-variant");
+  if (!sel) return;
+  const family = selectedFamily();
+  const variants = (CONFIG.models.variants || []).filter((v) => v.family === family);
+  sel.innerHTML = "";
   variants.forEach((v) => {
     const o = document.createElement("option");
     o.value = v.id;
-    const tag = loaded.has(v.family) ? ` ✓ ${t("models.loaded")}` : "";
-    o.textContent = `${ttsName(v.family)} · ${v.label}${tag}`;
-    fam.appendChild(o);
+    o.textContent = v.label || v.id;
+    sel.appendChild(o);
   });
-  fam.value = current;
-  if (!fam.value && variants.length) fam.value = variants[0].id;
-  updateTtsModelDesc();
+  sel.disabled = variants.length === 0;
+  // Reflect the repo currently registered for this family, if any variant matches.
+  const fam = (CONFIG.models.families || []).find((f) => f.family === family);
+  if (fam && fam.repo_id) {
+    const match = variants.find((v) => v.repo === fam.repo_id);
+    if (match) sel.value = match.id;
+  }
+}
+
+async function selectVariant(id) {
+  if (!id) return;
+  const status = $("#tts-model-status");
+  status.textContent = t("models.loading");
+  try {
+    const r = await apiFetch("/api/models/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variant: id }),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text;
+      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  } finally {
+    await refreshConfigModels();
+    await loadVoices();
+  }
 }
 
 function updateTtsModelDesc() {
-  const v = selectedVariant();
-  if (!v) { $("#tts-model-desc").textContent = ""; return; }
-  $("#tts-model-desc").textContent = v.label ? `${ttsDesc(v.family)} (${v.label})` : ttsDesc(v.family);
-}
-
-async function selectVariant(v) {
-  if (!v) return;
-  try {
-    await apiFetch("/api/models/select", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ variant: v.id }),
-    });
-  } catch (e) { /* ignore */ }
+  $("#tts-model-desc").textContent = ttsDesc(selectedFamily());
 }
 
 async function onFamilyChange() {
-  const v = selectedVariant();
+  buildVariantSelect();
   updateTtsModelDesc();
-  await selectVariant(v);
-  await refreshConfigModels();
+  updateTtsVoiceControls();
+  buildTtsAvatarSelect();
   await loadVoices();
   await loadConversationVoices();
 }
@@ -244,6 +302,7 @@ async function refreshConfigModels() {
     const data = await getJSON("/api/models");
     CONFIG.models.families = data.families;
     if (data.variants) CONFIG.models.variants = data.variants;
+    if (data.default_size) CONFIG.models.default_size = data.default_size;
     buildTtsFamilySelect();
     const loaded = (data.loaded || []).map(ttsName).join(", ");
     $("#tts-model-status").textContent = loaded ? `${t("models.loaded")}: ${loaded}` : t("models.notLoaded");
@@ -251,8 +310,7 @@ async function refreshConfigModels() {
 }
 
 $("#tts-load").addEventListener("click", async () => {
-  const v = selectedVariant();
-  const family = v ? v.family : "custom_voice";
+  const family = selectedFamily();
   const btn = $("#tts-load");
   btn.disabled = true;
   $("#tts-model-status").textContent = t("models.loading");
@@ -268,7 +326,7 @@ $("#tts-load").addEventListener("click", async () => {
       try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
       $("#tts-model-status").textContent = `${t("status.error")} ${detail}`;
     } else {
-      $("#tts-model-status").textContent = `${ttsName(family)}${v && v.label ? ` (${v.label})` : ""} — ${t("models.loaded")}`;
+      $("#tts-model-status").textContent = `${ttsName(family)} — ${t("models.loaded")}`;
     }
   } catch (e) {
     $("#tts-model-status").textContent = `${t("status.error")} ${e}`;
@@ -283,8 +341,7 @@ $("#tts-load").addEventListener("click", async () => {
 $("#tts-refresh-models").addEventListener("click", refreshConfigModels);
 
 async function loadVoices() {
-  const v = selectedVariant();
-  const family = v ? v.family : "custom_voice";
+  const family = selectedFamily();
   try {
     const data = await getJSON(`/api/voices?family=${encodeURIComponent(family)}`);
     speakers = data.speakers || [];
@@ -314,35 +371,125 @@ async function refreshStatus() {
 setInterval(refreshStatus, 15000);
 
 // ------------------------------------------------------------------ TTS tab
+function familyInfo(family) {
+  return (CONFIG.models.families || []).find((f) => f.family === family) || null;
+}
+
+function familyBackend(family) {
+  const info = familyInfo(family || selectedFamily());
+  return info && info.backend ? info.backend : "qwen3";
+}
+
+function isCloneFamily(family) {
+  const f = family || selectedFamily();
+  return f === "base" || familyBackend(f) === "chatterbox";
+}
+
+function show(el, visible) {
+  if (el) el.style.display = visible ? "" : "none";
+}
+
+function buildTtsAvatarSelect() {
+  const sel = $("#tts-avatar");
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = t("tts.avatarNone");
+  sel.appendChild(none);
+  avatars.forEach((a) => {
+    const o = document.createElement("option");
+    o.value = a.id;
+    o.textContent = a.name;
+    sel.appendChild(o);
+  });
+  if (current && avatars.some((a) => a.id === current)) sel.value = current;
+}
+
+function updateTtsVoiceControls() {
+  const family = selectedFamily();
+  const backend = familyBackend(family);
+  const clone = isCloneFamily(family);
+  const qwenClone = clone && backend === "qwen3";
+  const englishOnly = family === "chatterbox_turbo" || family === "chatterbox_nano";
+
+  show($("#tts-speaker-wrap"), family === "custom_voice");
+  show($("#tts-instruct-wrap"), family === "custom_voice" || family === "voice_design");
+  show($("#tts-avatar-wrap"), clone);
+  show($("#clone-box"), clone);
+  show($("#tts-reftext-wrap"), qwenClone);
+  show($("#tts-language-wrap"), !englishOnly);
+  // Chatterbox Multilingual exposes exaggeration/CFG/min-p (Turbo/Nano ignore them).
+  show($("#gen-cb-row"), family === "chatterbox");
+
+  const hint = $("#tts-clone-hint");
+  if (hint) hint.textContent = clone ? t(qwenClone ? "tts.cloneHintQwen" : "tts.cloneHintChatterbox") : "";
+}
+
 function ttsPayload(text) {
-  const v = selectedVariant();
-  const family = v ? v.family : "custom_voice";
-  const speaker = family === "custom_voice" ? $("#tts-speaker").value : undefined;
-  return {
+  const family = selectedFamily();
+  const backend = familyBackend(family);
+  const clone = isCloneFamily(family);
+  const payload = {
     text,
     family,
     language: $("#tts-language").value,
-    speaker,
-    instruct: $("#tts-instruct").value || undefined,
-    ref_text: $("#tts-ref-text").value || undefined,
-    x_vector_only_mode: $("#tts-xvec").checked,
     chunking: $("#tts-chunk").checked,
     format: "pcm",
     stream: $("#tts-stream").checked,
+    generation: ttsGenerationParams(),
   };
+  if (family === "custom_voice") payload.speaker = $("#tts-speaker").value;
+  if (family === "custom_voice" || family === "voice_design") {
+    payload.instruct = $("#tts-instruct").value || undefined;
+  }
+  if (clone) {
+    const avatar = $("#tts-avatar").value;
+    if (avatar) {
+      // A pre-built avatar (already a clone) takes precedence.
+      payload.avatar = avatar;
+    } else if (backend === "qwen3") {
+      payload.ref_text = $("#tts-ref-text").value || undefined;
+      payload.x_vector_only_mode = $("#tts-xvec").checked;
+    }
+  }
+  return payload;
 }
 
 async function uploadReference() {
   const file = $("#tts-ref-audio").files[0];
   if (!file) return null;
-  const fd = new FormData();
-  fd.append("file", file);
-  try {
-    const r = await apiFetch("/v1/audio/transcriptions", { method: "POST", body: fd });
-    const text = await r.text();
-    if (r.ok) { const j = JSON.parse(text); if (j.text) $("#tts-ref-text").value = j.text; }
-  } catch (e) { /* STT may be disabled */ }
+  // The transcript/useful for ICL cloning only (Qwen); skip STT for other backends.
+  if (familyBackend() === "qwen3") {
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const r = await apiFetch("/v1/audio/transcriptions", { method: "POST", body: fd });
+      const text = await r.text();
+      if (r.ok) { const j = JSON.parse(text); if (j.text) $("#tts-ref-text").value = j.text; }
+    } catch (e) { /* STT may be disabled */ }
+  }
   return await fileToDataURL(file);
+}
+
+function genNum(id, parse, dflt) {
+  const el = $(id);
+  if (!el) return dflt;
+  const v = parse(el.value);
+  return Number.isFinite(v) ? v : dflt;
+}
+
+function ttsGenerationParams() {
+  const g = {
+    temperature: genNum("#gen-temp", parseFloat, undefined),
+    top_p: genNum("#gen-topp", parseFloat, undefined),
+    repetition_penalty: genNum("#gen-reppen", parseFloat, undefined),
+    exaggeration: genNum("#gen-exag", parseFloat, undefined),
+    cfg_weight: genNum("#gen-cfg", parseFloat, undefined),
+    min_p: genNum("#gen-minp", parseFloat, undefined),
+  };
+  return Object.fromEntries(Object.entries(g).filter(([, v]) => v !== undefined));
 }
 
 function fileToDataURL(file) {
@@ -361,7 +508,8 @@ $("#tts-go").addEventListener("click", async () => {
   $("#tts-status").textContent = t("status.generating");
   $("#tts-log").textContent = "";
   const payload = ttsPayload(text);
-  if (selectedVariant() && selectedVariant().family === "base") {
+  // Clone families use the reference audio unless an existing avatar was chosen.
+  if (isCloneFamily() && !payload.avatar) {
     const ref = await uploadReference();
     if (ref) payload.ref_audio = ref;
   }
@@ -413,6 +561,7 @@ async function loadAvatars() {
     avatars = [];
   }
   renderAvatars();
+  buildTtsAvatarSelect();
 }
 
 function renderAvatars() {
@@ -439,10 +588,9 @@ function renderAvatars() {
     nm.textContent = a.name;
     const meta = document.createElement("div");
     meta.className = "muted";
-    const kind = a.kind === "clone" ? t("avatars.kindClone") : t("avatars.kindDesign");
     const lang = a.language && a.language !== "Auto" ? ` · ${a.language}` : "";
-    const xvec = a.kind === "clone" && a.x_vector_only ? ` · ${t("tts.xvec")}` : "";
-    meta.textContent = `${kind}${lang}${xvec}`;
+    const xvec = a.x_vector_only ? ` · ${t("tts.xvec")}` : "";
+    meta.textContent = `${t("avatars.kindClone")}${lang}${xvec}`;
     info.appendChild(nm); info.appendChild(meta);
     card.appendChild(info);
 
@@ -475,12 +623,6 @@ function syncXvec(transcriptEl, xvecEl) {
   $(xvecEl).checked = !$(transcriptEl).value.trim();
 }
 
-function toggleAvatarKindBoxes() {
-  const clone = $("#ad-kind").value === "clone";
-  $("#ad-design-box").hidden = clone;
-  $("#ad-clone-box").hidden = !clone;
-}
-
 function avatarPhotoPreview(id, name) {
   const el = $("#ad-photo-preview");
   const a = id ? avatars.find((x) => x.id === id) : null;
@@ -499,10 +641,9 @@ function openAvatarDialog(id) {
   const dlg = $("#avatar-dialog");
   const editing = !!id;
   dlg.dataset.id = id || "";
+  dlg.dataset.fingerprint = "";
   const a = editing ? avatars.find((x) => x.id === id) : null;
   $("#ad-title").textContent = editing ? t("avatars.editTitle") : t("avatars.createTitle");
-  $("#ad-kind-wrap").hidden = editing;
-  $("#ad-kind").value = a ? a.kind : "design";
   $("#ad-name").value = a ? (a.name || "") : "";
   $("#ad-lang").value = a ? (a.language || "Auto") : "English";
   $("#ad-personality").value = a ? (a.personality || "") : "";
@@ -511,8 +652,9 @@ function openAvatarDialog(id) {
   $("#ad-xvec").checked = a ? !!a.x_vector_only : true;
   $("#ad-ref").value = "";
   $("#ad-photo").value = "";
-  toggleAvatarKindBoxes();
-  $("#ad-regenerate").hidden = !editing || (a && a.kind !== "design");
+  const fpAudio = $("#ad-fingerprint-audio");
+  if (fpAudio) { fpAudio.hidden = true; fpAudio.removeAttribute("src"); }
+  $("#ad-regenerate").hidden = !editing || !(a && (a.prompt || "").trim());
   $("#ad-delete").hidden = !editing;
   $("#ad-save").textContent = editing ? t("settings.save") : t("avatars.createBtn");
   $("#ad-status").textContent = "";
@@ -521,10 +663,6 @@ function openAvatarDialog(id) {
 }
 
 $("#av-new").addEventListener("click", () => openAvatarDialog(null));
-$("#ad-kind").addEventListener("change", () => {
-  toggleAvatarKindBoxes();
-  if ($("#ad-kind").value === "clone") syncXvec("#ad-reftext", "#ad-xvec");
-});
 $("#ad-reftext").addEventListener("input", () => syncXvec("#ad-reftext", "#ad-xvec"));
 $("#ad-name").addEventListener("input", () => {
   if (!$("#ad-photo").files[0]) avatarPhotoPreview($("#avatar-dialog").dataset.id || null, $("#ad-name").value);
@@ -539,21 +677,41 @@ $("#ad-photo").addEventListener("change", () => {
 });
 $("#ad-close").addEventListener("click", () => $("#avatar-dialog").close());
 
+$("#ad-fingerprint").addEventListener("click", async () => {
+  const prompt = $("#ad-prompt").value.trim();
+  const status = $("#ad-status");
+  if (!prompt) { status.textContent = t("avatars.needPrompt"); return; }
+  status.textContent = t("avatars.generating");
+  try {
+    const fd = new FormData();
+    fd.append("prompt", prompt);
+    fd.append("language", $("#ad-lang").value);
+    const r = await apiFetch("/api/avatars/fingerprint", { method: "POST", body: fd });
+    if (!r.ok) {
+      let detail = await r.text();
+      try { detail = JSON.parse(detail).detail || detail; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const el = $("#ad-fingerprint-audio");
+    el.src = url; el.hidden = false;
+    $("#avatar-dialog").dataset.fingerprint = url;
+    status.textContent = t("avatars.fingerprintReady");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+});
+
 function avatarDialogForm() {
-  const editing = !!$("#avatar-dialog").dataset.id;
-  const clone = !$("#ad-clone-box").hidden;
   const fd = new FormData();
   fd.append("name", $("#ad-name").value.trim());
   fd.append("language", $("#ad-lang").value);
   fd.append("personality", $("#ad-personality").value);
-  if (!editing) fd.append("kind", $("#ad-kind").value);
-  if (clone) {
-    fd.append("ref_text", $("#ad-reftext").value);
-    fd.append("x_vector_only", String($("#ad-xvec").checked));
-    if ($("#ad-ref").files[0]) fd.append("ref_audio", $("#ad-ref").files[0]);
-  } else {
-    fd.append("prompt", $("#ad-prompt").value);
-  }
+  fd.append("prompt", $("#ad-prompt").value);
+  fd.append("ref_text", $("#ad-reftext").value);
+  fd.append("x_vector_only", String($("#ad-xvec").checked));
+  if ($("#ad-ref").files[0]) fd.append("ref_audio", $("#ad-ref").files[0]);
   if ($("#ad-photo").files[0]) fd.append("image", $("#ad-photo").files[0]);
   return fd;
 }
@@ -566,11 +724,12 @@ async function reloadAvatarViews() {
 
 $("#ad-save").addEventListener("click", async () => {
   const id = $("#avatar-dialog").dataset.id;
-  const clone = !$("#ad-clone-box").hidden;
-  if (!$("#ad-name").value.trim()) { $("#ad-status").textContent = t("avatars.name"); return; }
-  if (!id && clone && !$("#ad-ref").files[0]) { $("#ad-status").textContent = t("avatars.needAudio"); return; }
-  if (!id && !clone && !$("#ad-prompt").value.trim()) { $("#ad-status").textContent = t("avatars.needPrompt"); return; }
-  $("#ad-status").textContent = "…";
+  const status = $("#ad-status");
+  if (!$("#ad-name").value.trim()) { status.textContent = t("avatars.name"); return; }
+  if (!id && !$("#ad-ref").files[0] && !$("#ad-prompt").value.trim()) {
+    status.textContent = t("avatars.needAudioOrPrompt"); return;
+  }
+  status.textContent = "…";
   try {
     const r = await apiFetch(id ? `/api/avatars/${encodeURIComponent(id)}` : "/api/avatars", {
       method: id ? "PUT" : "POST", body: avatarDialogForm(),
@@ -583,7 +742,7 @@ $("#ad-save").addEventListener("click", async () => {
     await reloadAvatarViews();
     $("#avatar-dialog").close();
   } catch (e) {
-    $("#ad-status").textContent = `${t("status.error")} ${e}`;
+    status.textContent = `${t("status.error")} ${e}`;
   }
 });
 
@@ -786,7 +945,7 @@ class SttPicker {
     if (this.opts.desc) { this.desc = document.createElement("div"); this.desc.className = "muted"; this.root.appendChild(this.desc); }
     if (this.opts.load) { this.progress = document.createElement("progress"); this.progress.max = 100; this.progress.value = 0; this.progress.hidden = true; this.root.appendChild(this.progress); }
     if (this.opts.status) { this.status = document.createElement("div"); this.status.className = "muted"; this.root.appendChild(this.status); }
-    this.select.addEventListener("change", () => { this.value = this.select.value; this.touched = true; this.update(); });
+    this.select.addEventListener("change", () => { this.value = this.select.value; this.touched = true; this.update(); updateVadAvailability(); });
   }
 
   addButton(text, cls, fn) {
@@ -817,8 +976,13 @@ class SttPicker {
       o.textContent = `${m.filename || m.repo} · ${sttStateLabel(sttModelState(m))} · ${fmtMB(m.size)} ${t("stt.sizeMb")}`;
       this.select.appendChild(o);
     });
-    if (prev && sttModels.some((m) => m.repo === prev)) this.select.value = prev;
-    else if (sttModels.length) this.select.value = sttActive || sttModels[0].repo;
+    if (prev && sttModels.some((m) => m.repo === prev)) {
+      this.select.value = prev;
+    } else if (sttModels.length) {
+      // sttActive is the active model *filename*; options are keyed by repo.
+      const active = sttModels.find((m) => m.filename === sttActive || m.repo === sttActive);
+      this.select.value = (active || sttModels[0]).repo;
+    }
     this.value = this.select.value;
     this.update();
   }
@@ -859,6 +1023,7 @@ class SttPicker {
 
 let sttError = null;
 let settingsSttPicker = null;
+let chatSttPicker = null;
 
 function mountSttPickers() {
   const sttRoot = $("#stt-picker");
@@ -866,19 +1031,51 @@ function mountSttPickers() {
   const chatRoot = $("#chat-stt-picker");
   if (chatRoot && !chatRoot.dataset.mounted) {
     chatRoot.dataset.mounted = "1";
-    new SttPicker(chatRoot, { load: true, stop: false, refresh: false, desc: false, status: false });
+    chatSttPicker = new SttPicker(chatRoot, { load: true, stop: false, refresh: false, desc: false, status: false });
   }
   const setRoot = $("#set-startup-stt-picker");
   if (setRoot && !setRoot.dataset.mounted) {
     setRoot.dataset.mounted = "1";
     settingsSttPicker = new SttPicker(setRoot, {
-      load: false, stop: false, refresh: false, desc: true, status: true,
+      load: false, stop: false, refresh: false, desc: false, status: false,
       initial: () => (CONFIG ? CONFIG.startup.stt_model : ""),
     });
   }
 }
 
-function renderSttPickers() { sttPickers.forEach((p) => p.populate()); }
+function renderSttPickers() { sttPickers.forEach((p) => p.populate()); updateVadAvailability(); }
+
+// The chat VAD needs a streaming-capable STT model (and a reachable service).
+function chatSttModel() {
+  if (!chatSttPicker) return null;
+  if (typeof chatSttPicker.current === "function") {
+    const cur = chatSttPicker.current();
+    if (cur) return cur;
+  }
+  const repo = chatSttPicker.value;
+  return sttModels.find((m) => m.repo === repo) || null;
+}
+
+function vadAvailable() {
+  const model = chatSttModel();
+  return !!(model && model.streaming && sttService.ready);
+}
+
+function updateVadAvailability() {
+  const btn = $("#chat-vad");
+  if (!btn) return;
+  const ok = vadAvailable();
+  // Only shown when a streaming STT model is active (and the service is up).
+  btn.hidden = !ok;
+  if (!ok && dictateActive && dictateVadActive) stopDictation();
+  updateVadButton();
+}
+
+function updateVadButton() {
+  const btn = $("#chat-vad");
+  if (!btn) return;
+  btn.classList.toggle("primary", !!(dictateActive && dictateVadActive));
+}
 
 async function loadSttModels() {
   try {
@@ -1107,9 +1304,81 @@ $("#stt-upload").addEventListener("click", async () => {
 // ----------------------------------------------------------------- chat tab
 let chatSocket = null, chatPlayer = null, currentAssistant = null, chatBusy = false;
 
+// Replay cache: keep the last N assistant messages' PCM in memory; older ones
+// are dropped and regenerated on demand via /api/tts.
+const CHAT_AUDIO_KEEP = 8;
+const chatAudioCache = new Map();
+let chatAudioSeq = 0;
+let currentAudio = null;
+let replayPlayer = null;
+
+function newAudioRecord() {
+  const id = ++chatAudioSeq;
+  const record = { id, text: "", chunks: [], sr: TTS_SESSION.sample_rate };
+  chatAudioCache.set(id, record);
+  while (chatAudioCache.size > CHAT_AUDIO_KEEP) {
+    const oldest = chatAudioCache.keys().next().value;
+    const rec = chatAudioCache.get(oldest);
+    if (rec) rec.chunks = []; // freed; replay will regenerate
+    chatAudioCache.delete(oldest);
+  }
+  return record;
+}
+
+function playPcmChunks(chunks, sr) {
+  if (replayPlayer) { replayPlayer.stop(); replayPlayer = null; }
+  replayPlayer = new PCMPlayer(sr || TTS_SESSION.sample_rate);
+  chunks.forEach((chunk) => replayPlayer.pushBytes(chunk));
+}
+
+async function replayMessage(record, btn) {
+  if (!record) return;
+  if (record.chunks && record.chunks.length) {
+    playPcmChunks(record.chunks, record.sr);
+    return;
+  }
+  const text = (record.text || "").trim();
+  if (!text) return;
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    const payload = Object.assign(
+      { text, format: "wav", stream: false, chunking: true },
+      voiceConfig(),
+    );
+    const r = await apiFetch("/api/tts", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+    const url = URL.createObjectURL(await r.blob());
+    const audio = new Audio(url);
+    audio.addEventListener("ended", () => URL.revokeObjectURL(url));
+    await audio.play();
+  } catch (e) {
+    $("#chat-status").textContent = `${t("status.error")} ${e}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔊";
+  }
+}
+
+function addReplayButton(stack, record) {
+  const actions = document.createElement("div");
+  actions.className = "bubble-actions";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "bubble-replay";
+  btn.title = t("chat.replay");
+  btn.textContent = "🔊";
+  btn.addEventListener("click", () => replayMessage(record, btn));
+  actions.appendChild(btn);
+  stack.appendChild(actions);
+}
+
 function appendTurn(role, text, name) {
   const row = document.createElement("div");
   row.className = `bubble-row ${role}`;
+  let bubble;
   if (role === "assistant") {
     const icon = document.createElement("span");
     icon.className = "bubble-icon";
@@ -1117,11 +1386,25 @@ function appendTurn(role, text, name) {
     if (v && v.has_photo) icon.style.backgroundImage = `url('/api/avatars/${encodeURIComponent(v.avatarId)}/photo')`;
     else { icon.style.background = colorFor(name || (v ? v.name : "AI")); icon.textContent = initialOf(name || (v ? v.name : "AI")); }
     row.appendChild(icon);
+
+    const stack = document.createElement("div");
+    stack.className = "bubble-stack";
+    bubble = document.createElement("div");
+    bubble.className = "bubble assistant";
+    bubble.textContent = text;
+    stack.appendChild(bubble);
+
+    const record = newAudioRecord();
+    record.bubble = bubble;
+    currentAudio = record;
+    addReplayButton(stack, record);
+    row.appendChild(stack);
+  } else {
+    bubble = document.createElement("div");
+    bubble.className = `bubble ${role}`;
+    bubble.textContent = text;
+    row.appendChild(bubble);
   }
-  const bubble = document.createElement("div");
-  bubble.className = `bubble ${role}`;
-  bubble.textContent = text;
-  row.appendChild(bubble);
   $("#chat-log").appendChild(row);
   $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
   return bubble;
@@ -1156,29 +1439,36 @@ function ensureChatSocket() {
 
 function resetChatAudio() {
   if (chatPlayer) { chatPlayer.stop(); chatPlayer = null; }
+  if (replayPlayer) { replayPlayer.stop(); replayPlayer = null; }
 }
 
 function onChatMessage(ev) {
   if (typeof ev.data !== "string") {
-    if (chatPlayer && $("#chat-speak").checked) chatPlayer.pushBytes(new Uint8Array(ev.data));
+    const bytes = new Uint8Array(ev.data);
+    if (chatPlayer && $("#chat-speak").checked) chatPlayer.pushBytes(bytes);
+    if (currentAudio && currentAudio.chunks) currentAudio.chunks.push(bytes);
     return;
   }
   let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
   if (msg.type === "llm.delta") {
     if (currentAssistant) currentAssistant.textContent += msg.text;
   } else if (msg.type === "audio.start") {
-    if (!chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
+    // Ignore audio for a cancelled turn (chatBusy is false after interrupt).
+    if (chatBusy && !chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
   } else if (msg.type === "llm.done") {
     if (currentAssistant && !currentAssistant.textContent) currentAssistant.textContent = msg.text || "";
+    if (currentAudio) { currentAudio.text = (currentAssistant ? currentAssistant.textContent : msg.text) || ""; currentAudio = null; }
     currentAssistant = null;
     chatBusy = false;
   } else if (msg.type === "turn.cancelled") {
     if (currentAssistant) currentAssistant.classList.add("cancelled");
+    if (currentAudio) { currentAudio.text = currentAssistant ? currentAssistant.textContent : ""; currentAudio = null; }
     currentAssistant = null;
     chatBusy = false;
     resetChatAudio();
   } else if (msg.type === "error") {
     if (currentAssistant) currentAssistant.textContent += ` [error: ${msg.message}]`;
+    if (currentAudio) { currentAudio.text = currentAssistant ? currentAssistant.textContent : ""; currentAudio = null; }
     currentAssistant = null;
     chatBusy = false;
     $("#chat-status").textContent = msg.message;
@@ -1210,21 +1500,109 @@ $("#chat-send").addEventListener("click", chatSend);
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") chatSend(); });
 $("#chat-speak").addEventListener("change", sendChatConfig);
 $("#chat-language").addEventListener("change", sendChatConfig);
-$("#chat-stop").addEventListener("click", () => {
-  resetChatAudio();
-  if (chatSocket && chatSocket.readyState === 1) chatSocket.send(JSON.stringify({ type: "input.cancel" }));
-  if (currentAssistant) { currentAssistant.classList.add("cancelled"); currentAssistant = null; }
-  chatBusy = false;
-});
+$("#chat-stop").addEventListener("click", () => interruptChat(t("chat.stopped")));
 
-// Chat dictation
+// Chat dictation: push-to-talk, or continuous with voice-activity detection (VAD).
 let dictateActive = false, dictateCtx = null, dictateStream = null, dictateSource = null, dictateNode = null, dictateSink = null;
 let dictateSocket = null, dictateText = "", dictatePartial = "", dictateTimer = null;
+let dictateVadActive = false, dictateAnalyser = null, dictateVadTimer = null;
+let vadSpeaking = false, vadLastVoice = 0, bargeStart = 0;
+const VAD_THRESHOLD = 0.015;        // RMS above which we consider speech
+const VAD_SILENCE_MS = 900;         // silence after speech => end of utterance
+const VAD_BARGE_THRESHOLD = 0.03;   // louder threshold to interrupt the assistant
+const VAD_BARGE_MS = 300;           // sustained speech needed to barge in
 
-async function startDictation() {
+function takeUtteranceText() {
+  const text = (dictateText + dictatePartial).trim();
+  dictateText = ""; dictatePartial = "";
+  return text;
+}
+
+function sendUtterance(text) {
+  if (!text) return false;
+  if (chatBusy) {
+    if ($("#chat-status")) $("#chat-status").textContent = t("chat.vadBusy");
+    $("#chat-input").value = text;  // keep it available for a manual send
+    return false;
+  }
+  $("#chat-input").value = text;
+  chatSend();
+  return true;
+}
+
+function endUtterance() {
+  if (dictateSocket && dictateSocket.readyState === 1) {
+    try { dictateSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" })); } catch (e) { /* ignore */ }
+  }
+  // Let the server emit the final transcript, then send it to the chat.
+  clearTimeout(dictateTimer);
+  dictateTimer = setTimeout(() => {
+    if (dictateVadActive) sendUtterance(takeUtteranceText());
+  }, 700);
+}
+
+// Interrupt the current assistant turn (Stop button, or barge-in).
+function interruptChat(message) {
+  resetChatAudio();
+  if (chatSocket && chatSocket.readyState === 1) {
+    try { chatSocket.send(JSON.stringify({ type: "input.cancel" })); } catch (e) { /* ignore */ }
+  }
+  if (currentAssistant) currentAssistant.classList.add("cancelled");
+  if (currentAudio) { currentAudio.text = currentAssistant ? currentAssistant.textContent : ""; currentAudio = null; }
+  currentAssistant = null;
+  chatBusy = false;
+  if (message && $("#chat-status")) $("#chat-status").textContent = message;
+}
+
+function startVadLoop() {
+  const analyser = dictateAnalyser;
+  if (!analyser) return;
+  const buf = new Float32Array(analyser.fftSize);
+  const rmsOf = () => {
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    return Math.sqrt(sum / buf.length);
+  };
+  const tick = () => {
+    if (!dictateActive || !dictateVadActive) return;
+    const now = performance.now();
+    if (chatBusy) {
+      // Barge-in: the user speaking over the assistant interrupts it.
+      if (rmsOf() >= VAD_BARGE_THRESHOLD) {
+        if (!bargeStart) bargeStart = now;
+        else if (now - bargeStart >= VAD_BARGE_MS) {
+          bargeStart = 0;
+          vadSpeaking = false;
+          interruptChat(t("chat.vadBargeIn"));
+        }
+      } else {
+        bargeStart = 0;
+      }
+    } else {
+      bargeStart = 0;
+      if (rmsOf() >= VAD_THRESHOLD) {
+        if (!vadSpeaking) {
+          vadSpeaking = true;
+          if ($("#chat-status")) $("#chat-status").textContent = t("chat.vadListening");
+        }
+        vadLastVoice = now;
+      } else if (vadSpeaking && now - vadLastVoice > VAD_SILENCE_MS) {
+        vadSpeaking = false;
+        endUtterance();
+      }
+    }
+    dictateVadTimer = setTimeout(tick, 60);
+  };
+  dictateVadTimer = setTimeout(tick, 60);
+}
+
+async function startDictation(useVad = false) {
   try {
     const cap = await startMicCapture((samples, sr) => {
       if (!dictateSocket || dictateSocket.readyState !== 1) return;
+      // In VAD mode, do not feed the assistant's own TTS back into the STT.
+      if (dictateVadActive && chatBusy) return;
       dictateSocket.send(downsampleTo16k(samples, sr).buffer);
     });
     dictateCtx = cap.ctx; dictateStream = cap.stream; dictateSource = cap.source; dictateNode = cap.node; dictateSink = cap.sink;
@@ -1248,23 +1626,43 @@ async function startDictation() {
     dictateSocket.onclose = () => { if (dictateActive) finishDictation(); };
     dictateActive = true;
     $("#chat-mic").textContent = "⏹";
+
+    dictateVadActive = useVad && vadAvailable();
+    updateVadButton();
+    if (dictateVadActive) {
+      dictateAnalyser = dictateCtx.createAnalyser();
+      dictateAnalyser.fftSize = 1024;
+      dictateSource.connect(dictateAnalyser);
+      vadSpeaking = false;
+      bargeStart = 0;
+      startVadLoop();
+      if ($("#chat-status")) $("#chat-status").textContent = t("chat.vadListening");
+    }
   } catch (e) {
     $("#chat-status").textContent = `${t("status.error")} ${e}`;
   }
 }
 
 function finishDictation() {
+  clearTimeout(dictateTimer);
+  clearTimeout(dictateVadTimer);
+  dictateVadTimer = null;
+  if (dictateAnalyser && dictateSource) { try { dictateSource.disconnect(dictateAnalyser); } catch (e) { /* ignore */ } }
   if (dictateSource) dictateSource.disconnect();
   if (dictateNode) dictateNode.disconnect();
   if (dictateSink) dictateSink.disconnect();
   if (dictateCtx) dictateCtx.close();
   if (dictateStream) dictateStream.getTracks().forEach((track) => track.stop());
   dictateSocket = null; dictateCtx = null; dictateStream = null;
-  dictateSource = null; dictateNode = null; dictateSink = null;
+  dictateSource = null; dictateNode = null; dictateSink = null; dictateAnalyser = null;
   dictateActive = false;
+  dictateVadActive = false;
+  vadSpeaking = false;
+  bargeStart = 0;
   $("#chat-mic").textContent = "🎤";
-  const text = (dictateText + dictatePartial).trim();
-  if (text) { $("#chat-input").value = text; chatSend(); }
+  updateVadButton();
+  const text = takeUtteranceText();
+  if (text) sendUtterance(text);
   else if ($("#chat-status")) $("#chat-status").textContent = t("stt.noSpeech");
 }
 
@@ -1276,7 +1674,12 @@ function stopDictation() {
   dictateTimer = setTimeout(finishDictation, 900);
 }
 
-$("#chat-mic").addEventListener("click", () => { if (dictateActive) stopDictation(); else startDictation(); });
+$("#chat-mic").addEventListener("click", () => { if (dictateActive) stopDictation(); else startDictation(false); });
+
+$("#chat-vad").addEventListener("click", () => {
+  if (dictateActive && dictateVadActive) stopDictation();
+  else if (!dictateActive) startDictation(true);
+});
 
 // ------------------------------------------------------------- settings tab
 function buildStartupVoiceSelect() {
@@ -1314,11 +1717,9 @@ $("#set-startup-save").addEventListener("click", async () => {
   }
 });
 
+$("#tts-variant").addEventListener("change", () => selectVariant($("#tts-variant").value));
+
 async function saveSettings() {
-  const num = (sel, parse) => {
-    const v = parse($(sel).value);
-    return Number.isFinite(v) ? v : undefined;
-  };
   const llm = {
     base_url: $("#set-llm-url").value.trim(),
     model: $("#set-llm-model").value.trim(),
@@ -1326,16 +1727,9 @@ async function saveSettings() {
   };
   const key = $("#set-llm-key").value;
   if (key) llm.api_key = key;
-  const payload = { llm, generation: {}, chunking: {} };
-  const temp = num("#set-temp", parseFloat);
-  if (temp !== undefined) payload.generation.temperature = temp;
-  const batch = num("#set-batch", (v) => parseInt(v, 10));
-  if (batch !== undefined) payload.generation.batch_size = batch;
-  const maxc = num("#set-maxchars", (v) => parseInt(v, 10));
-  if (maxc !== undefined) payload.chunking.max_chars = maxc;
   try {
     const r = await apiFetch("/api/settings", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ llm }),
     });
     const text = await r.text();
     if (!r.ok) {
@@ -1344,7 +1738,7 @@ async function saveSettings() {
     }
     let cfg = null; try { cfg = JSON.parse(text); } catch (e) { /* ignore */ }
     if (cfg && cfg.llm) {
-      CONFIG = Object.assign({}, CONFIG, { llm: cfg.llm, generation: cfg.generation, chunking: cfg.chunking });
+      CONFIG = Object.assign({}, CONFIG, { llm: cfg.llm });
       $("#set-llm-url").value = cfg.llm.base_url || "";
       $("#set-llm-model").value = cfg.llm.model || "";
       $("#set-llm-system").value = cfg.llm.system_prompt || "";
@@ -1356,10 +1750,72 @@ async function saveSettings() {
   }
 }
 
-$("#set-save").addEventListener("click", async () => {
-  $("#set-save-status").textContent = "…";
-  const res = await saveSettings();
-  $("#set-save-status").textContent = res.ok ? t("status.saved") : `${t("status.error")} ${res.detail}`;
+$("#gen-save").addEventListener("click", async () => {
+  const status = $("#gen-save-status");
+  status.textContent = "…";
+  const payload = {
+    generation: {},
+    chunking: {},
+    audio: {},
+  };
+  const num = (id, parse) => {
+    const v = parse($(`#${id}`).value);
+    return Number.isFinite(v) ? v : undefined;
+  };
+  const setIf = (obj, key, v) => { if (v !== undefined) obj[key] = v; };
+  setIf(payload.generation, "temperature", num("gen-temp", parseFloat));
+  setIf(payload.generation, "top_p", num("gen-topp", parseFloat));
+  setIf(payload.generation, "repetition_penalty", num("gen-reppen", parseFloat));
+  setIf(payload.generation, "exaggeration", num("gen-exag", parseFloat));
+  setIf(payload.generation, "cfg_weight", num("gen-cfg", parseFloat));
+  setIf(payload.generation, "min_p", num("gen-minp", parseFloat));
+  setIf(payload.generation, "batch_size", num("gen-batch", (v) => parseInt(v, 10)));
+  setIf(payload.chunking, "max_chars", num("gen-maxchars", (v) => parseInt(v, 10)));
+  if ($("#gen-format").value) payload.audio.format = $("#gen-format").value;
+  setIf(payload.audio, "sample_rate", num("gen-samplerate", (v) => parseInt(v, 10)));
+  try {
+    const r = await apiFetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    const cfg = JSON.parse(text);
+    CONFIG = Object.assign({}, CONFIG, { generation: cfg.generation, chunking: cfg.chunking, audio: cfg.audio });
+    applyGenerationFields(cfg);
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+});
+
+$("#set-clone-backend").addEventListener("change", toggleCloneEngineFields);
+
+$("#set-clone-save").addEventListener("click", async () => {
+  const status = $("#set-clone-status");
+  status.textContent = "…";
+  const models = {
+    clone_backend: $("#set-clone-backend").value,
+    chatterbox: { watermark: $("#set-cb-watermark").checked },
+  };
+  try {
+    const r = await apiFetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ models }),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    const cfg = JSON.parse(text);
+    CONFIG = Object.assign({}, CONFIG, { models: cfg.models });
+    applyCloneEngineFields(cfg);
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
 });
 
 $("#set-llm-ping").addEventListener("click", async () => {
@@ -1376,7 +1832,7 @@ $("#set-llm-ping").addEventListener("click", async () => {
 
 $("#set-apikey-save").addEventListener("click", () => {
   localStorage.setItem("apiKey", $("#set-apikey").value);
-  $("#set-save-status").textContent = t("status.remembered");
+  $("#set-apikey-save").textContent = t("status.remembered");
 });
 
 init();

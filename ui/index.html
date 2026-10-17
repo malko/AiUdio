@@ -22,6 +22,7 @@
   <nav class="tabs">
     <button data-tab="chat" class="active" data-i18n="nav.conversation">Conversation</button>
     <button data-tab="tts" data-i18n="nav.synthesis">Synthesis</button>
+    <button data-tab="avatars" data-i18n="nav.avatars">Avatars</button>
     <button data-tab="stt" data-i18n="nav.transcription">Transcription</button>
     <button data-tab="settings" data-i18n="nav.settings">Settings</button>
   </nav>
@@ -46,6 +47,7 @@
         <div class="row">
           <input id="chat-input" type="text" data-i18n-ph="chat.placeholder" placeholder="Your message..." />
           <button id="chat-mic" data-i18n-title="chat.dictate" title="Dictate via STT">🎤</button>
+          <button id="chat-vad" data-i18n-title="chat.vad" title="Voice detection (VAD)" hidden>VAD</button>
           <button id="chat-send" class="primary" data-i18n="chat.send">Send</button>
           <button id="chat-stop" data-i18n="chat.stop">Stop</button>
         </div>
@@ -63,6 +65,9 @@
           <label class="grow"><span data-i18n="models.family">Model</span>
             <select id="tts-family"></select>
           </label>
+          <label class="grow"><span data-i18n="models.variant">Version</span>
+            <select id="tts-variant"></select>
+          </label>
           <button id="tts-load" class="primary" data-i18n="models.load">Load</button>
           <button id="tts-refresh-models" data-i18n="stt.refresh">Refresh</button>
         </div>
@@ -74,21 +79,27 @@
           <textarea id="tts-text" rows="6" data-i18n-ph="tts.textPlaceholder" placeholder="Hello, this is a test."></textarea>
         </label>
         <div class="row">
-          <label class="grow"><span data-i18n="tts.language">Language</span>
+          <label class="grow" id="tts-language-wrap"><span data-i18n="tts.language">Language</span>
             <select id="tts-language"></select>
           </label>
-          <label class="grow"><span data-i18n="tts.speaker">Voice (speaker)</span>
+          <label class="grow" id="tts-speaker-wrap"><span data-i18n="tts.speaker">Voice (speaker)</span>
             <select id="tts-speaker"></select>
           </label>
+          <label class="grow" id="tts-avatar-wrap"><span data-i18n="tts.avatar">Voice (avatar)</span>
+            <select id="tts-avatar"></select>
+          </label>
         </div>
-        <label><span data-i18n="tts.instruct">Instruction (style / emotion)</span>
+        <label id="tts-instruct-wrap"><span data-i18n="tts.instruct">Instruction (style / emotion)</span>
           <input id="tts-instruct" type="text" data-i18n-ph="tts.instructPlaceholder" placeholder="e.g. Speak with excitement" />
         </label>
         <details id="clone-box">
-          <summary data-i18n="tts.cloneTitle">Voice cloning (family "base")</summary>
+          <summary data-i18n="tts.cloneTitle">Voice cloning</summary>
           <label><span data-i18n="tts.refAudio">Reference audio</span> <input id="tts-ref-audio" type="file" accept="audio/*" /></label>
-          <label><span data-i18n="tts.refText">Reference transcript</span> <input id="tts-ref-text" type="text" /></label>
-          <label class="inline"><input id="tts-xvec" type="checkbox" /> <span data-i18n="tts.xvec">x-vector only</span></label>
+          <div id="tts-reftext-wrap">
+            <label><span data-i18n="tts.refText">Reference transcript</span> <input id="tts-ref-text" type="text" /></label>
+            <label class="inline"><input id="tts-xvec" type="checkbox" /> <span data-i18n="tts.xvec">x-vector only</span></label>
+          </div>
+          <div id="tts-clone-hint" class="muted"></div>
         </details>
         <div class="row">
           <label class="inline"><input id="tts-stream" type="checkbox" checked /> <span data-i18n="tts.stream">Streaming (PCM)</span></label>
@@ -102,11 +113,64 @@
         <audio id="tts-player" controls></audio>
         <div id="tts-log" class="log"></div>
       </div>
+      <div class="card">
+        <h2 data-i18n="tts.genTitle">Generation</h2>
+        <div class="row">
+          <label class="grow"><span data-i18n="settings.temperature">Temperature</span>
+            <input id="gen-temp" type="number" step="0.05" /></label>
+          <label class="grow"><span data-i18n="settings.topP">Top-p</span>
+            <input id="gen-topp" type="number" step="0.05" /></label>
+          <label class="grow"><span data-i18n="settings.repPenalty">Repetition penalty</span>
+            <input id="gen-reppen" type="number" step="0.01" /></label>
+        </div>
+        <div class="row" id="gen-cb-row">
+          <label class="grow"><span data-i18n="settings.exaggeration">Exaggeration</span>
+            <input id="gen-exag" type="number" step="0.05" /></label>
+          <label class="grow"><span data-i18n="settings.cfgWeight">CFG weight</span>
+            <input id="gen-cfg" type="number" step="0.05" /></label>
+          <label class="grow"><span data-i18n="settings.minP">Min-p</span>
+            <input id="gen-minp" type="number" step="0.01" /></label>
+        </div>
+        <div class="row">
+          <label class="grow"><span data-i18n="settings.batch">Batch size</span>
+            <input id="gen-batch" type="number" min="1" /></label>
+          <label class="grow"><span data-i18n="settings.chunkMax">Chunk max (chars)</span>
+            <input id="gen-maxchars" type="number" min="40" /></label>
+          <label class="grow"><span data-i18n="settings.format">Format</span>
+            <select id="gen-format">
+              <option value="wav">wav</option>
+              <option value="pcm">pcm</option>
+            </select></label>
+          <label class="grow"><span data-i18n="settings.sampleRate">Sample rate</span>
+            <input id="gen-samplerate" type="number" step="1000" /></label>
+        </div>
+        <button id="gen-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="gen-save-status" class="muted"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- AVATARS -->
+  <section id="tab-avatars" class="tab">
+    <div class="grid">
       <div class="card wide">
         <h2 data-i18n="avatars.title">Voices (avatars)</h2>
-        <div class="muted" data-i18n="avatars.hint">Reusable voices: clone a voice or design one from a description, then use it in the conversation.</div>
+        <div class="muted" data-i18n="avatars.hint">Reusable cloned voices. Generate a voice with Voice Design, save it as a clone, then use it in the conversation.</div>
         <div class="row"><button id="av-new" class="primary" data-i18n="avatars.createBtn">Create a voice</button></div>
         <div id="avatars-list" class="avatars"></div>
+      </div>
+      <div class="card">
+        <h2 data-i18n="avatars.engineTitle">Clone engine</h2>
+        <label><span data-i18n="avatars.cloneBackend">Engine used to clone avatars</span>
+          <select id="set-clone-backend">
+            <option value="qwen3" data-i18n="avatars.backendQwen">Qwen3-TTS (Base)</option>
+            <option value="chatterbox" data-i18n="avatars.backendChatterbox">Chatterbox</option>
+          </select>
+        </label>
+        <label class="inline cb-only"><input id="set-cb-watermark" type="checkbox" /> <span data-i18n="avatars.watermark">Watermark output (PerTh)</span></label>
+        <div class="muted" data-i18n="avatars.engineHint">Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.</div>
+        <button id="set-clone-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="set-clone-status" class="muted"></div>
       </div>
     </div>
   </section>
@@ -117,17 +181,16 @@
       <h2 id="ad-title">Edit voice</h2>
     </div>
     <label><span data-i18n="avatars.name">Name</span> <input id="ad-name" type="text" /></label>
-    <label id="ad-kind-wrap"><span data-i18n="avatars.type">Type</span>
-      <select id="ad-kind">
-        <option value="design" data-i18n="avatars.kindDesign">Design from a description</option>
-        <option value="clone" data-i18n="avatars.kindClone">Clone from audio</option>
-      </select>
-    </label>
     <label><span data-i18n="avatars.language">Language</span> <select id="ad-lang"></select></label>
     <div id="ad-design-box">
-      <label><span data-i18n="avatars.prompt">Description</span>
+      <label><span data-i18n="avatars.prompt">Voice description (Voice Design)</span>
         <textarea id="ad-prompt" rows="2" data-i18n-ph="avatars.promptPlaceholder" placeholder="e.g. warm, calm female voice, slight British accent"></textarea>
       </label>
+      <div class="row">
+        <button type="button" id="ad-fingerprint" data-i18n="avatars.fingerprint">Generate fingerprint</button>
+        <audio id="ad-fingerprint-audio" controls hidden></audio>
+      </div>
+      <div class="muted" data-i18n="avatars.fingerprintHint">Renders ~10s from the description. Saving with the description (or empty reference) stores it as a clone.</div>
     </div>
     <div id="ad-clone-box">
       <label><span data-i18n="avatars.refAudio">Reference audio</span> <input id="ad-ref" type="file" accept="audio/*" /></label>
@@ -181,10 +244,7 @@
       <div class="card wide">
         <h2 data-i18n="settings.startupTitle">Startup</h2>
         <div class="row">
-          <div class="grow">
-            <span class="muted" data-i18n="settings.startupStt">STT model to load</span>
-            <div id="set-startup-stt-picker" class="stt-picker"></div>
-          </div>
+          <div id="set-startup-stt-picker" class="grow"></div>
           <label class="grow"><span data-i18n="settings.startupVoice">Voice to load</span>
             <select id="set-startup-voice"></select>
           </label>
@@ -200,14 +260,6 @@
         <label><span data-i18n="settings.systemPrompt">System prompt</span> <textarea id="set-llm-system" rows="3"></textarea></label>
         <button id="set-llm-ping" data-i18n="settings.test">Test connection</button>
         <div id="set-llm-status" class="muted"></div>
-      </div>
-      <div class="card">
-        <h2 data-i18n="settings.genTitle">Generation / audio</h2>
-        <label><span data-i18n="settings.temperature">Temperature</span> <input id="set-temp" type="number" step="0.05" /></label>
-        <label><span data-i18n="settings.batch">Batch size</span> <input id="set-batch" type="number" min="1" /></label>
-        <label><span data-i18n="settings.chunkMax">Chunk max (chars)</span> <input id="set-maxchars" type="number" min="40" /></label>
-        <button id="set-save" class="primary" data-i18n="settings.save">Save</button>
-        <div id="set-save-status" class="muted"></div>
       </div>
       <div class="card">
         <h2 data-i18n="settings.clientKeyTitle">Client API key</h2>
