@@ -139,6 +139,35 @@ depth, and per-stage timings (`/api/metrics`).
   the 1.7B CustomVoice, ≈1.3 GiB for the 0.6B), and the startup warning
   `Free memory on device …` how much room the card actually has.
 
+  A *different* failure — `StageEngineCoreProc_stage1_replica0 … torch.OutOfMemoryError` while
+  loading `Qwen3TTSTokenizerV2Decoder` (or requests failing with
+  `speech.audio.error: Stage-1 has no live replica`) — is not about the KV budget: the card
+  ran out of room **between the two stages**. Qwen3-TTS is served as two stages (`0` = talker,
+  `1` = `Code2Wav`) that share the GPU, and each reserves its own share of it; the bundled
+  YAML splits that 0.3 / 0.2, but a **global `--gpu-memory-utilization` overrides both**, so
+  `--gpu-memory-utilization 0.3` asks for 0.3 × *total* VRAM **twice** — on a 15 GiB card
+  stage 1 then starts while stage 0 already holds its half. Budget per stage instead:
+
+  ```yaml
+    command: >
+      vllm serve Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+      --omni --host 0.0.0.0 --port 8091
+      --max-model-len 2048
+      --enforce-eager
+      --stage-overrides '{"0": {"gpu_memory_utilization": 0.20}, "1": {"gpu_memory_utilization": 0.10}}'
+    environment:
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # what the OOM message itself suggests
+  ```
+
+  `--stage-overrides` beats the global flag (and the YAML). The flag has moved between
+  releases (`--stage-configs-path` → `--deploy-config`), so confirm it with
+  `vllm serve --help | grep -i stage`. Anything else holding VRAM on that GPU (typically the
+  gateway's own copy of the family, if it is loaded) eats into the same budget: when
+  `vllm.enabled` the gateway now **skips the `custom_voice` preload** (log:
+  *not preloading 'custom_voice' — vLLM-Omni serves it*) and **unloads** its local copy as
+  soon as vLLM is switched on, so start the container while the gateway is idle and it sizes
+  its pools from free memory.
+
   `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
   service is unreachable and the call fell back). When vLLM does serve CustomVoice, the
   gateway **unloads its own copy** of that family (logged) so the VRAM is not paid twice —

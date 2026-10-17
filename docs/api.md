@@ -14,7 +14,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`), `server.log_level` — sections merge recursively |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`), `server.log_level` — sections merge recursively. Enabling `vllm` unloads the local CustomVoice copy (the service needs the VRAM for its two stages) and primes the service in the background |
 
 ## Access (admin)
 

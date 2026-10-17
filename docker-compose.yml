@@ -105,6 +105,13 @@ services:
   tts-vllm:
     image: ${VLLM_OMNI_IMAGE:-vllm/vllm-omni:latest}
     profiles: ["vllm"]
+    # The model served here is this argument alone — the gateway's
+    # `models.registry`/`default_size` only drive its *local* engine.
+    # On a small or shared card, add `--max-model-len 2048 --enforce-eager` and
+    # budget the two stages (0 = talker, 1 = Code2Wav) separately, e.g.
+    #   --stage-overrides '{"0": {"gpu_memory_utilization": 0.20}, "1": {"gpu_memory_utilization": 0.10}}'
+    # A global `--gpu-memory-utilization` would replace *both* shares and make
+    # stage 1 die with CUDA OOM. See docs/realtime.md.
     command: >
       vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
       --omni --host 0.0.0.0 --port 8091
@@ -117,6 +124,8 @@ services:
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
       - NVIDIA_VISIBLE_DEVICES=all
+      # Fragmentation advice from torch's own OOM message.
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     <<: *nvidia-gpu
     restart: unless-stopped
     networks: [speech]

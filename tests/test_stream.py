@@ -167,3 +167,31 @@ def test_warm_vllm_succeeds_after_a_retry(monkeypatch):
     settings.vllm.enabled = True
     assert asyncio.run(_warm_vllm(settings, attempts=3, delay=0)) is True
     assert len(calls) == 2
+
+
+def test_release_vllm_family_frees_the_local_copy():
+    import asyncio as _asyncio
+
+    from app.main import _release_vllm_family
+
+    dropped = []
+
+    class Engine:
+        def loaded_families(self):
+            return ["custom_voice", "base"]
+
+        def unload(self, family=None):
+            dropped.append(family)
+
+    engine = Engine()
+    assert _asyncio.run(_release_vllm_family(engine, "test")) is True
+    assert dropped == ["custom_voice"]  # only the family vLLM serves
+
+    class Idle:
+        def loaded_families(self):
+            return ["chatterbox"]
+
+        def unload(self, family=None):  # pragma: no cover - nothing to drop
+            raise AssertionError("nothing to unload")
+
+    assert _asyncio.run(_release_vllm_family(Idle(), "test")) is False

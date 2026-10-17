@@ -132,11 +132,15 @@ how much it can serve, and it optimizes the decode loop.
 | CUDA graphs / `torch.compile` | none (eager) | capture of `cudagraph_capture_sizes` (1…128) + inductor compile (~1–2 GiB, 13 s in the logs) |
 | Speaker embeddings | small Python dict | `speaker_cache` reserves 512 MiB |
 | Attention / sampling kernels | `sdpa` inside torch | FlashAttention-2 + FlashInfer workspaces |
+| Stage reservations | n/a (one model) | **per stage**, from the model's stage YAML (0.3 talker + 0.2 `Code2Wav`) — a global `--gpu-memory-utilization` replaces **both**, hence the double reservation that kills stage 1 on a small card |
 | Processes / CUDA contexts | one | API server + engine core(s) + stage replicas: one context each (~0.3–0.6 GiB) + NCCL buffers |
 | Activation buffers | sized per request | sized for `max_num_batched_tokens` (512, and 65536 for the `Code2Wav` stage) |
 
 That is the trade for throughput and predictable latency — and it is why a shared card that
 cannot afford the reservation fails with `Available KV cache memory: 0.35 GiB` while the local
 engine is perfectly happy. The levers follow from the table: `--max-model-len` (smaller pool),
-`--enforce-eager` (no graphs/compile), the 0.6B variant (smaller weights), and a
-`--gpu-memory-utilization` low enough to leave room for the gateway and STT.
+`--enforce-eager` (no graphs/compile), the 0.6B variant (smaller weights), and
+`--gpu-memory-utilization` low enough to leave room for the gateway and STT. Note that on a
+**shared** card the last one is subtler than it looks: it applies to *every* stage at once, so
+prefer the per-stage form (`--stage-overrides '{"0": {...}, "1": {...}}'`) — see
+[realtime](realtime.md#streaming-backends).

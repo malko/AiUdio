@@ -144,6 +144,16 @@ async def _apply_startup(app: FastAPI) -> None:
             log.debug("vLLM-Omni warm-up skipped", exc_info=True)
 
     family = settings.startup.tts_family
+    if family and settings.vllm.enabled and family == _VLLM_FAMILY:
+        # Both vLLM-Omni stages live on the same GPU and reserve their share at
+        # startup: preloading the same family here is what makes its second stage
+        # fail with CUDA OOM on a tight card.
+        log.info(
+            "Startup: not preloading '%s' — vLLM-Omni serves it (keeping the VRAM "
+            "for the service's two stages)",
+            family,
+        )
+        family = ""
     if family:
         try:
             await asyncio.to_thread(engine.ensure, family)
@@ -275,6 +285,10 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
     }
 
 
+#: The only family the vLLM-Omni service serves (CustomVoice: no clone/design).
+_VLLM_FAMILY = "custom_voice"
+
+
 def _vllm_eligible(settings: Settings, req: TTSRequest) -> bool:
     """vLLM-Omni serves the CustomVoice family only (no clone/design)."""
     if not settings.vllm.enabled:
@@ -284,7 +298,31 @@ def _vllm_eligible(settings: Settings, req: TTSRequest) -> bool:
     speaker = req.resolve_speaker()
     if speaker and AvatarStore(_avatar_dir(settings)).get(speaker) is not None:
         return False
-    return req.resolve_family(settings.models.default_family) == "custom_voice"
+    return req.resolve_family(settings.models.default_family) == _VLLM_FAMILY
+
+
+async def _release_vllm_family(engine: TTSEngine, reason: str) -> bool:
+    """Drop our own copy of the family vLLM-Omni serves.
+
+    The service loads **two stages** (the talker and the `Code2Wav` decoder) and each
+    one reserves its GPU memory fraction up front, on the same card as ours. On a small
+    shared GPU the local copy is precisely what starves the service's second stage
+    (`StageEngineCoreProc failed to start … CUDA out of memory`), so it is dropped as
+    soon as vLLM is asked to serve that family. Never raises: freeing VRAM must not
+    break a settings update.
+    """
+    try:
+        if _VLLM_FAMILY not in engine.loaded_families():
+            return False
+        await asyncio.to_thread(engine.unload, _VLLM_FAMILY)
+        log.info(
+            "vLLM-Omni %s: unloaded the local '%s' copy to leave it VRAM",
+            reason, _VLLM_FAMILY,
+        )
+        return True
+    except Exception:
+        log.exception("Could not unload the local '%s' copy", _VLLM_FAMILY)
+        return False
 
 
 async def _stream_vllm(
@@ -339,11 +377,8 @@ async def _stream_pcm(
                 # service loads its own two stages). Drop it once, and only if the
                 # first bytes actually arrived (a failed stream falls back locally).
                 engine = getattr(scheduler, "engine", None)
-                if engine is not None and "custom_voice" in engine.loaded_families():
-                    log.info(
-                        "vLLM-Omni is serving CustomVoice: unloading the local copy to free VRAM"
-                    )
-                    await asyncio.to_thread(engine.unload, "custom_voice")
+                if engine is not None:
+                    await _release_vllm_family(engine, "is serving CustomVoice")
             yield out
         if streamed:
             return
@@ -812,8 +847,10 @@ def create_app(
         if "server" in sections:
             _configure_logging(updated.server.log_level)
         if "vllm" in sections and updated.vllm.enabled:
-            # Enabling vLLM: prime it now, in the background, so the first turn
-            # after the change is not the one paying the cold start.
+            # Enabling vLLM: give its two stages the room they need *now* (the local
+            # CustomVoice copy is redundant), then prime it in the background so the
+            # first turn after the change is not the one paying the cold start.
+            await _release_vllm_family(engine, "enabled in Settings")
             asyncio.create_task(_warm_vllm(updated))
         if "models" in sections:
             # The registry/size may have changed: drop resident models so the next
