@@ -153,7 +153,8 @@ One **CUDA** compose (the default `docker-compose.yml`, CUDA 13), works with any
 
 - **TTS gateway**: `pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime` (official image).
 - **STT**: `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (official NVIDIA NGC image, CUDA, multi-arch), wrapped with busybox for the wait entrypoint.
-- Optional: `docker compose --profile vllm up -d` for the experimental vLLM-Omni streaming service.
+- Optional: `docker compose --profile vllm up -d` for the experimental vLLM-Omni streaming service
+  (preset voices with a `-CustomVoice` checkpoint, cloned voices with a `-Base` one).
 
 Non-NVIDIA hardware uses **additive overrides** (the CUDA default is unchanged):
 
@@ -425,6 +426,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | Authenticated WS fails | use an API key (Basic does not work over browser WebSocket) |
 | STT unreachable | `docker compose logs stt`; the upstream build may need a path adjustment (`cmake --install`) |
 | Choppy TTS streaming | lower `chunking.max_chars` or use the `vllm` profile |
+| vLLM serves the wrong checkpoint | `/api/vllm/health` reports `served_family`; set `vllm.family` to match (`custom_voice` presets / `base` clones) — the service loads a single model |
 | vLLM `Stage-1 has no live replica` / stage-1 CUDA OOM | the two stages each reserve a fraction of the *same* GPU (Qwen3-TTS: 0.3 + 0.3 = 60 % of the card, whatever the model size): lower them with `--stage-overrides`; see [realtime](docs/realtime.md) |
 | `Warning: flash-attn is not installed` | expected — attention falls back to PyTorch `sdpa` (no FlashAttention build in the image) |
 | `Chatterbox is not installed` | build the image with `INSTALL_CHATTERBOX=1`, or point `models.chatterbox.python` at a venv with `chatterbox-tts` |

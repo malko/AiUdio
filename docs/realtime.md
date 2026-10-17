@@ -55,16 +55,41 @@ depth, and per-stage timings (`/api/metrics`).
   transcript already ends with sentence punctuation (faster turn-taking).
 - **Browser echo cancellation**: the mic is opened with `echoCancellation`,
   `noiseSuppression`, `autoGainControl`, so hands-free barge-in works without headphones.
-- **vLLM-Omni streaming backend** (experimental): with `vllm.enabled`, CustomVoice
-  streaming is served by vLLM-Omni (native codec-window PCM) via `app/vllm_backend.py`,
-  falling back to the local per-sentence engine if the service is unavailable. Enable it
-  without editing the state file:
+- **vLLM-Omni streaming backend** (experimental): with `vllm.enabled`, the family named
+  by `vllm.family` is served by vLLM-Omni (native codec-window PCM) via `app/vllm_backend.py`,
+  the other families keep using the local engine. Two families are supported:
+  `custom_voice` (preset speakers) and `base` (voice cloning from a reference clip, sent
+  inline as a `data:` URL), because **the service loads a single checkpoint**. Start it with
+  a Base checkpoint and select `family: base` to route your cloned voices to it. Requests
+  of the other family, and every request when the service is down, fall back to the local
+  per-sentence engine. Enable it without editing the state file:
 
   ```bash
   docker compose --profile vllm up -d tts-vllm     # the service
   curl -s -X PUT localhost:8004/api/settings -H 'Content-Type: application/json' \
-       -d '{"vllm":{"enabled":true,"base_url":"http://tts-vllm:8091"}}'
+       -d '{"vllm":{"enabled":true,"base_url":"http://tts-vllm:8091","family":"custom_voice"}}'
   ```
+
+  For **cloned voices**, start the service on a Base checkpoint and point `family` at it —
+  the voice bank keeps working, only the reference clip travels differently (inline
+  `ref_audio` data URL + `ref_text`, `task_type=Base`):
+
+  ```yaml
+  # docker-compose.yml, tts-vllm
+    command: >
+      vllm serve Qwen/Qwen3-TTS-12Hz-0.6B-Base      # or 1.7B-Base
+      --omni --host 0.0.0.0 --port 8091
+      --max-model-len 2048 --enforce-eager
+  ```
+
+  ```bash
+  curl -s -X PUT localhost:8004/api/settings -H 'Content-Type: application/json' \
+       -d '{"vllm":{"enabled":true,"family":"base"}}'
+  ```
+
+  The preset speakers (`vivian`, `serena`…) then stay local, and so do Chatterbox clones
+  (`models.clone_backend: chatterbox` is not what a Base checkpoint serves). An avatar
+  without a transcript clones from the speaker embedding only (`x_vector_only_mode`).
 
   A manager that cannot pass a profile (Web UI, Dockge, Portainer…) should **delete the
   `profiles: ["vllm"]` line** of the `tts-vllm` service instead: it then belongs to the
@@ -76,8 +101,9 @@ depth, and per-stage timings (`/api/metrics`).
   `/v1/audio/speech/stream` (WebSocket). Our client asks for **raw PCM** with
   `stream_format: "audio"`: with `stream: true` alone the service answers the OpenAI
   `speech.audio.*` SSE events (base64 deltas), which cannot be forwarded as PCM to our
-  clients. **Settings → vLLM-Omni** has the switch, the base URL, the route and a *Test
-  connection* button (`GET /api/vllm/health`):
+  clients. **Settings → vLLM-Omni** has the switch, the family served, the base URL, the
+  route and a *Test connection* button (`GET /api/vllm/health`, which reports the checkpoint
+  the service actually serves and warns when it is not the family you route to it):
 
   ```bash
   curl -s -X PUT localhost:8004/api/settings -H 'Content-Type: application/json' \
@@ -100,7 +126,10 @@ depth, and per-stage timings (`/api/metrics`).
 
   The model the service serves is its own `vllm serve <model>` argument — the gateway's
   `models.registry`/`default_size` only drive the *local* engine; both 0.6B and 1.7B
-  CustomVoice expose the same speakers.
+  CustomVoice expose the same speakers, and the `-Base` checkpoints do the cloning.
+  A gateway that routes `base` to a service serving a `CustomVoice` checkpoint (or the
+  reverse) gets a 400 per request and falls back locally; `/api/vllm/health` names the
+  mismatch instead.
 
   Without Compose, the same service can be started standalone on the stack network:
 
@@ -181,8 +210,8 @@ depth, and per-stage timings (`/api/metrics`).
   gateway is idle and it sizes its pools from free memory.
 
   `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
-  service is unreachable and the call fell back). When vLLM does serve CustomVoice, the
-  gateway **unloads its own copy** of that family (logged) so the VRAM is not paid twice —
+  service is unreachable and the call fell back). When vLLM does serve a family, the
+  gateway **unloads its own copy** of it (logged) so the VRAM is not paid twice —
   note that the vLLM-Omni service itself always loads **two stages** (the talker and the
   `Code2Wav` decoder) on the GPU, which its startup log mentions explicitly.
 - **Observability**: `/api/metrics` (TTFA, RTF, counters, queue depth, model

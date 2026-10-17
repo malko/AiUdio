@@ -234,6 +234,7 @@ function applySettingsFields(cfg) {
 function applyVllmFields(cfg) {
   const v = (cfg && cfg.vllm) || {};
   if ($("#set-vllm-enabled")) $("#set-vllm-enabled").checked = !!v.enabled;
+  if ($("#set-vllm-family")) $("#set-vllm-family").value = v.family === "base" ? "base" : "custom_voice";
   if ($("#set-vllm-url")) $("#set-vllm-url").value = v.base_url || "";
   if ($("#set-vllm-path")) $("#set-vllm-path").value = v.path || "/v1/audio/speech";
 }
@@ -2075,6 +2076,7 @@ $("#set-vllm-save").addEventListener("click", async () => {
   status.textContent = "…";
   const vllm = {
     enabled: $("#set-vllm-enabled").checked,
+    family: $("#set-vllm-family") ? $("#set-vllm-family").value : "custom_voice",
     base_url: $("#set-vllm-url").value.trim() || "http://tts-vllm:8091",
     path: $("#set-vllm-path").value.trim() || "/v1/audio/speech",
   };
@@ -2102,8 +2104,9 @@ $("#set-vllm-test").addEventListener("click", async () => {
   try {
     const r = await getJSON("/api/vllm/health");
     const models = (r.models || []).join(", ");
+    const served = r.warning ? ` ⚠ ${r.warning}` : (r.served_family ? ` (${r.served_family})` : "");
     status.textContent = r.ok
-      ? `${t("status.online")} — ${models || r.base_url}`
+      ? `${t("status.online")} — ${models || r.base_url}${served}`
       : `${t("status.offline")} ${r.error || r.status || ""}`;
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;

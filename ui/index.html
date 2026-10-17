@@ -288,9 +288,15 @@
       <div class="card">
         <h2 data-i18n="settings.vllmTitle">vLLM-Omni (streaming)</h2>
         <label class="inline"><input id="set-vllm-enabled" type="checkbox" /> <span data-i18n="settings.vllmEnabled">Serve built-in voices with vLLM-Omni</span></label>
+        <label><span data-i18n="settings.vllmFamily">Checkpoint served</span>
+          <select id="set-vllm-family">
+            <option value="custom_voice" data-i18n="settings.vllmFamilyPresets">Preset voices (CustomVoice)</option>
+            <option value="base" data-i18n="settings.vllmFamilyClones">Cloned voices (Base)</option>
+          </select>
+        </label>
         <label><span data-i18n="settings.vllmUrl">Base URL</span> <input id="set-vllm-url" type="text" /></label>
         <label><span data-i18n="settings.vllmPath">Route</span> <input id="set-vllm-path" type="text" /></label>
-        <div class="muted" data-i18n="settings.vllmHint">Only built-in (CustomVoice) voices are routed: cloned voices keep using the local engine, and when vLLM serves a family the gateway unloads its own copy of it.</div>
+        <div class="muted" data-i18n="settings.vllmHint">The service loads a single checkpoint: pick the family it serves and only that family is routed (the others stay on the local engine). The service loads two stages on the GPU, so enabling this skips the preload of that family and unloads the local copy to leave it the VRAM.</div>
         <button id="set-vllm-save" class="primary" data-i18n="settings.save">Save</button>
         <button id="set-vllm-test" data-i18n="settings.test">Test connection</button>
         <div id="set-vllm-status" class="muted"></div>

@@ -14,7 +14,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`), `server.log_level` — sections merge recursively. Enabling `vllm` unloads the local CustomVoice copy (the service needs the VRAM for its two stages) and primes the service in the background |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`), `server.log_level` — sections merge recursively. Enabling `vllm` unloads the local copy of the family the service serves (it needs the VRAM for its two stages) and primes the service in the background |
 
 ## Access (admin)
 
@@ -38,7 +38,7 @@ admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at 
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/vllm/health` | Probe the configured vLLM-Omni service (admin) |
+| GET | `/api/vllm/health` | Probe the configured vLLM-Omni service: `ok`, `models`, `served_family` and a `warning` when the served checkpoint is not the one `vllm.family` routes (admin) |
 | GET | `/api/models` | Available families, loaded, active |
 | POST | `/api/models/load` | `{"family": "custom_voice"}` — load (hot-swap) |
 | POST | `/api/models/select` | `{"variant": "custom_voice:0.6B"}` — point a family at one of its variants (`models.registry`) |

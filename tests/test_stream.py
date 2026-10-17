@@ -184,7 +184,7 @@ def test_release_vllm_family_frees_the_local_copy():
             dropped.append(family)
 
     engine = Engine()
-    assert _asyncio.run(_release_vllm_family(engine, "test")) is True
+    assert _asyncio.run(_release_vllm_family(engine, "custom_voice", "test")) is True
     assert dropped == ["custom_voice"]  # only the family vLLM serves
 
     class Idle:
@@ -194,4 +194,83 @@ def test_release_vllm_family_frees_the_local_copy():
         def unload(self, family=None):  # pragma: no cover - nothing to drop
             raise AssertionError("nothing to unload")
 
-    assert _asyncio.run(_release_vllm_family(Idle(), "test")) is False
+    assert _asyncio.run(_release_vllm_family(Idle(), "custom_voice", "test")) is False
+
+
+def _settings_with_avatar(tmp_path):
+    """Settings whose voice bank holds one cloned voice."""
+    from app.avatars import Avatar, AvatarStore
+
+    settings = Settings()
+    settings.paths.voices = str(tmp_path)
+    store = AvatarStore(tmp_path / "avatars")
+    store.save(Avatar(id="bugatti", name="Bugatti", kind="clone",
+                      ref_text="Bonjour, je suis Bugatti."))
+    store.wav_path("bugatti").write_bytes(b"RIFF....WAVE")
+    return settings
+
+
+def test_vllm_serves_clones_when_configured_for_base(tmp_path):
+    from app.main import _vllm_eligible, _vllm_payload
+
+    settings = _settings_with_avatar(tmp_path)
+    settings.vllm.enabled = True
+    settings.vllm.family = "base"
+
+    clone = TTSRequest(text="Bonjour", avatar="bugatti")
+    assert _vllm_eligible(settings, clone) is True
+    payload = _vllm_payload(settings, clone, "Bonjour")
+    assert payload["task_type"] == "Base"
+    # The clip travels inline: the service cannot read our voice directory.
+    assert payload["ref_audio"].startswith("data:audio/wav;base64,")
+    assert payload["ref_text"] == "Bonjour, je suis Bugatti."
+    assert payload["x_vector_only_mode"] is False
+    assert payload["stream_format"] == "audio"
+    assert "voice" not in payload
+
+    # A preset voice belongs to the other checkpoint: the local engine keeps it.
+    assert _vllm_eligible(settings, TTSRequest(text="Bonjour", speaker="vivian")) is False
+
+
+def test_vllm_serves_presets_when_configured_for_custom_voice(tmp_path):
+    from app.main import _vllm_eligible, _vllm_payload
+
+    settings = _settings_with_avatar(tmp_path)  # vllm.family defaults to custom_voice
+    settings.vllm.enabled = True
+
+    preset = TTSRequest(text="Bonjour", speaker="Vivian")
+    assert _vllm_eligible(settings, preset) is True
+    assert _vllm_payload(settings, preset, "Bonjour")["voice"] == "vivian"
+
+    clone = TTSRequest(text="Bonjour", avatar="bugatti")
+    assert _vllm_eligible(settings, clone) is False
+
+
+def test_clone_routing_requires_a_reference_clip(tmp_path):
+    from app.main import _vllm_eligible, _vllm_payload
+
+    settings = _settings_with_avatar(tmp_path)
+    settings.vllm.enabled = True
+    settings.vllm.family = "base"
+    # A Base task with nothing to clone from has to stay on the local engine.
+    assert _vllm_eligible(settings, TTSRequest(text="Bonjour", family="base")) is False
+    # Chatterbox is a local clone engine: the vLLM service cannot serve it.
+    settings.models.clone_backend = "chatterbox"
+    assert _vllm_eligible(settings, TTSRequest(text="Bonjour", avatar="bugatti")) is False
+    # A clip without a transcript clones from the speaker embedding only.
+    settings.models.clone_backend = "qwen3"
+    payload = _vllm_payload(
+        settings,
+        TTSRequest(text="Bonjour", ref_audio=str(tmp_path / "avatars" / "bugatti.wav")),
+        "Bonjour",
+    )
+    assert payload["x_vector_only_mode"] is True
+    assert "ref_text" not in payload
+
+
+def test_family_for_model_reads_the_served_checkpoint():
+    from app.vllm_backend import family_for_model
+
+    assert family_for_model("Qwen/Qwen3-TTS-12Hz-0.6B-Base") == "base"
+    assert family_for_model("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice") == "custom_voice"
+    assert family_for_model("Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign") is None

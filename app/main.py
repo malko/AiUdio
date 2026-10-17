@@ -115,7 +115,16 @@ async def _apply_startup(app: FastAPI) -> None:
             log.exception("Startup STT activation failed")
 
     voice = settings.startup.voice
-    if voice:
+    if voice and settings.vllm.enabled and _preload_is_served_by_vllm(settings, voice):
+        # Both vLLM-Omni stages live on the same GPU and reserve their share at
+        # startup: preloading the same family here is what makes its second stage
+        # fail with CUDA OOM on a tight card.
+        log.info(
+            "Startup: not preloading '%s' — vLLM-Omni serves that family (keeping "
+            "the VRAM for the service's two stages)",
+            voice,
+        )
+    elif voice:
         try:
             if voice.startswith("avatar:"):
                 store = AvatarStore(_avatar_dir(settings))
@@ -144,10 +153,7 @@ async def _apply_startup(app: FastAPI) -> None:
             log.debug("vLLM-Omni warm-up skipped", exc_info=True)
 
     family = settings.startup.tts_family
-    if family and settings.vllm.enabled and family == _VLLM_FAMILY:
-        # Both vLLM-Omni stages live on the same GPU and reserve their share at
-        # startup: preloading the same family here is what makes its second stage
-        # fail with CUDA OOM on a tight card.
+    if family and settings.vllm.enabled and family == _vllm_family(settings):
         log.info(
             "Startup: not preloading '%s' — vLLM-Omni serves it (keeping the VRAM "
             "for the service's two stages)",
@@ -285,23 +291,109 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
     }
 
 
-#: The only family the vLLM-Omni service serves (CustomVoice: no clone/design).
-_VLLM_FAMILY = "custom_voice"
+#: Families the vLLM-Omni service can serve (it loads a single checkpoint).
+_VLLM_FAMILIES = ("custom_voice", "base")
+#: Cache of inline reference clips: locator key → data URL.
+_REF_LOCATORS: Dict[str, str] = {}
+
+
+def _vllm_family(settings: Settings) -> str:
+    """Family the configured vLLM-Omni service serves (default: preset voices)."""
+    value = str(getattr(settings.vllm, "family", "") or "").strip().lower()
+    return value if value in _VLLM_FAMILIES else "custom_voice"
+
+
+def _preload_is_served_by_vllm(settings: Settings, voice: str) -> bool:
+    """Is this startup voice a family the vLLM-Omni service will serve?"""
+    served = _vllm_family(settings)
+    if voice.startswith("avatar:"):
+        return served == "base" and _clone_family(settings) == "base"
+    return voice.strip().lower() == served
+
+
+def _resolve_avatar(settings: Settings, req: TTSRequest) -> Optional[Avatar]:
+    """Voice-bank entry named by the request (``avatar``, or as ``voice``)."""
+    store = AvatarStore(_avatar_dir(settings))
+    avatar_id = req.avatar
+    if not avatar_id:
+        candidate = req.resolve_speaker()
+        avatar = store.get(candidate) if candidate else None
+        if avatar is None:
+            return None
+        avatar_id = candidate
+    return store.get(avatar_id)
+
+
+def _effective_family(settings: Settings, req: TTSRequest) -> str:
+    """Family this request is synthesized with, mirroring `_item_from_request`."""
+    if _resolve_avatar(settings, req) is not None:
+        family = _clone_family(settings, req.resolve_clone_backend())
+        requested = req.requested_family()
+        return requested if requested in CLONE_FAMILIES else family
+    family = req.resolve_family(settings.models.default_family)
+    if req.ref_audio and req.requested_family() is None:
+        family = _clone_family(settings, req.resolve_clone_backend())
+    return family
+
+
+def _ref_locator(value: str) -> str:
+    """Reference clip as a locator the vLLM service can resolve.
+
+    URLs and data URLs pass through; a local file becomes an inline data URL (the
+    service cannot read our filesystem). Cached by path/mtime/size so a chat does
+    not re-encode the clip once per sentence.
+    """
+    value = (value or "").strip()
+    if not value or value.startswith(("http://", "https://", "data:")):
+        return value
+    path = Path(value)
+    try:
+        stat = path.stat()
+    except OSError:
+        return ""
+    key = f"{path}:{stat.st_mtime_ns}:{stat.st_size}"
+    cached = _REF_LOCATORS.get(key)
+    if cached is None:
+        cached = vllm_backend.audio_data_url(path.read_bytes())
+        _REF_LOCATORS[key] = cached
+    return cached
+
+
+def _vllm_reference(
+    settings: Settings, req: TTSRequest
+) -> Optional[Tuple[str, Optional[str], bool]]:
+    """Reference clip/transcript for a clone request, or None when there is none."""
+    avatar = _resolve_avatar(settings, req)
+    if avatar is not None:
+        wav = AvatarStore(_avatar_dir(settings)).wav_path(avatar.id)
+        locator = _ref_locator(str(wav))
+        if not locator:
+            return None
+        ref_text = (avatar.ref_text or "").strip() or None
+        return locator, ref_text, bool(avatar.x_vector_only) or not ref_text
+    if req.ref_audio:
+        locator = _ref_locator(req.ref_audio)
+        if not locator:
+            return None
+        ref_text = (req.ref_text or "").strip() or None
+        return locator, ref_text, bool(req.x_vector_only_mode) or not ref_text
+    return None
 
 
 def _vllm_eligible(settings: Settings, req: TTSRequest) -> bool:
-    """vLLM-Omni serves the CustomVoice family only (no clone/design)."""
+    """Does this request belong to the family the vLLM-Omni service serves?"""
     if not settings.vllm.enabled:
         return False
-    if req.avatar:
+    if _effective_family(settings, req) != _vllm_family(settings):
         return False
-    speaker = req.resolve_speaker()
-    if speaker and AvatarStore(_avatar_dir(settings)).get(speaker) is not None:
-        return False
-    return req.resolve_family(settings.models.default_family) == _VLLM_FAMILY
+    if _vllm_family(settings) == "base":
+        # Cloning needs a reference clip we can hand over (a voice-bank entry or
+        # an explicit `ref_audio`); otherwise the local engine has nothing to use.
+        return _vllm_reference(settings, req) is not None
+    return True
 
 
-async def _release_vllm_family(engine: TTSEngine, reason: str) -> bool:
+async def _release_vllm_family(engine: TTSEngine, family: str, reason: str) -> bool:
     """Drop our own copy of the family vLLM-Omni serves.
 
     The service loads **two stages** (the talker and the `Code2Wav` decoder) and each
@@ -311,25 +403,53 @@ async def _release_vllm_family(engine: TTSEngine, reason: str) -> bool:
     soon as vLLM is asked to serve that family. Never raises: freeing VRAM must not
     break a settings update.
     """
+    if family not in _VLLM_FAMILIES:  # pragma: no cover - guarded by the callers
+        return False
     try:
-        if _VLLM_FAMILY not in engine.loaded_families():
+        if family not in engine.loaded_families():
             return False
-        await asyncio.to_thread(engine.unload, _VLLM_FAMILY)
+        await asyncio.to_thread(engine.unload, family)
         log.info(
             "vLLM-Omni %s: unloaded the local '%s' copy to leave it VRAM",
-            reason, _VLLM_FAMILY,
+            reason, family,
         )
         return True
     except Exception:
-        log.exception("Could not unload the local '%s' copy", _VLLM_FAMILY)
+        log.exception("Could not unload the local '%s' copy", family)
         return False
+
+
+def _vllm_payload(
+    settings: Settings, req: TTSRequest, text: str
+) -> Optional[Dict[str, Any]]:
+    """Speech payload for the family the service serves (None when unusable)."""
+    family = _vllm_family(settings)
+    ref_audio: Optional[str] = None
+    ref_text: Optional[str] = None
+    x_vector_only = False
+    if family == "base":
+        reference = _vllm_reference(settings, req)
+        if reference is None:
+            return None
+        ref_audio, ref_text, x_vector_only = reference
+    return vllm_backend.speech_payload(
+        req,
+        text,
+        sample_rate=settings.audio.sample_rate,
+        family=family,
+        ref_audio=ref_audio,
+        ref_text=ref_text,
+        x_vector_only_mode=x_vector_only,
+    )
 
 
 async def _stream_vllm(
     settings: Settings, req: TTSRequest, text: str
 ) -> AsyncIterator[Tuple[str, bytes, int]]:
     """Yield native PCM from vLLM-Omni; yields nothing (to fall back) on failure."""
-    payload = vllm_backend.speech_payload(req, text, sample_rate=settings.audio.sample_rate)
+    payload = _vllm_payload(settings, req, text)
+    if payload is None:  # no reference clip to clone from: stay local
+        return
     started = time.perf_counter()
     stream = vllm_backend.stream_pcm(settings.vllm.base_url, payload, path=settings.vllm.path)
     try:
@@ -369,16 +489,17 @@ async def _stream_pcm(
     # Optional: native codec-window streaming through a vLLM-Omni service.
     if chunks and _vllm_eligible(settings, req):
         streamed = False
+        served = _vllm_family(settings)
         async for out in _stream_vllm(settings, req, text):
             if not streamed:
                 streamed = True
-                # vLLM-Omni serves CustomVoice from now on: holding our own copy in
+                # vLLM-Omni serves this family from now on: holding our own copy in
                 # VRAM too would double the cost for the same family (the vLLM
                 # service loads its own two stages). Drop it once, and only if the
                 # first bytes actually arrived (a failed stream falls back locally).
                 engine = getattr(scheduler, "engine", None)
                 if engine is not None:
-                    await _release_vllm_family(engine, "is serving CustomVoice")
+                    await _release_vllm_family(engine, served, f"is serving '{served}'")
             yield out
         if streamed:
             return
@@ -848,9 +969,10 @@ def create_app(
             _configure_logging(updated.server.log_level)
         if "vllm" in sections and updated.vllm.enabled:
             # Enabling vLLM: give its two stages the room they need *now* (the local
-            # CustomVoice copy is redundant), then prime it in the background so the
-            # first turn after the change is not the one paying the cold start.
-            await _release_vllm_family(engine, "enabled in Settings")
+            # copy of the family it serves is redundant), then prime it in the
+            # background so the first turn after the change is not the one paying the
+            # cold start.
+            await _release_vllm_family(engine, _vllm_family(updated), "enabled in Settings")
             asyncio.create_task(_warm_vllm(updated))
         if "models" in sections:
             # The registry/size may have changed: drop resident models so the next
@@ -870,7 +992,8 @@ def create_app(
             raise HTTPException(403, "Admin authentication required")
         cfg = app.state.settings.vllm
         out: Dict[str, Any] = {
-            "enabled": cfg.enabled, "base_url": cfg.base_url, "path": cfg.path, "ok": False,
+            "enabled": cfg.enabled, "base_url": cfg.base_url, "path": cfg.path,
+            "family": _vllm_family(app.state.settings), "ok": False,
         }
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -878,7 +1001,18 @@ def create_app(
             out["status"] = resp.status_code
             out["ok"] = resp.status_code < 400
             if out["ok"]:
-                out["models"] = [m.get("id") for m in (resp.json().get("data") or [])]
+                models = [m.get("id") for m in (resp.json().get("data") or [])]
+                out["models"] = models
+                # The service loads a single checkpoint: tell the operator when it
+                # is not the family this gateway is routing to it.
+                served = vllm_backend.family_for_model(models[0]) if models else None
+                out["served_family"] = served
+                if served is not None and served != out["family"]:
+                    out["warning"] = (
+                        f"the service serves {served!r} but the gateway routes "
+                        f"{out['family']!r}: set vllm.family to {served!r} (or serve the "
+                        "matching checkpoint)"
+                    )
         except Exception as exc:  # unreachable / not vLLM
             out["error"] = str(exc)
         return out
@@ -1344,13 +1478,23 @@ async def _warm_vllm(settings: Settings, attempts: int = 8, delay: float = 15.0)
     cfg = settings.vllm
     if not cfg.enabled:
         return False
-    payload = {
-        "input": "a.",
-        "response_format": "pcm",
-        "stream": True,
-        "stream_format": "audio",
-        "sample_rate": settings.audio.sample_rate,
-    }
+    family = _vllm_family(settings)
+    req = TTSRequest(text="a.")
+    if family == "base":
+        # Cloning needs a reference clip: use any voice of the bank for the probe
+        # (the caches it fills are shared with the real ones).
+        store = AvatarStore(_avatar_dir(settings))
+        avatar = next((a for a in store.list() if store.wav_path(a.id).is_file()), None)
+        if avatar is None:
+            log.info(
+                "vLLM-Omni warm-up skipped: the service serves 'base' and the voice "
+                "bank has no clip to use as a reference"
+            )
+            return False
+        req = TTSRequest(text="a.", avatar=avatar.id)
+    payload = _vllm_payload(settings, req, "a.")
+    if payload is None:  # pragma: no cover - guarded above
+        return False
     for attempt in range(1, max(1, attempts) + 1):
         try:
             started = time.perf_counter()

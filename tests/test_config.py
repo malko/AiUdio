@@ -148,3 +148,13 @@ def test_update_merges_nested_sections(tmp_path):
     assert cb.watermark is True
     assert cb.python == "/opt/cb/venv/bin/python"  # not reset by the partial update
     assert cb.t3_model == "v3"
+
+
+def test_vllm_family_selects_the_served_checkpoint():
+    from app.config import Settings
+
+    assert Settings().vllm.family == "custom_voice"          # preset speakers
+    assert Settings(vllm={"family": "Base"}).vllm.family == "base"
+    assert Settings(vllm={"family": "clone"}).vllm.family == "base"
+    # Anything else falls back to the preset (CustomVoice) family.
+    assert Settings(vllm={"family": "bogus"}).vllm.family == "custom_voice"

@@ -141,6 +141,10 @@ llm:
 vllm:
   enabled: false
   base_url: http://tts-vllm:8091
+  # Checkpoint the service was started with: custom_voice (preset speakers) or
+  # base (voice cloning from a reference clip). Requests of the other family stay
+  # on the local engine — the service loads a single model.
+  family: custom_voice
 ui:
   title: AiUdio Server
   show_stt_tab: true

@@ -97,10 +97,12 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
 
 - **Gateway (native)**: **per-sentence** streaming (PCM16). Reduced perceived latency but no
   token-level streaming (not exposed by `qwen-tts`).
-- **`vllm` profile** (official vLLM-Omni image): set `vllm.enabled: true` and the gateway
-  routes streaming CustomVoice requests to it (`POST {vllm.base_url}/v1/audio/speech` with
-  `stream=true`, `response_format=pcm`) for **native codec-window PCM**; the local
-  per-sentence engine is used as a fallback if the service is unreachable. Experimental,
+- **`vllm` profile** (official vLLM-Omni image): set `vllm.enabled: true` for **native
+  codec-window PCM** (`POST {vllm.base_url}/v1/audio/speech` with `stream=true`,
+  `response_format=pcm`, `stream_format=audio`) on the family named by `vllm.family`
+  (`custom_voice` for the preset speakers, `base` for voice cloning — the service serves one
+  checkpoint, so both need their own deployment); the local per-sentence engine handles the
+  other families and is the fallback when the service is unreachable. Experimental,
   NVIDIA. See `app/vllm_backend.py`.
 - **STT**: NeMo-Speech.cpp exposes a realtime WebSocket
   (`/v1/audio/transcriptions/realtime`, ~160 ms with Nemotron 3.5). Parakeet TDT v3 stays
@@ -112,6 +114,7 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
 |---|---|
 | Qwen3-TTS 1.7B bf16 | ~3.5–4 GB |
 | Qwen3-TTS 0.6B bf16 | ~1.5 GB |
+| Qwen3-TTS `-Base` (cloning) | same as the matching CustomVoice variant |
 | Chatterbox Multilingual V3 (500M, fp32) | ~2–3 GB |
 | STT Nemotron 3.5 Q8 (ggml) | < 1 GB |
 | vLLM-Omni (1.7B + caches) | ~8–12 GB |

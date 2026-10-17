@@ -209,6 +209,19 @@ class VLLMConfig(BaseModel):
     # streaming endpoint (`/v1/audio/speech/stream`) — use it if the standard one
     # buffers the whole audio before answering.
     path: str = "/v1/audio/speech"
+    # Which family the *service* serves (it loads a single checkpoint):
+    # `custom_voice` for the preset speakers ("-CustomVoice" repos) or `base` for
+    # voice cloning from a reference clip ("-Base" repos, `task_type=Base`).
+    # Requests of the other family stay on the local engine.
+    family: str = "custom_voice"
+
+    @field_validator("family")
+    @classmethod
+    def _normalize_family(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower().replace("-", "_")
+        aliases = {"customvoice": "custom_voice", "clone": "base", "cloning": "base"}
+        normalized = aliases.get(normalized, normalized)
+        return normalized if normalized in ("custom_voice", "base") else "custom_voice"
 
 
 class UIConfig(BaseModel):
