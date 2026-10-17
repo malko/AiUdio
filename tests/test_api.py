@@ -42,6 +42,33 @@ def test_models_variants_listed(client):
     body = client.get("/api/models").json()
     ids = {v["id"] for v in body["variants"]}
     assert "custom_voice:0.6B" in ids and "base:0.6B" in ids
+    assert "chatterbox:v3" in ids
+    families = {f["family"] for f in body["families"]}
+    assert "chatterbox" in families
+
+
+def test_avatar_from_description(client):
+    r = client.post("/api/avatars", data={"name": "Design", "prompt": "warm calm voice", "language": "English"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "clone"
+    assert body["ref_text"]  # fingerprint transcript stored for ICL cloning
+
+
+def test_fingerprint_endpoint(client):
+    r = client.post("/api/avatars/fingerprint", data={"prompt": "deep male voice", "language": "English"})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("audio/wav")
+    assert r.content[:4] == b"RIFF"
+
+
+def test_clone_backend_switch(client):
+    r = client.put("/api/settings", json={"models": {"clone_backend": "chatterbox",
+                                                     "chatterbox": {"watermark": True}}})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["models"]["clone_family"] == "chatterbox"
+    assert body["models"]["chatterbox"]["watermark"] is True
 
 
 def test_models_select_variant(client):
@@ -54,6 +81,13 @@ def test_models_select_variant(client):
     reg = client.get("/api/config").json()
     assert reg["models"]["variants"]  # still listed
     assert client.post("/api/models/select", json={"variant": "nope"}).status_code == 400
+
+
+def test_settings_update_default_size(client):
+    r = client.put("/api/settings", json={"models": {"default_size": "0.6B"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["models"]["default_size"] == "0.6B"
+    assert client.get("/api/models").json()["default_size"] == "0.6B"
 
 
 def test_voices(client):

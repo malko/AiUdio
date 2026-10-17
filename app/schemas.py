@@ -6,7 +6,10 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
-FAMILIES = ("custom_voice", "voice_design", "base")
+FAMILIES = (
+    "custom_voice", "voice_design", "base",
+    "chatterbox", "chatterbox_turbo", "chatterbox_nano",
+)
 
 
 class GenerationParams(BaseModel):
@@ -18,6 +21,10 @@ class GenerationParams(BaseModel):
     subtalker_temperature: Optional[float] = None
     subtalker_top_k: Optional[int] = None
     subtalker_top_p: Optional[float] = None
+    # Chatterbox-specific knobs.
+    exaggeration: Optional[float] = None
+    cfg_weight: Optional[float] = None
+    min_p: Optional[float] = None
 
     def to_kwargs(self) -> Dict[str, Any]:
         return {k: v for k, v in self.model_dump().items() if v is not None}
@@ -52,11 +59,19 @@ class TTSRequest(BaseModel):
     max_chars: Optional[int] = None
     generation: GenerationParams = Field(default_factory=GenerationParams)
 
-    def resolve_family(self, default: str) -> str:
-        value = self.family or self.mode or self.task_type or default
+    def requested_family(self) -> Optional[str]:
+        """Normalize the explicitly requested family (None when unspecified)."""
+        value = self.family or self.mode or self.task_type
+        if value is None:
+            return None
         value = str(value).strip().lower().replace("-", "_")
         aliases = {"customvoice": "custom_voice", "voicedesign": "voice_design", "clone": "base"}
-        value = aliases.get(value, value)
+        return aliases.get(value, value) or None
+
+    def resolve_family(self, default: str) -> str:
+        value = self.requested_family()
+        if value is None:
+            return default
         return value if value in FAMILIES else default
 
     def resolve_texts(self) -> List[str]:

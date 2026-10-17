@@ -11,17 +11,85 @@ paths:
   logs: logs
 models:
   registry:
-    custom_voice: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    custom_voice: Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
     voice_design: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
-    base: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    base: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+    chatterbox: ResembleAI/chatterbox
+    chatterbox_turbo: ResembleAI/chatterbox-turbo
+    chatterbox_nano: ResembleAI/chatterbox-nano
+  variants:
+  - id: custom_voice:1.7B
+    family: custom_voice
+    repo: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    label: 1.7B
+    backend: qwen3
+  - id: custom_voice:0.6B
+    family: custom_voice
+    repo: Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+    label: 0.6B
+    backend: qwen3
+  - id: voice_design:1.7B
+    family: voice_design
+    repo: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+    label: 1.7B
+    backend: qwen3
+  - id: base:1.7B
+    family: base
+    repo: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    label: 1.7B
+    backend: qwen3
+  - id: base:0.6B
+    family: base
+    repo: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+    label: 0.6B
+    backend: qwen3
+  - id: chatterbox:v3
+    family: chatterbox
+    repo: ResembleAI/chatterbox
+    label: v3
+    backend: chatterbox
+  - id: chatterbox:v2
+    family: chatterbox
+    repo: ResembleAI/chatterbox
+    label: v2
+    backend: chatterbox
+  - id: chatterbox:zh-cmn
+    family: chatterbox
+    repo: ResembleAI/Chatterbox-Multilingual-zh-cmn
+    label: zh-cmn
+    backend: chatterbox
+  - id: chatterbox:pt-br
+    family: chatterbox
+    repo: ResembleAI/Chatterbox-Multilingual-pt-br
+    label: pt-br
+    backend: chatterbox
+  - id: chatterbox:hi
+    family: chatterbox
+    repo: ResembleAI/Chatterbox-Multilingual-hi
+    label: hi
+    backend: chatterbox
+  - id: chatterbox_turbo:turbo
+    family: chatterbox_turbo
+    repo: ResembleAI/chatterbox-turbo
+    label: Turbo
+    backend: chatterbox
+  - id: chatterbox_nano:nano
+    family: chatterbox_nano
+    repo: ResembleAI/chatterbox-nano
+    label: Nano
+    backend: chatterbox
   default_family: custom_voice
+  default_size: 0.6B
   residency: single
   resident:
   - custom_voice
-  # VoiceDesign has no fixed speaker (voice changes every generation). When true,
-  # render a reference clip once per (instruct, language) and clone it with the
-  # Base model: the voice stays identical until the description changes.
-  stabilize_voice_design: true
+  clone_backend: qwen3
+  stabilize_voice_design: false
+  chatterbox:
+    python: ''
+    t3_model: v3
+    watermark: false
+    default_language: English
   device: auto
   dtype: bfloat16
   attn_implementation: sdpa
@@ -37,6 +105,9 @@ generation:
   subtalker_top_p: 1.0
   batch_size: 4
   batch_window_ms: 25
+  exaggeration: 0.5
+  cfg_weight: 0.5
+  min_p: 0.05
 chunking:
   enabled: true
   max_chars: 240
@@ -72,6 +143,9 @@ ui:
   title: AiUdio Server
   show_stt_tab: true
   show_chat_tab: true
+startup:
+  stt_model: nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
+  voice: avatar:bugatti
 auth:
   enabled: false
   username: admin

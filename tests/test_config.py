@@ -1,6 +1,28 @@
 import os
 
 from app.config import ConfigStore, Settings
+from app.languages import to_iso, to_name
+
+
+def test_language_mapping():
+    assert to_iso("French") == "fr"
+    assert to_iso("fr") == "fr"
+    assert to_iso("Auto") is None
+    assert to_iso(None) is None
+    assert to_name("zh") == "Chinese"
+
+
+def test_backend_for_family():
+    models = Settings().models
+    assert models.backend_for("custom_voice") == "qwen3"
+    assert models.backend_for("chatterbox") == "chatterbox"
+    assert models.backend_for("chatterbox_turbo") == "chatterbox"
+
+
+def test_clone_backend_persisted(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.update(models={"clone_backend": "chatterbox"})
+    assert ConfigStore(tmp_path / "config.yaml").settings.models.clone_backend == "chatterbox"
 
 
 def test_settings_roundtrip(tmp_path):
@@ -52,3 +74,16 @@ def test_update_invalid_section_raises(tmp_path):
     except ValueError:
         return
     raise AssertionError("expected ValueError for invalid settings")
+
+
+def test_default_size_sets_registry(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.update(models={"default_size": "0.6B"})
+    assert store.settings.models.registry["custom_voice"].endswith("0.6B-CustomVoice")
+    assert store.settings.models.registry["base"].endswith("0.6B-Base")
+    # VoiceDesign has no 0.6B variant -> falls back to its current repo.
+    assert store.settings.models.registry["voice_design"].endswith("1.7B-VoiceDesign")
+
+    reloaded = ConfigStore(tmp_path / "config.yaml")
+    assert reloaded.settings.models.default_size == "0.6B"
+    assert reloaded.settings.models.registry["base"].endswith("0.6B-Base")

@@ -137,9 +137,41 @@ matters. Base images and torch pins can be overridden via `.env` (`TTS_BASE_IMAG
 | `custom_voice` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | 9 predefined voices + style instruction |
 | `voice_design` | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` | voice described in natural language |
 | `base` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | voice cloning (3 s reference) |
+| `chatterbox` | `ResembleAI/chatterbox` (Multilingual V3) | zero-shot cloning, 20+ languages |
+| `chatterbox_turbo` | `ResembleAI/chatterbox-turbo` | low-latency English (350M) |
+| `chatterbox_nano` | `ResembleAI/chatterbox-nano` | smallest English model (110M, CPU-able) |
 
 Override the repositories via `config.yaml` (`models.registry`) or the environment
 variables `TTS_CUSTOM_VOICE`, `TTS_VOICE_DESIGN`, `TTS_BASE`. 0.6B variants are supported.
+
+Pick a per-family version in the Synthesis tab (**Model → Version**), or set the global Qwen
+size with `models.default_size` (`0.6B` or `1.7B`). Families without a matching variant keep
+their repo.
+
+### Chatterbox backend
+
+Chatterbox (Resemble AI) is offered **in addition** to Qwen3-TTS. It cannot share the same
+Python environment: `chatterbox-tts` pins different `torch`/`transformers` versions than
+`qwen-tts` (`transformers==5.2.0` vs `==4.57.3`). AiUdio therefore installs Chatterbox in an
+**isolated virtualenv** (`/opt/cb/venv`) and runs it as a child process
+(`app/chatterbox_worker.py`), driven over a JSON protocol. See `docs/backends.md`.
+
+- Built by default; disable with `INSTALL_CHATTERBOX=0` (build arg / `.env`).
+- The interpreter is auto-detected (`/opt/cb/venv/bin/python`); override with
+  `models.chatterbox.python` or `TTS_CHATTERBOX_PYTHON`.
+- Checkpoint version via `models.chatterbox.t3_model` (`v3` default, or `v2`). **V3 is only
+  published on GitHub**; the PyPI release (`chatterbox-tts==0.1.7`) is v2-only, so the image
+  installs from git by default (`CHATTERBOX_SPEC`). With a PyPI install the worker falls back
+  to v2 automatically.
+- The venv is created with `--system-site-packages` and reuses the base image's **CUDA 13
+  torch** (chatterbox pins `torch==2.6.0` / CUDA 12.4, which has **no kernels for Blackwell /
+  RTX 50xx (sm_120)**); the `torch`/`torchaudio` and `nvidia-*` (cu12) wheels chatterbox pulls
+  are removed so the system's CUDA 13 NCCL/libs take over.
+- PerTh watermarking is **off by default** for self-hosted instances
+  (`models.chatterbox.watermark`); enable it to mark generated audio.
+- Chatterbox has no batch API: concurrent requests are processed **sequentially** (the
+  micro-batcher only benefits Qwen families). "Auto" language is not supported — a default is
+  used (`models.chatterbox.default_language`).
 
 By default the weights are downloaded automatically on first use (into the `hf_cache`
 volume). To pre-fetch them instead, run `./scripts/download_models.sh` (plain **curl**, no
@@ -161,22 +193,19 @@ Loading strategy in `config.yaml`:
 - `models.residency: multi` + `models.resident: [custom_voice, base]` → keep several models
   loaded (more VRAM, no reload).
 
-The **web UI (Synthesis tab)** exposes a model selector with plain-language descriptions and a
-**Load** button (models load lazily on first use anyway). The **Transcription tab** lists the
-downloadable STT models with descriptions, sizes and cache status.
+The **web UI (Synthesis tab)** exposes a model + version selector with plain-language
+descriptions and a **Load** button (models load lazily on first use anyway). The **Transcription
+tab** lists the downloadable STT models with descriptions, sizes and cache status.
 
-**VoiceDesign voice stability**: the VoiceDesign model has no fixed speaker, so its voice would
-otherwise change on every generation. With `models.stabilize_voice_design: true` (default),
-AiUdio renders a short reference clip once per (description, language) and clones it with the
-**Base** model — the voice stays identical until you change the description. This uses the
-Base model (it is downloaded/loaded on first VoiceDesign use).
-
-**Voices / avatars**: the Synthesis tab lets you create reusable voices — either **cloned**
-from a reference audio or **designed** from a description (VoiceDesign). Each avatar can have a
-photo/name, be regenerated (design) or its description edited then regenerated, and is then
-selectable in the **Conversation** tab. Avatars are stored as `<name>.wav` + `<name>.json` (+
-`<name>.png`) under `voices/avatars/` (persistent). API: `GET/POST/PUT/DELETE /api/avatars`,
-`POST /api/avatars/{id}/regenerate`, `GET /api/avatars/{id}/audio|photo`.
+**Voices / avatars (Avatars tab)**: all avatars are **clones**. You can either upload a
+reference clip, or generate a ~10 s **fingerprint** from a Voice Design description and save it
+as a clone (`POST /api/avatars/fingerprint`). Each avatar can have a photo/name, be regenerated
+from its description, and is selectable in the **Conversation** tab. The **clone engine**
+(`models.clone_backend`: `qwen3` or `chatterbox`) chooses which backend synthesizes cloned
+voices. Voice Design itself always uses Qwen3-TTS. Avatars are stored as `<name>.wav` +
+`<name>.json` (+ `<name>.png`) under `voices/avatars/` (persistent). API: `GET/POST/PUT/DELETE
+/api/avatars`, `POST /api/avatars/fingerprint`, `POST /api/avatars/{id}/regenerate`,
+`GET /api/avatars/{id}/audio|photo`.
 
 **Conversation is the home page** and lets you pick the voice (presets or an avatar) and the
 STT model. In **Settings → Startup** you can mark an STT model and a voice to preload when the
@@ -324,10 +353,13 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | STT unreachable | `docker compose logs stt`; the upstream build may need a path adjustment (`cmake --install`) |
 | Choppy TTS streaming | lower `chunking.max_chars` or use the `vllm` profile |
 | `Warning: flash-attn is not installed` | expected — attention falls back to PyTorch `sdpa` (no FlashAttention build in the image) |
+| `Chatterbox is not installed` | build the image with `INSTALL_CHATTERBOX=1`, or point `models.chatterbox.python` at a venv with `chatterbox-tts` |
+| Chatterbox slow with many callers | it has no batch API; requests are serialized (use Qwen for concurrent throughput) |
 
 ## Licenses and credits
 
 - [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) — Apache-2.0.
+- [Chatterbox](https://github.com/resemble-ai/chatterbox) (Resemble AI) — MIT (PerTh watermarking optional).
 - [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) — Apache-2.0 (third-party components: see their `THIRD_PARTY_NOTICES`).
 - [vLLM-Omni](https://github.com/vllm-project/vllm-omni) — Apache-2.0.
 - This project: see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

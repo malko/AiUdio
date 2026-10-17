@@ -53,7 +53,9 @@ def test_speakers_defaults_when_model_not_loaded():
 
 
 def test_voice_design_stabilized_via_clone_and_cached():
-    engine = TTSEngine(Settings())
+    settings = Settings()
+    settings.models.stabilize_voice_design = True  # opt-in legacy stabilization
+    engine = TTSEngine(settings)
     models = {"voice_design": _FakeDesign(), "base": _FakeBase()}
     engine._load = lambda family: ModelHandle(family=family, repo_id="x", model=models[family])
 

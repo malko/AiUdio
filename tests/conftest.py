@@ -26,8 +26,9 @@ class DummyEngine:
 
     def available(self):
         return [
-            {"family": f, "repo_id": f"dummy/{f}", "loaded": f in self._loaded}
-            for f in ("custom_voice", "voice_design", "base")
+            {"family": f, "repo_id": f"dummy/{f}", "loaded": f in self._loaded,
+             "backend": "chatterbox" if f.startswith("chatterbox") else "qwen3"}
+            for f in ("custom_voice", "voice_design", "base", "chatterbox")
         ]
 
     def loaded_families(self):

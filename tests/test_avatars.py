@@ -54,6 +54,29 @@ def test_item_from_request_uses_x_vector_mode(tmp_path):
     assert item["x_vector_only_mode"] is True
 
 
+def test_item_from_request_uses_chatterbox_clone_backend(tmp_path):
+    settings = Settings()
+    settings.models.clone_backend = "chatterbox"
+    settings.paths.voices = str(tmp_path / "voices")
+    store = AvatarStore(pathlib.Path(settings.paths.voices) / "avatars")
+    store.save(Avatar(id="narrator", name="Narrator", kind="clone", ref_text="hello world"))
+    store.wav_path("narrator").write_bytes(b"RIFF....WAVE")
+    item = _item_from_request(settings, TTSRequest(text="hi", avatar="narrator"), "hi")
+    assert item["family"] == "chatterbox"
+
+
+def test_avatar_explicit_family_overrides_clone_backend(tmp_path):
+    settings = Settings()  # clone_backend defaults to qwen3
+    settings.paths.voices = str(tmp_path / "voices")
+    store = AvatarStore(pathlib.Path(settings.paths.voices) / "avatars")
+    store.save(Avatar(id="narrator", name="Narrator", kind="clone", ref_text="hello world"))
+    store.wav_path("narrator").write_bytes(b"RIFF....WAVE")
+    item = _item_from_request(
+        settings, TTSRequest(text="hi", avatar="narrator", family="chatterbox"), "hi"
+    )
+    assert item["family"] == "chatterbox"
+
+
 def test_avatar_personality_roundtrip(tmp_path):
     store = AvatarStore(tmp_path / "avatars")
     avatar = Avatar(id="ai", name="AI", personality="You are a witty assistant.")

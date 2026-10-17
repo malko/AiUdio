@@ -40,6 +40,40 @@ The non-NVIDIA overrides build NeMo-Speech.cpp from source (`docker/stt.Dockerfi
 `BACKEND=cpu|vulkan`), since the official image is CUDA-only. ROCm STT uses the CPU backend
 (HIP/ggml is not provided). The upstream ref is set with `NEMO_SPEECH_REF` (default `main`).
 
+## Chatterbox backend (isolated venv)
+
+Chatterbox (Resemble AI) is a second TTS engine, selectable per family
+(`chatterbox`, `chatterbox_turbo`, `chatterbox_nano`). It **cannot** be installed in the
+gateway's Python environment: `chatterbox-tts` pins `transformers==5.2.0` and `torch==2.6.0`,
+while `qwen-tts` pins `transformers==4.57.3` on the CUDA 13 / torch 2.14 base image. Two
+`transformers` majors cannot coexist in one environment.
+
+AiUdio therefore installs Chatterbox in a **dedicated virtualenv** inside the *same image*
+(`/opt/cb/venv`, build arg `INSTALL_CHATTERBOX=1`) and runs `app/chatterbox_worker.py` as a
+**child process**, driven over a line-delimited JSON protocol by `app/chatterbox_backend.py`.
+No separate container is needed; only the Python runtime is isolated.
+
+The package is installed from **GitHub** by default (`CHATTERBOX_SPEC`): the PyPI release
+(`chatterbox-tts==0.1.7`) is multilingual **v2 only** and lacks the `t3_model` argument needed
+for V3. Pin a tag/commit in `CHATTERBOX_SPEC` for reproducibility. The worker introspects the
+installed package's signatures, so it also works against the PyPI (v2) release.
+
+Because chatterbox pins `torch==2.6.0` (CUDA 12.4) — which ships **no kernels for Blackwell /
+RTX 50xx (sm_120)** — the venv is created with `--system-site-packages` so it reuses the base
+image's **CUDA 13 torch**. Chatterbox's own dependencies (e.g. `transformers==5.2.0`) are
+installed into the venv and shadow the system ones; the `torch`/`torchaudio` chatterbox pulls
+**and its `nvidia-*` CUDA wheels** (cu12, which would otherwise shadow the system's cu13 NCCL)
+are then uninstalled so the system's GPU-enabled build takes over.
+
+- Interpreter: auto-detected at `/opt/cb/venv/bin/python`; override with
+  `models.chatterbox.python` / `TTS_CHATTERBOX_PYTHON`.
+- The worker shares the `hf_cache` volume for model downloads.
+- **PerTh watermarking** is off by default (`models.chatterbox.watermark`); the worker swaps in
+  a no-op watermarker when disabled.
+- **No batch API**: `generate()` is single-text, so the micro-batcher (`app/scheduler.py`) only
+  helps Qwen families; Chatterbox requests are processed sequentially (lower throughput under
+  concurrency, but identical single-stream latency profile).
+
 ## Model downloads
 
 - **TTS**: downloaded by the gateway via `huggingface_hub` on first use
@@ -75,6 +109,7 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
 |---|---|
 | Qwen3-TTS 1.7B bf16 | ~3.5–4 GB |
 | Qwen3-TTS 0.6B bf16 | ~1.5 GB |
+| Chatterbox Multilingual V3 (500M, fp32) | ~2–3 GB |
 | STT Nemotron 3.5 Q8 (ggml) | < 1 GB |
 | vLLM-Omni (1.7B + caches) | ~8–12 GB |
 

@@ -9,12 +9,16 @@ from __future__ import annotations
 import gc
 import hashlib
 import logging
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from . import languages as lang
+from .chatterbox_backend import ChatterboxClient, resolve_python
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +60,7 @@ class ModelHandle:
     family: str
     repo_id: str
     model: Any
+    backend: str = "qwen3"
     loaded_at: float = field(default_factory=time.time)
     last_used: float = field(default_factory=time.time)
     default_speaker: str = ""
@@ -105,7 +110,12 @@ class TTSEngine:
 
     def available(self) -> List[Dict[str, Any]]:
         return [
-            {"family": f, "repo_id": repo, "loaded": f in self._handles}
+            {
+                "family": f,
+                "repo_id": repo,
+                "loaded": f in self._handles,
+                "backend": self.settings.models.backend_for(f),
+            }
             for f, repo in self.settings.models.registry.items()
         ]
 
@@ -150,6 +160,8 @@ class TTSEngine:
         self._clone_prompts.clear()
         if handle is None:
             return
+        if isinstance(handle.model, ChatterboxClient):
+            handle.model.close()
         del handle.model
         gc.collect()
         try:  # pragma: no cover - no CUDA in CI
@@ -162,6 +174,11 @@ class TTSEngine:
 
     # ------------------------------------------------------------------ load
     def _load(self, family: str) -> ModelHandle:  # pragma: no cover - GPU
+        if self.settings.models.backend_for(family) == "chatterbox":
+            return self._load_chatterbox(family)
+        return self._load_qwen(family)
+
+    def _load_qwen(self, family: str) -> ModelHandle:  # pragma: no cover - GPU
         from qwen_tts import Qwen3TTSModel
 
         repo = self.repo_for(family)
@@ -175,7 +192,27 @@ class TTSEngine:
         started = time.perf_counter()
         model = Qwen3TTSModel.from_pretrained(repo, **kwargs)
         log.info("Loaded %s in %.2fs", family, time.perf_counter() - started)
-        return ModelHandle(family=family, repo_id=repo, model=model)
+        return ModelHandle(family=family, repo_id=repo, model=model, backend="qwen3")
+
+    def _load_chatterbox(self, family: str) -> ModelHandle:  # pragma: no cover - GPU
+        cfg = self.settings.models.chatterbox
+        python = resolve_python(cfg.python)
+        if not python:
+            raise RuntimeError(
+                "Chatterbox is not installed (no isolated venv found; "
+                "set models.chatterbox.python or build the image with the chatterbox venv)"
+            )
+        repo = self.repo_for(family)
+        device = _resolve_device(self.settings.models.device)
+        started = time.perf_counter()
+        log.info("Loading %s (%s) via Chatterbox on %s (python=%s, watermark=%s)",
+                 family, repo, device, python, cfg.watermark)
+        client = ChatterboxClient(
+            python, family, repo, t3_model=cfg.t3_model,
+            device=device, watermark=cfg.watermark,
+        )
+        log.info("Loaded %s via Chatterbox in %.2fs", family, time.perf_counter() - started)
+        return ModelHandle(family=family, repo_id=repo, model=client, backend="chatterbox")
 
     # -------------------------------------------------------------- inference
     def synthesize_batch(self, family: str, items: List[Dict[str, Any]]) -> List[Tuple[np.ndarray, int]]:
@@ -197,8 +234,12 @@ class TTSEngine:
             family = "base"
 
         handle = self.ensure(family)
+        if handle.backend == "chatterbox":
+            return self._chatterbox_batch(handle, requested_family, items, t_start)
+
         gen = dict(self._generation_defaults())
         gen.update(items[0].get("generation") or {})
+        qgen = self._qwen_params(gen)
 
         t_gen = time.perf_counter()
         with self._lock:
@@ -215,14 +256,14 @@ class TTSEngine:
                     language=[i.get("language") or "Auto" for i in items],
                     speaker=speakers,
                     instruct=[i.get("instruct") or "" for i in items],
-                    **gen,
+                    **qgen,
                 )
             elif family == "voice_design":
                 wavs, sr = handle.model.generate_voice_design(
                     text=[i["text"] for i in items],
                     language=[i.get("language") or "Auto" for i in items],
                     instruct=[i.get("instruct") or "" for i in items],
-                    **gen,
+                    **qgen,
                 )
             elif family == "base":
                 prompt = items[0].get("voice_clone_prompt")
@@ -240,7 +281,7 @@ class TTSEngine:
                     text=[i["text"] for i in items],
                     language=[i.get("language") or "Auto" for i in items],
                     voice_clone_prompt=prompt,
-                    **gen,
+                    **qgen,
                 )
             else:
                 raise ValueError(f"Unknown model family: {family}")
@@ -262,6 +303,75 @@ class TTSEngine:
     def synthesize_one(self, item: Dict[str, Any]) -> Tuple[np.ndarray, int]:
         return self.synthesize_batch(item["family"], [item])[0]
 
+    # --------------------------------------------------------- chatterbox path
+    def _chatterbox_batch(
+        self, handle: ModelHandle, requested_family: str,
+        items: List[Dict[str, Any]], t_start: float,
+    ) -> List[Tuple[np.ndarray, int]]:
+        cfg = self.settings.models.chatterbox
+        language = items[0].get("language")
+        iso = lang.to_iso(language) or lang.to_iso(cfg.default_language) or "en"
+        audio_prompt = self._chatterbox_ref(items[0].get("ref_audio"))
+        gen = self._generation_defaults()
+        gen.update(items[0].get("generation") or {})
+
+        t_gen = time.perf_counter()
+        with self._lock:
+            results = handle.model.synthesize(
+                [i["text"] for i in items],
+                language=iso,
+                audio_prompt=audio_prompt,
+                params=self._chatterbox_params(gen),
+            )
+        gen_s = time.perf_counter() - t_gen
+        total_s = time.perf_counter() - t_start
+        audio_s = sum(len(w) / float(s) for w, s in results) if results else 0.0
+        chars = sum(len(i.get("text") or "") for i in items)
+        log.info(
+            "TTS family=%s n=%d chars=%d audio=%.2fs gen=%.2fs total=%.2fs rtf=%.2f (chatterbox)",
+            handle.family, len(items), chars, audio_s, gen_s, total_s,
+            (gen_s / audio_s if audio_s else 0.0),
+        )
+        return results
+
+    def _chatterbox_params(self, gen: Dict[str, Any]) -> Dict[str, Any]:
+        keys = ("temperature", "top_p", "repetition_penalty", "exaggeration",
+                "cfg_weight", "min_p")
+        return {k: gen[k] for k in keys if gen.get(k) is not None}
+
+    def _qwen_params(self, gen: Dict[str, Any]) -> Dict[str, Any]:
+        keys = ("temperature", "top_k", "top_p", "repetition_penalty",
+                "max_new_tokens", "subtalker_temperature", "subtalker_top_k",
+                "subtalker_top_p")
+        return {k: gen[k] for k in keys if gen.get(k) is not None}
+
+    def _chatterbox_ref(self, ref_audio: Optional[str]) -> Optional[str]:
+        """Materialize a reference audio into a local file path for Chatterbox."""
+        if not ref_audio:
+            return None
+        ref = str(ref_audio)
+        if ref.startswith("data:"):
+            import base64
+            import io
+
+            import soundfile as sf
+
+            try:
+                payload = ref.split(",", 1)[1]
+                raw = base64.b64decode(payload)
+                audio, sr = sf.read(io.BytesIO(raw), dtype="float32", always_2d=False)
+            except Exception as exc:
+                raise ValueError(f"Unreadable reference audio: {exc}") from exc
+            fd, path = tempfile.mkstemp(prefix="cb-ref-", suffix=".wav")
+            import os
+
+            os.close(fd)
+            sf.write(path, audio, int(sr))
+            return path
+        if ref.lower().startswith(("http://", "https://")):
+            raise ValueError("Chatterbox does not support remote reference URLs")
+        return ref
+
     def _default_speaker(self, handle: ModelHandle) -> str:
         """Stable default speaker for a loaded custom_voice model."""
         if handle.default_speaker:
@@ -277,7 +387,7 @@ class TTSEngine:
         """Generate a reference clip from a VoiceDesign description."""
         handle = self.ensure("voice_design")
         ref_text = _design_ref_text(language)
-        gen = self._generation_defaults()
+        gen = self._qwen_params(self._generation_defaults())
         started = time.perf_counter()
         with self._lock:
             wavs, sr = handle.model.generate_voice_design(
@@ -326,7 +436,7 @@ class TTSEngine:
             started = time.perf_counter()
             design = self.ensure("voice_design")
             ref_text = _design_ref_text(language)
-            gen = self._generation_defaults()
+            gen = self._qwen_params(self._generation_defaults())
             wavs, sr = design.model.generate_voice_design(
                 text=ref_text, language=language or "Auto", instruct=instruct, **gen
             )
@@ -357,6 +467,9 @@ class TTSEngine:
             "subtalker_temperature": g.subtalker_temperature,
             "subtalker_top_k": g.subtalker_top_k,
             "subtalker_top_p": g.subtalker_top_p,
+            "exaggeration": g.exaggeration,
+            "cfg_weight": g.cfg_weight,
+            "min_p": g.min_p,
         }
 
     # --------------------------------------------------------------- prompts
@@ -371,6 +484,8 @@ class TTSEngine:
     def speakers(self, family: str = "custom_voice") -> List[str]:
         # Only report voices for an already-loaded model (do not trigger a load),
         # but fall back to the known built-in list for custom_voice.
+        if self.settings.models.backend_for(family) == "chatterbox":
+            return []  # Chatterbox has no preset speakers (built-in voice or clone)
         with self._lock:
             handle = self._handles.get(family)
             if handle is None:
@@ -381,6 +496,17 @@ class TTSEngine:
                 return list(DEFAULT_SPEAKERS)
 
     def languages(self, family: str = "custom_voice") -> List[str]:
+        backend = self.settings.models.backend_for(family)
+        if backend == "chatterbox":
+            with self._lock:
+                handle = self._handles.get(family)
+                if handle is None:
+                    codes = ["en"] if family in ("chatterbox_turbo", "chatterbox_nano") else list(lang.ISO_TO_NAME)
+                    return lang.names(codes)
+                try:
+                    return lang.names(list(handle.model.languages() or []))
+                except Exception:
+                    return []
         with self._lock:
             handle = self._handles.get(family)
             if handle is None:

@@ -25,6 +25,8 @@ services:
         BASE_IMAGE: ${TTS_BASE_IMAGE:-pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime}
         TORCH_SPEC: ${TTS_TORCH_SPEC-}
         TORCH_INDEX_URL: ${TTS_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+        INSTALL_CHATTERBOX: ${INSTALL_CHATTERBOX:-1}
+        CHATTERBOX_SPEC: ${CHATTERBOX_SPEC:-git+https://github.com/resemble-ai/chatterbox.git}
     image: aiudio-server:local
     ports:
       - "${PORT:-8004}:8004"

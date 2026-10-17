@@ -19,8 +19,10 @@ All services share the Docker network `aiudio-net`; they are reachable by name
 2. `TTSRequest` → one `SynthItem` per text.
 3. `BatchScheduler.submit()` queues the item; the background task groups requests of the
    same family within a window (`generation.batch_window_ms`, `batch_size`).
-4. `TTSEngine.synthesize_batch()` (dedicated thread) calls `generate_custom_voice` /
-   `generate_voice_design` / `generate_voice_clone` with lists.
+4. `TTSEngine.synthesize_batch()` (dedicated thread) dispatches by backend
+   (`models.backend_for(family)`): Qwen families call `generate_custom_voice` /
+   `generate_voice_design` / `generate_voice_clone` with lists; Chatterbox families call the
+   isolated worker one text at a time (no batch API).
 5. WAV or PCM16 encoding → HTTP response.
 
 ### Streaming TTS (perceived)
@@ -57,7 +59,10 @@ Protocol modeled on vLLM-Omni for compatibility/passthrough:
 | `app/schemas.py` | request/response models, OpenAI/vLLM aliases |
 | `app/chunking.py` | sentence/chunk splitting, audio concatenation |
 | `app/audio.py` | PCM16/WAV/base64 |
-| `app/engine.py` | model pool, batch inference |
+| `app/engine.py` | model pool, backend dispatch, batch inference |
+| `app/chatterbox_backend.py` | client for the isolated Chatterbox worker process |
+| `app/chatterbox_worker.py` | Chatterbox inference in its own venv (JSON protocol) |
+| `app/languages.py` | language name ↔ ISO code mapping |
 | `app/scheduler.py` | asynchronous micro-batching |
 | `app/llm.py` | OpenAI-compatible LLM client (SSE) |
 | `app/security.py` | Basic + API keys |

@@ -11,7 +11,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui` |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models` |
 
 ## Models & voices
 
@@ -19,7 +19,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 |---|---|---|
 | GET | `/api/models` | Available families, loaded, active |
 | POST | `/api/models/load` | `{"family": "custom_voice"}` — load (hot-swap) |
-| POST | `/api/models/select` | `{"variant": "custom_voice:0.6B"}` — pick the model version for a family |
+| POST | `/api/models/select` | `{"variant": "custom_voice:0.6B"}` — set the global model size (`models.default_size`) |
 | POST | `/api/models/unload` | `{"family": "..."}` or `{}` to unload everything |
 | GET | `/api/voices?family=custom_voice` | Speakers, languages, reference files |
 | POST | `/api/voices/load` | `{"avatar": "id"}` or `{"family": "custom_voice"}` — warm a conversation voice |
@@ -34,18 +34,18 @@ Body (`TTSRequest`, aliases accepted):
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `text` / `input` | str \| str[] | — | Text(s) to synthesize |
-| `family` / `mode` / `task_type` | str | `models.default_family` | `custom_voice`, `voice_design`, `base` |
-| `language` | str | `Auto` | e.g. `French`, `English`, `Auto` |
+| `family` / `mode` / `task_type` | str | `models.default_family` | `custom_voice`, `voice_design`, `base`, `chatterbox`, `chatterbox_turbo`, `chatterbox_nano` |
+| `language` | str | `Auto` | e.g. `French`, `English`, `Auto` (Chatterbox maps to ISO codes; `Auto` uses `models.chatterbox.default_language`) |
 | `speaker` / `voice` | str | — | Speaker (`custom_voice` family) |
 | `instruct` / `instructions` | str | — | Style/emotion (`custom_voice`, `voice_design`) |
-| `ref_audio` | str | — | Path / URL / data-URL (`base` family) |
-| `ref_text` | str | — | Reference transcript (ICL mode) |
-| `x_vector_only_mode` | bool | false | Speaker embedding only |
+| `ref_audio` | str | — | Path / URL / data-URL (`base`, `chatterbox*`) |
+| `ref_text` | str | — | Reference transcript (ICL mode; Qwen only) |
+| `x_vector_only_mode` | bool | false | Speaker embedding only (Qwen only) |
 | `stream` | bool | false | Progressive PCM streaming (single text only) |
 | `format` / `response_format` | str | `audio.format` | `wav` or `pcm` (forced to `pcm` when `stream`) |
 | `chunking` | bool | `chunking.enabled` | Split by sentence |
 | `max_chars` | int | `chunking.max_chars` | Chunk size |
-| `generation` | object | — | `temperature`, `top_k`, `top_p`, `repetition_penalty`, `max_new_tokens`... |
+| `generation` | object | — | `temperature`, `top_k`, `top_p`, `repetition_penalty`, `max_new_tokens` (Qwen); `exaggeration`, `cfg_weight`, `min_p` (Chatterbox) |
 
 Response: `audio/wav` or `audio/pcm`. On error: JSON `{"detail": "..."}`.
 

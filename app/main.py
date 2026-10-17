@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .audio import to_pcm16, wav_bytes
 from .avatars import Avatar, AvatarStore
+from .chatterbox_backend import is_available as is_chatterbox_available
 from .chunking import chunk_text
 from .config import ConfigStore, Settings, get_store
 from .engine import TTSEngine, design_ref_text
@@ -40,6 +41,11 @@ UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 def _avatar_dir(settings: Settings) -> Path:
     return Path(settings.paths.voices) / "avatars"
+
+
+def _clone_family(settings: Settings) -> str:
+    """Family used to synthesize cloned avatars (global clone-engine setting)."""
+    return "chatterbox" if settings.models.clone_backend == "chatterbox" else "base"
 
 
 async def _apply_startup(app: FastAPI) -> None:
@@ -67,12 +73,15 @@ async def _apply_startup(app: FastAPI) -> None:
                 store = AvatarStore(_avatar_dir(settings))
                 avatar = store.get(voice.split(":", 1)[1])
                 if avatar:
-                    handle = await asyncio.to_thread(engine.ensure, "base")
-                    await asyncio.to_thread(
-                        engine._cached_clone_prompt, handle,
-                        str(store.wav_path(avatar.id)), avatar.ref_text or None,
-                        bool(avatar.x_vector_only),
-                    )
+                    if _clone_family(settings) == "chatterbox":
+                        await asyncio.to_thread(engine.ensure, "chatterbox")
+                    else:
+                        handle = await asyncio.to_thread(engine.ensure, "base")
+                        await asyncio.to_thread(
+                            engine._cached_clone_prompt, handle,
+                            str(store.wav_path(avatar.id)), avatar.ref_text or None,
+                            bool(avatar.x_vector_only),
+                        )
                     log.info("Startup: loaded voice '%s'", avatar.name)
             else:
                 await asyncio.to_thread(engine.ensure, voice)
@@ -91,7 +100,15 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
             "families": engine.available(),
             "variants": [v.model_dump() for v in settings.models.variants],
             "default_family": settings.models.default_family,
+            "default_size": settings.models.default_size,
             "residency": settings.models.residency,
+            "clone_backend": settings.models.clone_backend,
+            "clone_family": _clone_family(settings),
+            "chatterbox": {
+                "available": is_chatterbox_available(settings),
+                "watermark": settings.models.chatterbox.watermark,
+                "default_language": settings.models.chatterbox.default_language,
+            },
         },
         "audio": settings.audio.model_dump(),
         "chunking": settings.chunking.model_dump(),        "generation": settings.generation.model_dump(),
@@ -124,8 +141,14 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
         language = req.language if isinstance(req.language, str) else None
         if not language or language == "Auto":
             language = avatar.language or "Auto"
+        # The global clone engine is the default, but an explicit clone-capable
+        # family (e.g. from the Synthesis tab) takes precedence.
+        family = _clone_family(settings)
+        requested = req.requested_family()
+        if requested in ("base", "chatterbox", "chatterbox_turbo", "chatterbox_nano"):
+            family = requested
         return {
-            "family": "base",
+            "family": family,
             "text": text,
             "language": language,
             "speaker": None,
@@ -239,13 +262,14 @@ def create_app(
         return {
             "families": engine.available(),
             "variants": [v.model_dump() for v in app.state.settings.models.variants],
+            "default_size": app.state.settings.models.default_size,
             "active_family": engine.active_family(),
             "loaded": engine.loaded_families(),
         }
 
     @app.post("/api/models/select")
     async def api_models_select(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Pick which model version (0.6B/1.7B...) a family should load."""
+        """Set the global model size (0.6B/1.7B) from a variant id."""
         wanted = str(payload.get("variant") or payload.get("id") or payload.get("repo") or "").strip()
         variant = next(
             (v for v in app.state.settings.models.variants if wanted in (v.id, v.repo)),
@@ -253,10 +277,13 @@ def create_app(
         )
         if variant is None:
             raise HTTPException(400, f"Unknown model variant: {wanted}")
-        registry = dict(app.state.settings.models.registry)
-        registry[variant.family] = variant.repo
+        models_update: Dict[str, Any] = {"registry": {variant.family: variant.repo}}
+        if variant.label:
+            # The size is a global setting: keep it in sync so the choice applies to
+            # every family and survives a restart.
+            models_update["default_size"] = variant.label
         try:
-            updated = store.update(models={"registry": registry})
+            updated = store.update(models=models_update)
         except Exception as exc:
             raise HTTPException(400, f"Invalid settings: {exc}") from exc
         app.state.settings = updated
@@ -277,6 +304,7 @@ def create_app(
         try:
             await asyncio.to_thread(engine.ensure, family)
         except Exception as exc:  # pragma: no cover - requires GPU
+            log.exception("Model load failed (family=%s)", family)
             raise HTTPException(503, f"Load failed: {exc}") from exc
         return {"loaded": engine.loaded_families(), "active_family": engine.active_family()}
 
@@ -309,11 +337,14 @@ def create_app(
                 wav = store.wav_path(avatar_id)
                 if avatar is None or not wav.is_file():
                     raise HTTPException(404, f"Unknown voice: {avatar_id}")
-                handle = await asyncio.to_thread(engine.ensure, "base")
-                await asyncio.to_thread(
-                    engine._cached_clone_prompt, handle, str(wav), avatar.ref_text or None,
-                    bool(avatar.x_vector_only),
-                )
+                if _clone_family(app.state.settings) == "chatterbox":
+                    await asyncio.to_thread(engine.ensure, "chatterbox")
+                else:
+                    handle = await asyncio.to_thread(engine.ensure, "base")
+                    await asyncio.to_thread(
+                        engine._cached_clone_prompt, handle, str(wav), avatar.ref_text or None,
+                        bool(avatar.x_vector_only),
+                    )
             else:
                 family = str(payload.get("family") or "").strip()
                 if family not in app.state.settings.models.registry:
@@ -475,7 +506,7 @@ def create_app(
 
     @app.put("/api/settings")
     async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
-        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup"}
+        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models"}
         sections = {k: v for k, v in payload.items() if k in allowed}
         if not sections:
             raise HTTPException(400, "No editable section provided")
@@ -486,6 +517,10 @@ def create_app(
         app.state.settings = updated
         app.state.llm = LLMClient(updated.llm)
         engine.settings = updated
+        if "models" in sections:
+            # The registry/size may have changed: drop resident models so the next
+            # request loads the newly selected repos.
+            await asyncio.to_thread(engine.unload)
         return _public_config(updated, engine)
 
     # ------------------------------------------------------------------- TTS

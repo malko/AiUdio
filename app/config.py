@@ -33,6 +33,8 @@ class ModelVariant(BaseModel):
     family: str
     repo: str
     label: str = ""
+    # Inference backend implementing the family ("qwen3" or "chatterbox").
+    backend: str = "qwen3"
 
 
 def _default_variants() -> List[ModelVariant]:
@@ -47,7 +49,46 @@ def _default_variants() -> List[ModelVariant]:
                      repo="Qwen/Qwen3-TTS-12Hz-1.7B-Base", label="1.7B"),
         ModelVariant(id="base:0.6B", family="base",
                      repo="Qwen/Qwen3-TTS-12Hz-0.6B-Base", label="0.6B"),
+        # Chatterbox (Resemble AI) — isolated backend (see docs/backends.md).
+        ModelVariant(id="chatterbox:v3", family="chatterbox",
+                     repo="ResembleAI/chatterbox", label="v3", backend="chatterbox"),
+        ModelVariant(id="chatterbox:v2", family="chatterbox",
+                     repo="ResembleAI/chatterbox", label="v2", backend="chatterbox"),
+        ModelVariant(id="chatterbox:zh-cmn", family="chatterbox",
+                     repo="ResembleAI/Chatterbox-Multilingual-zh-cmn", label="zh-cmn", backend="chatterbox"),
+        ModelVariant(id="chatterbox:es-mx-latam", family="chatterbox",
+                     repo="ResembleAI/Chatterbox-Multilingual-es-mx-latam", label="es-mx-latam", backend="chatterbox"),
+        ModelVariant(id="chatterbox:es-es", family="chatterbox",
+                     repo="ResembleAI/Chatterbox-Multilingual-es-es", label="es-es", backend="chatterbox"),
+        ModelVariant(id="chatterbox:pt-br", family="chatterbox",
+                     repo="ResembleAI/Chatterbox-Multilingual-pt-br", label="pt-br", backend="chatterbox"),
+        ModelVariant(id="chatterbox:pt-pt", family="chatterbox",
+                     repo="ResembleAI/Chatterbox-Multilingual-pt-pt", label="pt-pt", backend="chatterbox"),
+        ModelVariant(id="chatterbox:hi", family="chatterbox",
+                     repo="ResembleAI/Chatterbox-Multilingual-hi", label="hi", backend="chatterbox"),
+        ModelVariant(id="chatterbox_turbo:turbo", family="chatterbox_turbo",
+                     repo="ResembleAI/chatterbox-turbo", label="Turbo", backend="chatterbox"),
+        ModelVariant(id="chatterbox_nano:nano", family="chatterbox_nano",
+                     repo="ResembleAI/chatterbox-nano", label="Nano", backend="chatterbox"),
     ]
+
+
+# Families served by the isolated Chatterbox backend (see app/chatterbox_backend.py).
+CHATTERBOX_FAMILIES = ("chatterbox", "chatterbox_turbo", "chatterbox_nano")
+
+
+class ChatterboxConfig(BaseModel):
+    """Settings for the isolated Chatterbox backend (own venv/process)."""
+
+    # Python interpreter of the isolated environment that has chatterbox-tts
+    # installed. Empty -> auto-detect (/opt/cb/venv/bin/python).
+    python: str = ""
+    # Which t3 checkpoint the multilingual family loads ("v3" or "v2").
+    t3_model: str = "v3"
+    # PerTh output watermarking. Off by default for local/self-hosted instances.
+    watermark: bool = False
+    # Language used when the request asks for "Auto" (Chatterbox has no auto mode).
+    default_language: str = "English"
 
 
 class ModelsConfig(BaseModel):
@@ -56,22 +97,35 @@ class ModelsConfig(BaseModel):
             "custom_voice": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
             "voice_design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
             "base": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+            "chatterbox": "ResembleAI/chatterbox",
+            "chatterbox_turbo": "ResembleAI/chatterbox-turbo",
+            "chatterbox_nano": "ResembleAI/chatterbox-nano",
         }
     )
     # Selectable versions offered in the UI (per family). The chosen variant sets
     # `registry[family]`, so switching only changes which repo the family loads.
     variants: List[ModelVariant] = Field(default_factory=_default_variants)
     default_family: str = "custom_voice"
+    # Global model size applied to every family that offers it (e.g. "0.6B" or
+    # "1.7B"). Families without a matching variant keep their current repo.
+    default_size: str = "1.7B"
     residency: str = "single"  # single | multi
     resident: List[str] = Field(default_factory=lambda: ["custom_voice"])
-    # VoiceDesign has no fixed speaker: when true, render a reference clip once per
-    # (instruct, language) and clone it (Base model) so the voice stays stable until
-    # the voice definition changes.
-    stabilize_voice_design: bool = True
+    # Global engine used to synthesize cloned avatars ("qwen3" or "chatterbox").
+    clone_backend: str = "qwen3"
+    # Deprecated: VoiceDesign avatars were replaced by fingerprint + clone.
+    stabilize_voice_design: bool = False
+    chatterbox: ChatterboxConfig = Field(default_factory=ChatterboxConfig)
     device: str = "auto"
     dtype: str = "bfloat16"
     attn_implementation: str = "sdpa"
     hf_home: str = "/app/hf_cache"
+
+    def backend_for(self, family: str) -> str:
+        """Inference backend implementing a family (name-prefix convention)."""
+        if family in CHATTERBOX_FAMILIES:
+            return "chatterbox"
+        return "qwen3"
 
 
 class GenerationConfig(BaseModel):
@@ -85,6 +139,10 @@ class GenerationConfig(BaseModel):
     subtalker_top_p: float = 1.0
     batch_size: int = 4
     batch_window_ms: int = 25
+    # Chatterbox-specific knobs (ignored by Qwen3-TTS).
+    exaggeration: float = 0.5
+    cfg_weight: float = 0.5
+    min_p: float = 0.05
 
 
 class ChunkingConfig(BaseModel):
@@ -179,8 +237,26 @@ class Settings(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
 
 
+def _apply_default_size(settings: Settings) -> Settings:
+    """Point every family at the variant matching ``default_size`` (when it exists)."""
+    label = (settings.models.default_size or "").strip().lower()
+    if not label:
+        return settings
+    registry = dict(settings.models.registry)
+    for variant in settings.models.variants:
+        if variant.label.lower() == label:
+            registry[variant.family] = variant.repo
+    settings.models.registry = registry
+    return settings
+
+
 def _apply_env(settings: Settings) -> Settings:
     """Environment variable overrides (12-factor, for Docker)."""
+    # docker-compose sets HF_TOKEN="" when unset; an empty token makes
+    # huggingface_hub send an invalid "Authorization: Bearer " header.
+    for _var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        if _var in os.environ and not os.environ[_var].strip():
+            del os.environ[_var]
     if v := os.environ.get("HF_HOME"):
         settings.models.hf_home = v
     if v := os.environ.get("LLM_BASE_URL"):
@@ -210,6 +286,10 @@ def _apply_env(settings: Settings) -> Settings:
     ):
         if v := os.environ.get(env):
             settings.models.registry[family] = v
+    if v := os.environ.get("TTS_CLONE_BACKEND"):
+        settings.models.clone_backend = v.strip().lower()
+    if v := os.environ.get("TTS_CHATTERBOX_PYTHON"):
+        settings.models.chatterbox.python = v
     return settings
 
 
@@ -226,6 +306,7 @@ class ConfigStore:
             settings = Settings.model_validate(raw)
         else:
             settings = Settings()
+        settings = _apply_default_size(settings)
         settings = _apply_env(settings)
         if settings.models.hf_home:
             os.environ.setdefault("HF_HOME", settings.models.hf_home)
@@ -258,7 +339,7 @@ class ConfigStore:
         from pydantic import ValidationError
 
         try:
-            self.save(Settings.model_validate(data))
+            self.save(_apply_default_size(Settings.model_validate(data)))
         except ValidationError as exc:
             raise ValueError(str(exc)) from exc
         return self.settings
