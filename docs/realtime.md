@@ -91,6 +91,24 @@ depth, and per-stage timings (`/api/metrics`).
   ffplay -f s16le -ar 24000 -ac 1 /tmp/test.pcm    # should be intelligible
   ```
 
+  If the service fails with `ValueError: To serve at least one request with the model's max
+  seq len …, (X GiB KV cache is needed, which is larger than the available KV cache memory
+  (Y GiB)`, the weights fit but the KV budget does not: lower the context and, if the card is
+  tight, use the smallest Base/CustomVoice model and skip the CUDA graphs. TTSS inputs are
+  short sentences, so a small context is enough:
+
+  ```yaml
+    command: >
+      vllm serve Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+      --omni --host 0.0.0.0 --port 8091
+      --max-model-len 2048        # ~0.22 GiB of KV instead of 0.44 GiB at 4096
+      --enforce-eager             # no CUDA-graph capture (~1-2 GiB) and no 13 s compile
+  ```
+
+  The log line `Model loading took X GiB memory` tells you the weights footprint (≈4.1 GiB for
+  the 1.7B CustomVoice, ≈1.3 GiB for the 0.6B), and the startup warning
+  `Free memory on device …` how much room the card actually has.
+
   `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
   service is unreachable and the call fell back). When vLLM does serve CustomVoice, the
   gateway **unloads its own copy** of that family (logged) so the VRAM is not paid twice —
