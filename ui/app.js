@@ -1442,6 +1442,22 @@ function addReplayButton(stack, record) {
   stack.appendChild(actions);
 }
 
+// Follow the newest message, unless the user scrolled up to read something: then
+// their position is left alone until they come back to the bottom.
+function chatLogEl() { return $("#chat-log"); }
+function chatFollowsBottom(slack = 90) {
+  const el = chatLogEl();
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < slack;
+}
+function scrollChatToBottom(force = false) {
+  const el = chatLogEl();
+  if (!el) return;
+  if (!force && !chatFollowsBottom()) return;
+  el.scrollTop = el.scrollHeight;
+}
+window.addEventListener("resize", () => scrollChatToBottom());
+
 function appendTurn(role, text, name) {
   const row = document.createElement("div");
   row.className = `bubble-row ${role}`;
@@ -1473,7 +1489,7 @@ function appendTurn(role, text, name) {
     row.appendChild(bubble);
   }
   $("#chat-log").appendChild(row);
-  $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
+  scrollChatToBottom(true);
   return bubble;
 }
 
@@ -1519,6 +1535,9 @@ function onChatMessage(ev) {
   let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
   if (msg.type === "llm.delta") {
     if (currentAssistant) currentAssistant.textContent += msg.text;
+    // The bubble grows as tokens arrive: keep it in view while the user is at the
+    // bottom of the log (their position is preserved otherwise).
+    scrollChatToBottom();
   } else if (msg.type === "audio.start") {
     // Debug aid: the time between sending the message and the first audio packet,
     // directly comparable with the server's "chat tts: first audio" log line.
@@ -1533,18 +1552,21 @@ function onChatMessage(ev) {
     if (currentAudio) { currentAudio.text = (currentAssistant ? currentAssistant.textContent : msg.text) || ""; currentAudio = null; }
     currentAssistant = null;
     chatBusy = false;
+    scrollChatToBottom();
   } else if (msg.type === "turn.cancelled") {
     if (currentAssistant) currentAssistant.classList.add("cancelled");
     if (currentAudio) { currentAudio.text = currentAssistant ? currentAssistant.textContent : ""; currentAudio = null; }
     currentAssistant = null;
     chatBusy = false;
     resetChatAudio();
+    scrollChatToBottom();
   } else if (msg.type === "error") {
     if (currentAssistant) currentAssistant.textContent += ` [error: ${msg.message}]`;
     if (currentAudio) { currentAudio.text = currentAssistant ? currentAssistant.textContent : ""; currentAudio = null; }
     currentAssistant = null;
     chatBusy = false;
     $("#chat-status").textContent = msg.message;
+    scrollChatToBottom();
   }
 }
 

@@ -124,9 +124,18 @@ summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 .avatar-actions button { min-width: auto; min-height: 30px; padding: 4px 8px; font-size: .8rem; }
 
 /* --------------------------------------------------------- conversation */
-.chat-layout { display: grid; grid-template-columns: 264px 1fr; gap: 16px; align-items: start; }
-@media (max-width: 900px) { .chat-layout { grid-template-columns: 1fr; } }
-.chat-main { display: flex; flex-direction: column; }
+.chat-layout { display: grid; grid-template-columns: 264px 1fr; gap: 16px; align-items: stretch; }
+/* The conversation fills the viewport: the log takes the remaining height and
+   scrolls, the voice bank scrolls beside it. */
+#tab-chat.active { padding-bottom: 0; }
+#tab-chat.active .chat-layout { height: calc(100vh - 128px); height: calc(100dvh - 128px); }
+@media (max-width: 900px) {
+  .chat-layout { grid-template-columns: 1fr; }
+  #tab-chat.active .chat-layout { height: auto; }
+  .chat-voices { max-height: 40vh; }
+}
+.chat-voices { max-height: 100%; overflow: auto; }
+.chat-main { display: flex; flex-direction: column; min-height: 0; }
 .chat-toolbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px; }
 .chat-toolbar .stt-picker { flex: 1 1 320px; min-width: 0; }
 .chat-toolbar .stt-picker .row { margin-bottom: 0; }
@@ -157,10 +166,11 @@ summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .chat-log {
-  min-height: 240px; max-height: 460px; overflow: auto; padding: 10px;
+  flex: 1 1 auto; min-height: 160px; overflow: auto; padding: 10px;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;
 }
+@media (max-width: 900px) { .chat-log { height: 45vh; } }
 .bubble-row { display: flex; align-items: flex-end; gap: 8px; max-width: 100%; }
 .bubble-row.user { justify-content: flex-end; }
 .bubble {
