@@ -287,7 +287,11 @@
       </div>
       <div class="card">
         <h2 data-i18n="settings.vllmTitle">vLLM-Omni (streaming)</h2>
-        <label class="inline"><input id="set-vllm-enabled" type="checkbox" /> <span data-i18n="settings.vllmEnabled">Serve built-in voices with vLLM-Omni</span></label>
+        <label class="inline" data-i18n="settings.engineLabel">TTS engine</label>
+        <label class="inline"><input type="radio" name="set-vllm-engine" value="local" checked />
+          <span data-i18n="settings.engineLocal">Local models (stops the vLLM-Omni service)</span></label>
+        <label class="inline"><input type="radio" name="set-vllm-engine" value="vllm" />
+          <span data-i18n="settings.engineVllm">vLLM-Omni service (starts it)</span></label>
         <label><span data-i18n="settings.vllmModel">Model served by the service</span>
           <select id="set-vllm-model"></select>
         </label>
@@ -299,7 +303,7 @@
         </label>
         <label><span data-i18n="settings.vllmUrl">Base URL</span> <input id="set-vllm-url" type="text" /></label>
         <label><span data-i18n="settings.vllmPath">Route</span> <input id="set-vllm-path" type="text" /></label>
-        <div class="muted" data-i18n="settings.vllmHint">The service loads a single checkpoint: pick the family it serves and only that family is routed (the others stay on the local engine). The service loads two stages on the GPU, so enabling this skips the preload of that family and unloads the local copy to leave it the VRAM.</div>
+        <div class="muted" data-i18n="settings.vllmHint">The engine toggle is the whole lifecycle: picking vLLM-Omni starts the container (and stops nothing else), going back to the local engine stops it so its VRAM is free again. The service loads a single checkpoint, so pick the model it serves; the gateway routes only that family to it.</div>
         <div class="row">
           <button id="set-vllm-save" class="primary" data-i18n="settings.save">Save</button>
           <button id="set-vllm-test" data-i18n="settings.test">Test connection</button>

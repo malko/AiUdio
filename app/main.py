@@ -148,7 +148,9 @@ async def _apply_startup(app: FastAPI) -> None:
 
     if settings.vllm.enabled:
         try:
-            await _warm_vllm(settings)
+            # The engine switch drives the container: start it if `docker.control`
+            # lets us, prime it otherwise.
+            await _vllm_lifecycle(settings, start=True)
         except Exception:  # pragma: no cover - defensive
             log.debug("vLLM-Omni warm-up skipped", exc_info=True)
 
@@ -466,6 +468,47 @@ def _vllm_payload(
         ref_text=ref_text,
         x_vector_only_mode=x_vector_only,
     )
+
+
+async def _vllm_lifecycle(settings: Settings, *, start: bool) -> None:
+    """Keep the service container in step with the engine switch.
+
+    The UI's engine toggle *is* the lifecycle: choosing vLLM-Omni starts the
+    container (and primes it), going back to the local engine stops it so the VRAM
+    returns to our models. Without `docker.control` there is nothing to pilot: an
+    externally managed service is simply primed. Best effort throughout — a
+    failure is logged, never raised (a save must not fail because Docker said no).
+    """
+    cfg = settings.docker
+    if not cfg.control:
+        if start:
+            await _warm_vllm(settings)
+        return
+    try:
+        if start:
+            state = await docker_ctl.status(cfg.socket, cfg.container)
+            if not state.get("exists"):
+                log.warning(
+                    "vLLM-Omni container %r does not exist: create it once from the "
+                    "compose (or start it by hand) — the gateway cannot create it "
+                    "from scratch", cfg.container,
+                )
+                return
+            if not state.get("running"):
+                await docker_ctl.start(cfg.socket, cfg.container)
+                log.info("vLLM-Omni container %s started (engine selected)", cfg.container)
+            await _warm_vllm(settings, attempts=20, delay=15.0)
+        else:
+            state = await docker_ctl.stop(cfg.socket, cfg.container)
+            log.info(
+                "vLLM-Omni container %s stopped (local engine): its VRAM is free again",
+                state.get("name") or cfg.container,
+            )
+    except docker_ctl.DockerError as exc:
+        log.warning(
+            "Could not %s the vLLM-Omni container %s: %s",
+            "start" if start else "stop", cfg.container, exc,
+        )
 
 
 async def _stream_vllm(
@@ -992,13 +1035,17 @@ def create_app(
         engine.settings = updated
         if "server" in sections:
             _configure_logging(updated.server.log_level)
-        if "vllm" in sections and updated.vllm.enabled:
-            # Enabling vLLM: give its two stages the room they need *now* (the local
-            # copy of the family it serves is redundant), then prime it in the
-            # background so the first turn after the change is not the one paying the
-            # cold start.
-            await _release_vllm_family(engine, _vllm_family(updated), "enabled in Settings")
-            asyncio.create_task(_warm_vllm(updated))
+        if "vllm" in sections:
+            if updated.vllm.enabled:
+                # Give the service's two stages the room they need *now* (the local
+                # copy of the family it serves is redundant), then start it (or
+                # prime it) in the background: the first turn must not pay for it.
+                await _release_vllm_family(engine, _vllm_family(updated), "enabled in Settings")
+                asyncio.create_task(_vllm_lifecycle(updated, start=True))
+            else:
+                # Back on the local engine: the service is stopped so its VRAM
+                # returns to our models (no-op without `docker.control`).
+                asyncio.create_task(_vllm_lifecycle(updated, start=False))
         if "models" in sections:
             # The registry/size may have changed: drop resident models so the next
             # request loads the newly selected repos.
@@ -1108,8 +1155,13 @@ def create_app(
         cfg = app.state.settings.docker
         if not cfg.control:
             raise HTTPException(409, "Container control is disabled (docker.control)")
+        # The engine decides whether the recreated container should be running:
+        # preparing another checkpoint while the engine is local leaves it stopped.
+        updated_enabled = bool(app.state.settings.vllm.enabled)
         try:
-            state = await docker_ctl.set_model(cfg.socket, cfg.container, model)
+            state = await docker_ctl.set_model(
+                cfg.socket, cfg.container, model, start=updated_enabled
+            )
         except docker_ctl.DockerError as exc:
             raise HTTPException(502, str(exc)) from exc
         # The gateway must route the family this checkpoint serves.
@@ -1117,7 +1169,8 @@ def create_app(
         app.state.settings = updated
         engine.settings = updated
         await _release_vllm_family(engine, family, "switched to another checkpoint")
-        asyncio.create_task(_warm_vllm(updated, attempts=20, delay=15.0))
+        if updated.vllm.enabled:
+            asyncio.create_task(_vllm_lifecycle(updated, start=True))
         log.info("vLLM-Omni now serves %s (family %s)", model, family)
         return {
             "model": model,

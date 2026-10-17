@@ -150,14 +150,17 @@ async def restart(socket: str, name: str, timeout: float = 60.0) -> Dict[str, An
     return await status(socket, name)
 
 
-async def set_model(socket: str, name: str, model: str, timeout: float = 300.0) -> Dict[str, Any]:
+async def set_model(
+    socket: str, name: str, model: str, timeout: float = 300.0, *, start: bool = True
+) -> Dict[str, Any]:
     """Recreate the container serving ``model``, keeping its configuration.
 
     Docker cannot change a container's command in place, so the current
     container is renamed out of the way, a new one is created from its inspected
     configuration (image, env, mounts, GPU reservations, network…) with the new
-    checkpoint, started, and only then is the old one removed — a failure leaves
-    the previous container available under ``<name>-previous``.
+    checkpoint, started (unless ``start`` is false: the engine is local, the
+    service is only prepared), and only then is the old one removed — a failure
+    leaves the previous container available under ``<name>-previous``.
     """
     info = await find(socket, name)
     if info is None:
@@ -165,10 +168,10 @@ async def set_model(socket: str, name: str, model: str, timeout: float = 300.0) 
     config = dict(info.get("Config") or {})
     cmd = with_model(config.get("Cmd"), model)
     if served_model(config.get("Cmd")) == model:
-        # Already that checkpoint: just make sure it runs.
-        if (info.get("State") or {}).get("Running"):
-            return describe(info)
-        return await start(socket, name)
+        # Already that checkpoint: just make sure it is in the wanted state.
+        if not (info.get("State") or {}).get("Running"):
+            return await start(socket, name) if start else describe(info)
+        return await stop(socket, name) if not start else describe(info)
 
     host_config = dict(info.get("HostConfig") or {})
     for key in ("Name", "Created", "State", "NetworkSettings", "Mounts"):
@@ -204,12 +207,13 @@ async def set_model(socket: str, name: str, model: str, timeout: float = 300.0) 
                         params={"name": name})
         raise
     new_id = (created or {}).get("Id")
-    try:
-        await _call(socket, "POST", f"/containers/{new_id}/start", timeout=timeout)
-    except DockerError:
-        log.error("The new %s container failed to start; the previous one is %r",
-                  name, previous)
-        raise
+    if start:
+        try:
+            await _call(socket, "POST", f"/containers/{new_id}/start", timeout=timeout)
+        except DockerError:
+            log.error("The new %s container failed to start; the previous one is %r",
+                      name, previous)
+            raise
     try:
         await _call(socket, "DELETE", f"/containers/{old_id}", params={"v": 1})
     except DockerError:  # pragma: no cover - cosmetic

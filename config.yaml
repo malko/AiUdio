@@ -139,6 +139,9 @@ llm:
   max_tokens: -1
   history_turns: 12
 vllm:
+  # The TTS engine switch: true routes the family below to the vLLM-Omni service
+  # (started on demand when docker.control is enabled), false keeps everything on
+  # our own models and stops the service.
   enabled: false
   base_url: http://tts-vllm:8091
   # Checkpoint the service was started with: custom_voice (preset speakers) or

@@ -233,7 +233,7 @@ function applySettingsFields(cfg) {
 
 function applyVllmFields(cfg) {
   const v = (cfg && cfg.vllm) || {};
-  if ($("#set-vllm-enabled")) $("#set-vllm-enabled").checked = !!v.enabled;
+  setVllmEngine(!!v.enabled);
   if ($("#set-vllm-family")) $("#set-vllm-family").value = v.family === "base" ? "base" : "custom_voice";
   fillVllmModels();
   refreshVllmService();
@@ -2076,6 +2076,17 @@ $("#set-log-save").addEventListener("click", async () => {
 // ------------------------------------------------------------ vLLM-Omni card
 var VLLM_SERVICE = null;
 
+function vllmEngine() {
+  const checked = document.querySelector('input[name="set-vllm-engine"]:checked');
+  return checked && checked.value === "vllm";
+}
+
+function setVllmEngine(enabled) {
+  const value = enabled ? "vllm" : "local";
+  const radio = document.querySelector(`input[name="set-vllm-engine"][value="${value}"]`);
+  if (radio) radio.checked = true;
+}
+
 function vllmFamilyForRepo(repo) {
   return /-Base$/i.test(repo || "") ? "base" : "custom_voice";
 }
@@ -2133,7 +2144,7 @@ $("#set-vllm-save").addEventListener("click", async () => {
   const status = $("#set-vllm-status");
   status.textContent = "…";
   const vllm = {
-    enabled: $("#set-vllm-enabled").checked,
+    enabled: vllmEngine(),
     family: $("#set-vllm-family") ? $("#set-vllm-family").value : "custom_voice",
     base_url: $("#set-vllm-url").value.trim() || "http://tts-vllm:8091",
     path: $("#set-vllm-path").value.trim() || "/v1/audio/speech",
@@ -2156,6 +2167,9 @@ $("#set-vllm-save").addEventListener("click", async () => {
     const wanted = $("#set-vllm-model") ? $("#set-vllm-model").value : "";
     const running = VLLM_SERVICE && VLLM_SERVICE.state ? VLLM_SERVICE.state.model : null;
     if (wantToSwitchModel(wanted, running)) await switchVllmModel(wanted);
+    // Starting/stopping happens in the background on the gateway: refresh the
+    // state once it has had time to act.
+    if (CONFIG.docker && CONFIG.docker.control) setTimeout(refreshVllmService, 5000);
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }

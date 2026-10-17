@@ -295,3 +295,87 @@ def test_shared_voice_bank_is_sent_as_a_file_uri(tmp_path):
     settings.vllm.ref_root = ""
     inline = _vllm_payload(settings, TTSRequest(text="Bonjour", avatar="bugatti"), "Bonjour")
     assert inline["ref_audio"].startswith("data:audio/wav;base64,")
+
+
+def test_engine_toggle_starts_and_stops_the_container(monkeypatch):
+    from app import main as main_mod
+    from app.main import _vllm_lifecycle
+
+    calls = []
+
+    async def fake_start(socket, name):
+        calls.append(("start", socket, name))
+        return {"running": True}
+
+    async def fake_stop(socket, name):
+        calls.append(("stop", socket, name))
+        return {"running": False}
+
+    async def fake_status(socket, name):
+        return {"exists": True, "running": calls and calls[-1][0] == "start"}
+
+    async def fake_warm(settings, *a, **kw):
+        calls.append(("warm",))
+        return True
+
+    monkeypatch.setattr(main_mod.docker_ctl, "start", fake_start)
+    monkeypatch.setattr(main_mod.docker_ctl, "stop", fake_stop)
+    monkeypatch.setattr(main_mod.docker_ctl, "status", fake_status)
+    monkeypatch.setattr(main_mod, "_warm_vllm", fake_warm)
+
+    settings = Settings()
+    settings.docker.control = True
+    settings.vllm.enabled = True
+
+    # vLLM-Omni selected: the service is started and primed.
+    asyncio.run(_vllm_lifecycle(settings, start=True))
+    assert calls[0] == ("start", "/var/run/docker.sock", "tts-vllm")
+    assert ("warm",) in calls
+
+    # Local engine selected: it is stopped, freeing the VRAM.
+    asyncio.run(_vllm_lifecycle(settings, start=False))
+    assert calls[-1] == ("stop", "/var/run/docker.sock", "tts-vllm")
+
+
+def test_lifecycle_only_primes_an_external_service(monkeypatch):
+    from app import main as main_mod
+    from app.main import _vllm_lifecycle
+
+    calls = []
+
+    async def fake_start(*a, **kw):  # pragma: no cover - control is off
+        calls.append("start")
+
+    async def fake_warm(settings, *a, **kw):
+        calls.append("warm")
+        return True
+
+    monkeypatch.setattr(main_mod.docker_ctl, "start", fake_start)
+    monkeypatch.setattr(main_mod, "_warm_vllm", fake_warm)
+
+    settings = Settings()  # docker.control is False
+    settings.vllm.enabled = True
+    asyncio.run(_vllm_lifecycle(settings, start=True))
+    asyncio.run(_vllm_lifecycle(settings, start=False))
+    # Nothing to pilot: only the warm-up runs, and stopping is a no-op.
+    assert calls == ["warm"]
+
+
+def test_lifecycle_reports_a_missing_container(monkeypatch, caplog):
+    from app import main as main_mod
+    from app.main import _vllm_lifecycle
+
+    async def fake_status(*a, **kw):
+        return {"exists": False, "running": False}
+
+    async def fake_start(*a, **kw):  # pragma: no cover - must not be called
+        raise AssertionError("nothing to start")
+
+    monkeypatch.setattr(main_mod.docker_ctl, "status", fake_status)
+    monkeypatch.setattr(main_mod.docker_ctl, "start", fake_start)
+
+    settings = Settings()
+    settings.docker.control = True
+    with caplog.at_level("WARNING"):
+        asyncio.run(_vllm_lifecycle(settings, start=True))
+    assert "does not exist" in caplog.text

@@ -14,7 +14,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`), `server.log_level` — sections merge recursively. Enabling `vllm` unloads the local copy of the family the service serves (it needs the VRAM for its two stages) and primes the service in the background |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
 
 ## Access (admin)
 
@@ -41,7 +41,7 @@ admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at 
 | GET | `/api/vllm/health` | Probe the configured vLLM-Omni service: `ok`, `models`, `served_family` and a `warning` when the served checkpoint is not the one `vllm.family` routes (admin) |
 | GET | `/api/vllm/service` | State of the vLLM-Omni container (running, image, served checkpoint) — reports `control: false` until `docker.control` is enabled (admin) |
 | POST | `/api/vllm/service/{action}` | `start` / `stop` / `restart` the vLLM-Omni container, then warm it up (admin, needs `docker.control`) |
-| PUT | `/api/vllm/service/model` | `{"model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"}` — recreate the container serving another checkpoint, keeping its configuration; `vllm.family` follows the checkpoint (admin, needs `docker.control`) |
+| PUT | `/api/vllm/service/model` | `{"model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"}` — recreate the container serving another checkpoint, keeping its configuration (started only if the vLLM-Omni engine is selected); `vllm.family` follows the checkpoint (admin, needs `docker.control`) |
 | GET | `/api/models` | Available families, loaded, active |
 | POST | `/api/models/load` | `{"family": "custom_voice"}` — load (hot-swap) |
 | POST | `/api/models/select` | `{"variant": "custom_voice:0.6B"}` — point a family at one of its variants (`models.registry`) |

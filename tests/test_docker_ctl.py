@@ -22,7 +22,13 @@ def _daemon(monkeypatch, containers, calls):
             body = json.loads(request.content)
             assert body["Cmd"] and body["Image"]
             calls.append(("CREATE", tuple(body["Cmd"])))
+            # The daemon now reports the recreated container, as Docker does.
+            containers[0]["_inspect"]["Config"]["Cmd"] = body["Cmd"]
+            containers[0]["_inspect"]["State"] = {"Running": False, "Status": "created"}
             return httpx.Response(201, json={"Id": "new"})
+        if path == "/containers/new/start":
+            containers[0]["_inspect"]["State"] = {"Running": True, "Status": "running"}
+            return httpx.Response(204)
         return httpx.Response(204)
 
     transport = httpx.MockTransport(handler)
@@ -120,3 +126,28 @@ def test_missing_container_is_reported(monkeypatch):
 
     with pytest.raises(docker_ctl.DockerError):
         asyncio.run(docker_ctl.start("/var/run/docker.sock", "tts-vllm"))
+
+
+def test_set_model_can_prepare_a_checkpoint_without_starting_it(monkeypatch):
+    calls = []
+    _daemon(monkeypatch, [{"Id": "abcdef1234567890", "Names": ["/tts-vllm"],
+                           "_inspect": _inspect(CMD, running=False)}], calls)
+    state = asyncio.run(
+        docker_ctl.set_model("/var/run/docker.sock", "tts-vllm",
+                             "Qwen/Qwen3-TTS-12Hz-0.6B-Base", start=False)
+    )
+    paths = [p for _, p in calls]
+    assert "/containers/create" in paths
+    assert "/containers/new/start" not in paths  # the engine is local: stay stopped
+    assert state["model"] == "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+
+
+def test_set_model_stops_when_the_same_checkpoint_should_not_run(monkeypatch):
+    calls = []
+    _daemon(monkeypatch, [{"Id": "abcdef1234567890", "Names": ["/tts-vllm"],
+                           "_inspect": _inspect(CMD)}], calls)
+    asyncio.run(
+        docker_ctl.set_model("/var/run/docker.sock", "tts-vllm",
+                             "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", start=False)
+    )
+    assert ("POST", "/containers/abcdef1234567890/stop") in calls

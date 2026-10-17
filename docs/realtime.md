@@ -102,13 +102,19 @@ depth, and per-stage timings (`/api/metrics`).
   (`models.clone_backend: chatterbox` is not what a Base checkpoint serves).
 
   **Managing the service from the UI** (optional): with the Docker socket mounted and
-  `docker.control` enabled, **Settings → vLLM-Omni** starts/stops/restarts the container and
-  switches the checkpoint it serves (`GET /api/vllm/service`, `POST /api/vllm/service/{start|stop|restart}`,
-  `PUT /api/vllm/service/model`) — the gateway copies the container's own configuration, keeps
-  its flags and only replaces the `vllm serve <model>` argument, and it flips `vllm.family` to
-  match the checkpoint it just loaded. Note the socket is root-equivalent power over the host
-  ([security](security.md)); the container's command is authoritative until the next
-  `docker compose up`, which would recreate it from the compose file.
+  `docker.control` enabled, **Settings → vLLM-Omni** becomes a plain engine toggle —
+  selecting **vLLM-Omni** starts the container (at boot too, since the gateway honours the
+  choice on startup) and **Local models** stops it, which hands its VRAM back to our own
+  models. The model picker recreates the container on the selected checkpoint (the gateway
+  copies the container's own configuration, keeps its flags and only replaces the
+  `vllm serve <model>` argument) and flips `vllm.family` to match it; changing the model
+  while the local engine is selected prepares it *stopped*. Raw endpoints:
+  `GET /api/vllm/service`, `POST /api/vllm/service/{start|stop|restart}`,
+  `PUT /api/vllm/service/model`. Without `docker.control` the toggle only routes requests
+  (the service, started however you like, is just primed). Note that the socket is
+  root-equivalent power over the host ([security](security.md)) and that the container's
+  command is authoritative until the next `docker compose up`, which recreates it from the
+  compose file.
 
   A manager that cannot pass a profile (Web UI, Dockge, Portainer…) should **delete the
   `profiles: ["vllm"]` line** of the `tts-vllm` service instead: it then belongs to the
