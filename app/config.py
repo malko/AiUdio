@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .apikeys import ApiKey, from_legacy
 
 DEFAULT_CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
 
@@ -208,18 +210,35 @@ class StartupConfig(BaseModel):
 class AuthConfig(BaseModel):
     """API and UI access control.
 
-    - ``enabled``: turns on global access control (except /health).
-    - ``username`` / ``password``: HTTP Basic auth (web UI).
+    - ``enabled``: turns on global access control (except ``exempt_paths``).
+    - ``username`` / ``password``: HTTP Basic auth (web UI / admin).
     - ``api_keys``: machine keys accepted via ``Authorization: Bearer`` or the
-      ``X-API-Key`` header.
+      ``X-API-Key`` header. Declared here (client keys, hashed, persisted); the
+      admin also mints short-lived **session** keys at runtime (in memory only).
+    - ``session_ttl_minutes``: lifetime of an admin session key.
     - ``exempt_paths``: paths always reachable without authentication.
     """
 
     enabled: bool = False
     username: str = "admin"
     password: str = ""
-    api_keys: List[str] = Field(default_factory=list)
+    api_keys: List[ApiKey] = Field(default_factory=list)
+    session_ttl_minutes: int = 480
     exempt_paths: List[str] = Field(default_factory=lambda: ["/health", "/ready"])
+
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def _coerce_legacy_keys(cls, value):
+        # Accept a legacy list of plaintext strings and hash them on load.
+        if not value:
+            return []
+        out = []
+        for item in value:
+            if isinstance(item, str):
+                out.append(from_legacy(item))
+            else:
+                out.append(item)
+        return out
 
 
 class Settings(BaseModel):
@@ -277,8 +296,6 @@ def _apply_env(settings: Settings) -> Settings:
         settings.auth.username = v
     if v := os.environ.get("AUTH_PASSWORD"):
         settings.auth.password = v
-    if v := os.environ.get("AUTH_API_KEYS"):
-        settings.auth.api_keys = [k.strip() for k in v.split(",") if k.strip()]
     for family, env in (
         ("custom_voice", "TTS_CUSTOM_VOICE"),
         ("voice_design", "TTS_VOICE_DESIGN"),
@@ -321,7 +338,7 @@ class ConfigStore:
             self.settings = settings
         self.path.write_text(
             yaml.safe_dump(
-                self.settings.model_dump(), allow_unicode=True, sort_keys=False
+                self.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False
             ),
             encoding="utf-8",
         )

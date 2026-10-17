@@ -1,4 +1,5 @@
 import io
+import json
 
 import numpy as np
 import soundfile as sf
@@ -210,3 +211,68 @@ def test_ref_audio_permissive_and_traversal(permissive_media_client):
     assert c.post("/api/tts", json=_clone_body("ref.wav")).status_code == 200
     # Path traversal outside the reference directory is refused.
     assert c.post("/api/tts", json=_clone_body("../../etc/passwd")).status_code == 400
+
+
+ADMIN = ("admin", "s3cret")
+
+
+def _new_session(auth_client):
+    r = auth_client.post("/api/session", auth=ADMIN)
+    assert r.status_code == 200, r.text
+    return r.json()["key"]
+
+
+def test_session_key_is_admin_bearer(auth_client):
+    key = _new_session(auth_client)
+    assert auth_client.get("/api/config", headers={"X-API-Key": key}).status_code == 200
+    # The session key is admin-scoped: it may manage client keys.
+    assert auth_client.get("/api/api-keys", headers={"X-API-Key": key}).status_code == 200
+
+
+def test_session_requires_basic_not_api_key(auth_client):
+    assert auth_client.post("/api/session", headers={"X-API-Key": "k-123"}).status_code == 401
+
+
+def test_session_logout_revokes(auth_client):
+    key = _new_session(auth_client)
+    assert auth_client.post("/api/session/logout", headers={"X-API-Key": key}).json()["revoked"] is True
+    assert auth_client.get("/api/config", headers={"X-API-Key": key}).status_code == 401
+
+
+def test_api_keys_crud(auth_client):
+    r = auth_client.post("/api/api-keys", json={"name": "mobile"}, auth=ADMIN)
+    assert r.status_code == 200, r.text
+    created = r.json()
+    key = created["key"]
+    assert key.startswith("aiud_")
+
+    listing = auth_client.get("/api/api-keys", auth=ADMIN).json()
+    assert listing["enabled"] is True
+    assert any(k["id"] == created["id"] and k["name"] == "mobile" for k in listing["keys"])
+    # The secret and the hash are never returned by the list.
+    blob = json.dumps(listing)
+    assert key not in blob
+    assert '"hash"' not in blob
+
+    assert auth_client.get("/api/config", headers={"X-API-Key": key}).status_code == 200
+    assert auth_client.delete(f"/api/api-keys/{created['id']}", auth=ADMIN).status_code == 200
+    assert auth_client.get("/api/config", headers={"X-API-Key": key}).status_code == 401
+
+
+def test_expired_key_is_rejected(auth_client):
+    r = auth_client.post(
+        "/api/api-keys", json={"name": "old", "expires_in_days": -1}, auth=ADMIN
+    )
+    key = r.json()["key"]
+    assert auth_client.get("/api/config", headers={"X-API-Key": key}).status_code == 401
+
+
+def test_client_key_cannot_manage_keys(auth_client):
+    headers = {"X-API-Key": "k-123"}
+    assert auth_client.get("/api/api-keys", headers=headers).status_code == 403
+    assert auth_client.post("/api/api-keys", json={"name": "x"}, headers=headers).status_code == 403
+
+
+def test_api_keys_disabled(client):
+    body = client.get("/api/api-keys").json()
+    assert body == {"enabled": False, "keys": []}

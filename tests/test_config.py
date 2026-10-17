@@ -39,11 +39,31 @@ def test_settings_roundtrip(tmp_path):
 def test_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://llm.local/v1")
     monkeypatch.setenv("AUTH_ENABLED", "true")
-    monkeypatch.setenv("AUTH_API_KEYS", "key1,key2")
     store = ConfigStore(tmp_path / "config.yaml")
     assert store.settings.llm.base_url == "http://llm.local/v1"
     assert store.settings.auth.enabled is True
-    assert store.settings.auth.api_keys == ["key1", "key2"]
+
+
+def test_legacy_plaintext_keys_are_hashed(tmp_path):
+    from app.apikeys import hash_key
+
+    path = tmp_path / "config.yaml"
+    path.write_text("auth:\n  api_keys:\n  - legacy-key\n", encoding="utf-8")
+    store = ConfigStore(path)
+    (record,) = store.settings.auth.api_keys
+    assert record.hash == hash_key("legacy-key")
+    assert record.prefix == "legacy-key"[:12]
+
+
+def test_api_key_persisted_hashed(tmp_path):
+    from app.apikeys import new_key
+
+    store = ConfigStore(tmp_path / "config.yaml")
+    raw, record = new_key(name="mobile")
+    store.update(auth={"api_keys": [record.model_dump()]})
+    reloaded = ConfigStore(tmp_path / "config.yaml")
+    (saved,) = reloaded.settings.auth.api_keys
+    assert saved.hash and raw not in reloaded.path.read_text(encoding="utf-8")
 
 
 def test_update_section(tmp_path):

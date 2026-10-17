@@ -11,8 +11,16 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.apikeys import ApiKey, clear_sessions, hash_key  # noqa: E402
 from app.config import ConfigStore, Settings  # noqa: E402
 from app.main import create_app  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _clean_sessions():
+    clear_sessions()
+    yield
+    clear_sessions()
 
 
 class DummyEngine:
@@ -90,7 +98,10 @@ def client(tmp_path):
 @pytest.fixture()
 def auth_client(tmp_path):
     store = ConfigStore(tmp_path / "config.yaml")
-    store.settings = _settings(tmp_path, auth={"enabled": True, "password": "s3cret", "api_keys": ["k-123"]})
+    secret = ApiKey(name="test", prefix="k-123", hash=hash_key("k-123"))
+    store.settings = _settings(
+        tmp_path, auth={"enabled": True, "password": "s3cret", "api_keys": [secret]}
+    )
     app = create_app(store, DummyEngine())
     with TestClient(app) as c:
         yield c

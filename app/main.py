@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__
+from . import __version__, apikeys
 from .audio import to_pcm16, wav_bytes
 from .avatars import Avatar, AvatarStore
 from .chatterbox_backend import is_available as is_chatterbox_available
@@ -32,7 +32,13 @@ from .engine import TTSEngine, design_ref_text
 from .llm import LLMClient, build_messages, trim_history
 from .scheduler import BatchScheduler
 from .schemas import TTSRequest
-from .security import request_authorized, validate_media_ref
+from .security import (
+    is_admin,
+    is_basic_admin,
+    presented_key,
+    request_authorized,
+    validate_media_ref,
+)
 from .stt_models import iter_download, load_index, mark_active, read_active
 
 log = logging.getLogger(__name__)
@@ -46,6 +52,24 @@ def _avatar_dir(settings: Settings) -> Path:
 def _clone_family(settings: Settings) -> str:
     """Family used to synthesize cloned avatars (global clone-engine setting)."""
     return "chatterbox" if settings.models.clone_backend == "chatterbox" else "base"
+
+
+def _parse_expiry(value: Any, days: Any):
+    """Parse an API-key expiry from an ISO date or a number of days."""
+    from datetime import datetime, timedelta, timezone
+
+    if value:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(400, f"Invalid expires_at: {value}") from exc
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    if days not in (None, "", 0, "0"):
+        try:
+            return datetime.now(timezone.utc) + timedelta(days=int(days))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "Invalid expires_in_days") from exc
+    return None
 
 
 async def _apply_startup(app: FastAPI) -> None:
@@ -522,6 +546,89 @@ def create_app(
             # request loads the newly selected repos.
             await asyncio.to_thread(engine.unload)
         return _public_config(updated, engine)
+
+    # --------------------------------------------------- admin: keys / session
+    def _admin_ok(request: Request) -> None:
+        if not is_admin(
+            app.state.settings,
+            request.headers.get("authorization"),
+            request.headers.get("x-api-key"),
+            request.query_params.get("api_key"),
+        ):
+            raise HTTPException(403, "Admin authentication required")
+
+    def _basic_required(request: Request) -> None:
+        if not is_basic_admin(app.state.settings, request.headers.get("authorization")):
+            raise HTTPException(
+                401,
+                "Admin (Basic) authentication required",
+                headers={"WWW-Authenticate": 'Basic realm="aiudio"'},
+            )
+
+    @app.post("/api/session")
+    async def create_session(request: Request) -> Dict[str, Any]:
+        """Mint a short-lived admin key from the HTTP Basic credentials.
+
+        The admin UI then uses a normal bearer key for its HTTP and (browser)
+        WebSocket calls, and can log out / let it expire.
+        """
+        _basic_required(request)
+        ttl = app.state.settings.auth.session_ttl_minutes
+        raw, record = apikeys.new_key(name="admin session", ttl_minutes=ttl, admin=True)
+        apikeys.add_session(record)
+        log.info("Admin session key issued (ttl=%s min)", ttl)
+        return {"key": raw, "id": record.id, "expires_at": record.expires_at, "admin": True}
+
+    @app.post("/api/session/logout")
+    async def close_session(request: Request) -> Dict[str, Any]:
+        token = presented_key(
+            request.headers.get("authorization"),
+            request.headers.get("x-api-key"),
+            request.query_params.get("api_key"),
+        )
+        record = apikeys.verify(token, apikeys.sessions()) if token else None
+        if record is not None:
+            apikeys.drop_session(record.id)
+        return {"revoked": record is not None}
+
+    @app.get("/api/api-keys")
+    async def list_api_keys(request: Request) -> Dict[str, Any]:
+        if not app.state.settings.auth.enabled:
+            return {"enabled": False, "keys": []}
+        _admin_ok(request)
+        keys = [apikeys.public(k) for k in app.state.settings.auth.api_keys]
+        keys.sort(key=lambda k: k["created_at"], reverse=True)
+        return {"enabled": True, "keys": keys}
+
+    @app.post("/api/api-keys")
+    async def create_api_key(request: Request) -> Dict[str, Any]:
+        _admin_ok(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "A name is required")
+        expires_at = _parse_expiry(payload.get("expires_at"), payload.get("expires_in_days"))
+        raw, record = apikeys.new_key(name=name, expires_at=expires_at)
+        keys = list(app.state.settings.auth.api_keys) + [record]
+        app.state.settings = store.update(
+            auth={"api_keys": [k.model_dump() for k in keys]}
+        )
+        return {"key": raw, **apikeys.public(record)}
+
+    @app.delete("/api/api-keys/{key_id}")
+    async def delete_api_key(key_id: str, request: Request) -> Dict[str, Any]:
+        _admin_ok(request)
+        current = app.state.settings.auth.api_keys
+        keys = [k for k in current if k.id != key_id]
+        if len(keys) == len(current):
+            raise HTTPException(404, f"Unknown key: {key_id}")
+        app.state.settings = store.update(
+            auth={"api_keys": [k.model_dump() for k in keys]}
+        )
+        return {"deleted": key_id}
 
     # ------------------------------------------------------------------- TTS
     @app.post("/api/tts")

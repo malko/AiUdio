@@ -151,6 +151,7 @@ auth:
   username: admin
   password: ''
   api_keys: []
+  session_ttl_minutes: 480
   exempt_paths:
   - /health
   - /ready

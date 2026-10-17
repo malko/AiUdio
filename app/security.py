@@ -12,6 +12,9 @@ from typing import Iterable, Optional
 
 from fastapi import HTTPException, Request, WebSocket, status
 
+from . import apikeys
+from .apikeys import ApiKey, verify
+
 UNAUTHORIZED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="Authentication required",
@@ -33,8 +36,17 @@ def _basic_ok(auth: str, username: str, password: str) -> bool:
     return secrets.compare_digest(user, username) and secrets.compare_digest(pwd, password)
 
 
-def _bearer_ok(token: str, api_keys: Iterable[str]) -> bool:
-    return any(secrets.compare_digest(token, key) for key in api_keys)
+def _match_key(settings, *candidates: Optional[str]) -> Optional[ApiKey]:
+    """First candidate that matches a live (client or session) key, else None."""
+    keys = apikeys.all_keys(settings)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        found = verify(candidate, keys)
+        if found is not None:
+            apikeys.mark_used(found.id)
+            return found
+    return None
 
 
 def _path_exempt(path: str, exempt_paths: Iterable[str]) -> bool:
@@ -45,17 +57,54 @@ def _authorized(settings, authorization: Optional[str], x_api_key: Optional[str]
     auth = settings.auth
     if not auth.enabled:
         return True
-    if x_api_key and _bearer_ok(x_api_key, auth.api_keys):
-        return True
-    if query_key and _bearer_ok(query_key, auth.api_keys):
+    if _match_key(settings, x_api_key, query_key) is not None:
         return True
     if authorization:
         scheme, _, token = authorization.partition(" ")
-        if scheme.lower() == "bearer" and _bearer_ok(token, auth.api_keys):
+        if scheme.lower() == "bearer" and _match_key(settings, token) is not None:
             return True
         if scheme.lower() == "basic" and auth.password:
             return _basic_ok(authorization, auth.username, auth.password)
     return False
+
+
+def is_basic_admin(settings, authorization: Optional[str]) -> bool:
+    """True when the request carries valid HTTP Basic admin credentials."""
+    auth = settings.auth
+    if not auth.enabled:
+        return True
+    if not authorization or not auth.password:
+        return False
+    scheme, _, _ = authorization.partition(" ")
+    return scheme.lower() == "basic" and _basic_ok(authorization, auth.username, auth.password)
+
+
+def is_admin(settings, authorization: Optional[str], x_api_key: Optional[str], query_key: Optional[str]) -> bool:
+    """Admin privilege: Basic admin, or an admin-scoped session key."""
+    if not settings.auth.enabled:
+        return True
+    if is_basic_admin(settings, authorization):
+        return True
+    bearer = None
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            bearer = token
+    found = _match_key(settings, x_api_key, query_key, bearer)
+    return bool(found and found.admin)
+
+
+def presented_key(authorization: Optional[str], x_api_key: Optional[str], query_key: Optional[str]) -> Optional[str]:
+    """The raw key presented on the request, whatever the transport."""
+    if x_api_key:
+        return x_api_key
+    if query_key:
+        return query_key
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            return token
+    return None
 
 
 def request_authorized(request: Request, settings) -> bool:
