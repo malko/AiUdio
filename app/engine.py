@@ -147,23 +147,42 @@ class TTSEngine:
             self._handles[family] = handle
             return handle
 
+    def _pinned_families(self) -> set:
+        """Families `models.resident` asks to keep loaded (multi-residency only)."""
+        if self.settings.models.residency != "multi":
+            return set()
+        return set(self.settings.models.resident or [])
+
     def _evict_for(self, incoming: str) -> None:
         limit = self.max_resident()
         while len(self._handles) >= limit and incoming not in self._handles:
-            victim = min(self._handles.values(), key=lambda h: h.last_used).family
-            age = time.time() - self._handles[victim].last_used
-            log.info("Evicting model '%s' (hot-swap, idle %.1fs)", victim, age)
+            # `models.resident` is a pin: a family outside the list is evicted
+            # first (LRU among those), and a pinned one only when everything
+            # loaded is pinned (the resident list does not fit the limit).
+            pinned = self._pinned_families()
+            candidates = [h for h in self._handles.values() if h.family not in pinned]
+            all_pinned = not candidates
+            if all_pinned:
+                candidates = list(self._handles.values())
+            victim = min(candidates, key=lambda h: h.last_used)
+            age = time.time() - victim.last_used
+            log.info(
+                "Evicting model '%s' (hot-swap, idle %.1fs, %s)",
+                victim.family, age, "resident" if all_pinned else "not resident",
+            )
             # Evicting a model used moments ago usually means the app oscillates
             # between families (e.g. a preset voice and a cloned avatar): every
             # switch pays a full model load + first-call warm-up again.
             if age < _THRASH_WINDOW_S:
                 metrics.incr("model_hot_swap_thrash")
                 log.warning(
-                    "Hot-swap thrash: evicting '%s' (idle %.1fs < %.0fs); "
-                    "consider models.residency: multi with it in models.resident",
-                    victim, age, _THRASH_WINDOW_S,
+                    "Hot-swap thrash: evicting '%s' (idle %.1fs < %.0fs); %s",
+                    victim.family, age, _THRASH_WINDOW_S,
+                    "add it to models.resident (residency: multi) to keep it hot"
+                    if not all_pinned else
+                    "models.resident does not fit the limit — trim it or use residency: single",
                 )
-            self._unload(victim)
+            self._unload(victim.family)
 
     def unload(self, family: Optional[str] = None) -> None:
         with self._lock:

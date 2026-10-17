@@ -52,6 +52,20 @@ def test_speakers_defaults_when_model_not_loaded():
     assert engine.languages("custom_voice") == []
 
 
+def test_eviction_prefers_families_outside_models_resident():
+    settings = Settings()
+    settings.models.residency = "multi"
+    settings.models.resident = ["custom_voice", "base"]
+    engine = TTSEngine(settings)
+    engine._load = lambda family: ModelHandle(family=family, repo_id="x", model=_FakeModel())
+    engine.ensure("custom_voice")
+    # Make the pinned family the least recently used: a plain LRU would evict it.
+    engine._handles["custom_voice"].last_used = 1.0
+    engine.ensure("chatterbox")  # not resident: fits while the limit allows
+    engine.ensure("base")        # limit reached: the non-resident family goes first
+    assert set(engine.loaded_families()) == {"custom_voice", "base"}
+
+
 def test_voice_design_stabilized_via_clone_and_cached():
     settings = Settings()
     settings.models.stabilize_voice_design = True  # opt-in legacy stabilization

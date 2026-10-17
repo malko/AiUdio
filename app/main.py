@@ -47,6 +47,28 @@ log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 
+def _configure_logging(level: str = "info") -> None:
+    """Route the application's own logs to stderr.
+
+    Uvicorn only configures its own loggers: without a root handler every
+    ``log.info`` from the engine and the chat pipeline was silently dropped, so
+    ``server.log_level`` had no effect on them either.
+    """
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    root.setLevel(getattr(logging, (level or "info").strip().upper(), logging.INFO))
+
+
+def _fmt_s(seconds: Optional[float]) -> str:
+    """Format an optional duration for the chat timing logs."""
+    return "-" if seconds is None else f"{seconds:.2f}s"
+
+
 def _avatar_dir(settings: Settings) -> Path:
     return Path(settings.paths.voices) / "avatars"
 
@@ -331,6 +353,7 @@ def create_app(
 ) -> FastAPI:
     store = store or get_store()
     settings = store.settings
+    _configure_logging(settings.server.log_level)
     engine = engine or TTSEngine(settings)
     scheduler = BatchScheduler(
         engine,
@@ -1361,6 +1384,11 @@ async def _chat_turn(
     buffer = ""
     index = 0
     queued = False
+    started = time.perf_counter()
+    first_token: Optional[float] = None
+    first_queued: Optional[float] = None
+    first_audio: Optional[float] = None
+    spoken = 0
 
     async def send_json(obj: Dict[str, Any]) -> None:
         async with send_lock:
@@ -1368,7 +1396,7 @@ async def _chat_turn(
 
     async def tts_worker() -> None:
         """Synthesize queued sentences without blocking the LLM token stream."""
-        nonlocal index
+        nonlocal index, first_audio, spoken
         while True:
             sentence = await queue.get()
             if sentence is None:
@@ -1379,6 +1407,7 @@ async def _chat_turn(
             try:
                 # The chat chunker already released whole sentences: synthesize each
                 # one as it is (no second sentence-splitting pass).
+                t_synth = time.perf_counter()
                 async for _, pcm, sr in _stream_pcm(
                     settings, scheduler, req, sentence, split_chunks=False
                 ):
@@ -1393,12 +1422,31 @@ async def _chat_turn(
                             "type": "audio.done", "sentence_index": index, "total_bytes": len(pcm),
                         })
                     index += 1
+                spoken += 1
+                now = time.perf_counter() - started
+                synth = time.perf_counter() - t_synth
+                if first_audio is None:
+                    first_audio = now
+                    log.info(
+                        "chat tts: first audio %.2fs after the turn started "
+                        "(llm first token %s, first chunk queued %s, synth %.2fs, %d chars)",
+                        now,
+                        _fmt_s(first_token), _fmt_s(first_queued), synth, len(sentence),
+                    )
+                else:
+                    log.info(
+                        "chat tts: chunk %d ready %.2fs after the turn started "
+                        "(synth %.2fs, %d chars)",
+                        spoken - 1, now, synth, len(sentence),
+                    )
             except Exception as exc:  # TTS failure must not break the text conversation
                 await send_json({"type": "error", "message": f"TTS: {exc}"})
 
     worker = asyncio.create_task(tts_worker()) if speak else None
     try:
         async for token in llm.stream(messages):
+            if first_token is None:
+                first_token = time.perf_counter() - started
             reply += token
             await send_json({"type": "llm.delta", "text": token})
             if speak:
@@ -1411,16 +1459,26 @@ async def _chat_turn(
                     buffer, min_chars=minimum, allow_first_clause=not queued
                 )
                 for sentence in chunks:
+                    if first_queued is None:
+                        first_queued = time.perf_counter() - started
                     queued = True
                     await queue.put(sentence)
         if speak and worker is not None:
             if buffer.strip():
+                if first_queued is None:
+                    first_queued = time.perf_counter() - started
                 await queue.put(buffer)
             await queue.put(None)
             await worker
     finally:
         if worker is not None and not worker.done():
             worker.cancel()
+    log.info(
+        "chat turn: llm done %.2fs (%d chunks queued, first at %s, first audio %s), "
+        "reply %d chars, total %.2fs",
+        time.perf_counter() - started, spoken, _fmt_s(first_queued), _fmt_s(first_audio),
+        len(reply), time.perf_counter() - started,
+    )
     return reply
 
 

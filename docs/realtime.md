@@ -90,25 +90,36 @@ depth, and per-stage timings (`/api/metrics`).
   `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
   service is unreachable and the call fell back).
 - **Observability**: `/api/metrics` (TTFA, RTF, counters, queue depth, model
-  loads/evictions/hot-swap thrash) and `/ready`.
+  loads/evictions/hot-swap thrash) and `/ready`. The app logs its own timings at INFO
+  (`server.log_level`, now actually applied): one line per synthesis call
+  (`TTS family=… chars=… gen=… total=… rtf=…`), one per model load/eviction, and — per chat
+  turn — `chat tts: first audio Xs after the turn started (llm first token …s, first chunk
+  queued …s, synth …s, N chars)` followed by one line per following chunk and a
+  `chat turn: …` summary. That splits the user-visible wait into LLM time, chunking time and
+  synthesis time.
 - **Client jitter buffer**: `PCMPlayer` buffers the first ~200 ms before starting playback
   (forced flush after 250 ms for very short clips) to avoid underruns.
 
 ### Diagnosing a slow engine (Qwen3-TTS vs Chatterbox)
 
 A large, constant per-request TTFA on Qwen (while Chatterbox feels instant) points at the
-model family, not the pipeline. Check `GET /api/metrics`:
+model family, not the pipeline. Check the chat log line above, then `GET /api/metrics`:
 
-- `counters.model_loads` growing every turn ⇒ the family is being **reloaded**. The common
-  cause is oscillating between two families (e.g. a preset `custom_voice` voice and a cloned
-  `base` avatar) under `residency: single` (the default). Fix: `TTS_RESIDENCY=multi` (or set
-  `models.residency: multi`) with both families in `models.resident`, or pin a single voice.
-  On a small GPU, staying on `single` and accepting the swap is the safer trade-off (two
-  families plus STT in VRAM can exhaust it).
+- `counters.model_loads` growing every turn ⇒ the family is being **reloaded** (log:
+  `Loaded … in X s`). The common cause is oscillating between two families (e.g. a preset
+  `custom_voice` voice and a cloned `base` avatar) under `residency: single` (the default),
+  where any switch reloads. Fix: `TTS_RESIDENCY=multi` (or `models.residency: multi`) with
+  every family actually used in `models.resident` — a non-resident family is then evicted
+  first. On a small GPU, staying on `single` and accepting the swap is the safer trade-off
+  (several families plus STT in VRAM can exhaust it).
 - `counters.model_hot_swap_thrash` > 0 confirms it (a model was evicted within 120 s of its
-  last use). The engine logs `Hot-swap thrash: evicting …`.
-- If loads stay flat but `ttfa_seconds.avg` is high, it is the engine itself: use the 0.6B
-  family, cap response length, and/or route CustomVoice through the `vllm` profile.
+  last use). The engine logs `Hot-swap thrash: evicting …` and says whether the victim was
+  pinned by `models.resident`.
+- If loads stay flat, `chat tts: first audio … synth Xs` gives the synthesis cost of the
+  first chunk: high `rtf.avg` means the engine itself is the bottleneck (use the 0.6B
+  family, shorter chunks, or route CustomVoice through the `vllm` profile), and a first
+  audio that arrives only once the LLM reply is complete means the first chunk's synthesis
+  is longer than the whole reply.
 
 ## STT sessions
 
