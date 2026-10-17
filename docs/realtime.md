@@ -87,7 +87,16 @@ depth, and per-stage timings (`/api/metrics`).
 
   A `speech.audio.error` event or a `Stage-1 has no live replica` message means the
   service is up but one of its two stages died: restart the container and check that both
-  stages report *EngineCore running*.
+  stages report *EngineCore running*. The **first call after a restart is much slower**
+  (tens of seconds: kernel/graph warm-up and the speech caches); the gateway therefore
+  primes it with a tiny request when vLLM is enabled or at startup (`tts_vllm_warmups`).
+  Measured once warm (1.7B CustomVoice, `--enforce-eager`, `--max-model-len 2048`):
+  TTFB ≈ 0.05 s and RTF ≈ 0.22, i.e. the audio starts almost immediately and is produced
+  ~4× faster than it plays.
+
+  The model the service serves is its own `vllm serve <model>` argument — the gateway's
+  `models.registry`/`default_size` only drive the *local* engine; both 0.6B and 1.7B
+  CustomVoice expose the same speakers.
 
   Without Compose, the same service can be started standalone on the stack network:
 

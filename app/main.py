@@ -137,6 +137,12 @@ async def _apply_startup(app: FastAPI) -> None:
         except Exception:
             log.exception("Startup voice load failed")
 
+    if settings.vllm.enabled:
+        try:
+            await _warm_vllm(settings)
+        except Exception:  # pragma: no cover - defensive
+            log.debug("vLLM-Omni warm-up skipped", exc_info=True)
+
     family = settings.startup.tts_family
     if family:
         try:
@@ -801,6 +807,10 @@ def create_app(
         engine.settings = updated
         if "server" in sections:
             _configure_logging(updated.server.log_level)
+        if "vllm" in sections and updated.vllm.enabled:
+            # Enabling vLLM: prime it now, in the background, so the first turn
+            # after the change is not the one paying the cold start.
+            asyncio.create_task(_warm_vllm(updated))
         if "models" in sections:
             # The registry/size may have changed: drop resident models so the next
             # request loads the newly selected repos.
@@ -1277,6 +1287,35 @@ def _ws_url(base_url: str, path: str, api_key: str = "") -> str:
     if api_key:
         url += f"?api_key={api_key}"
     return url
+
+
+async def _warm_vllm(settings: Settings) -> None:
+    """Best effort: absorb the vLLM-Omni cold start.
+
+    The first call after a restart can take tens of seconds (kernel/graph warm-up
+    and the speech caches being filled): a tiny request primes it so the first
+    real turn is not the one paying for it.
+    """
+    cfg = settings.vllm
+    if not cfg.enabled:
+        return
+    payload = {
+        "input": "a.",
+        "response_format": "pcm",
+        "stream": True,
+        "stream_format": "audio",
+        "sample_rate": settings.audio.sample_rate,
+    }
+    try:
+        started = time.perf_counter()
+        async for _ in vllm_backend.stream_pcm(
+            cfg.base_url, payload, path=cfg.path, timeout=180.0
+        ):
+            pass
+        metrics.incr("tts_vllm_warmups")
+        log.info("vLLM-Omni warm-up done in %.2fs", time.perf_counter() - started)
+    except Exception:
+        log.warning("vLLM-Omni warm-up failed (service unreachable?)", exc_info=True)
 
 
 async def _open_stt_upstream(url: str):

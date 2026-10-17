@@ -116,3 +116,31 @@ def test_speech_payload_asks_for_raw_pcm():
     assert payload["stream"] is True
     assert payload["sample_rate"] == 24000
     assert payload["voice"] == "vivian"  # served speakers are lowercase
+
+
+def test_warm_vllm_is_a_noop_when_disabled(monkeypatch):
+    from app.main import _warm_vllm
+
+    called = []
+
+    async def fake_stream(*a, **kw):  # pragma: no cover - must not be called
+        called.append(1)
+        yield b""
+
+    monkeypatch.setattr("app.vllm_backend.stream_pcm", fake_stream)
+    settings = Settings()  # vllm.enabled is False
+    asyncio.run(_warm_vllm(settings))
+    assert called == []
+
+
+def test_warm_vllm_swallows_an_unreachable_service(monkeypatch):
+    from app.main import _warm_vllm
+
+    async def boom(*a, **kw):
+        raise OSError("connection refused")
+        yield b""  # pragma: no cover - makes it an async generator
+
+    monkeypatch.setattr("app.vllm_backend.stream_pcm", boom)
+    settings = Settings()
+    settings.vllm.enabled = True
+    asyncio.run(_warm_vllm(settings))  # must not raise
