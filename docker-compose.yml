@@ -107,11 +107,14 @@ services:
     profiles: ["vllm"]
     # The model served here is this argument alone — the gateway's
     # `models.registry`/`default_size` only drive its *local* engine.
-    # On a small or shared card, add `--max-model-len 2048 --enforce-eager` and
-    # budget the two stages (0 = talker, 1 = Code2Wav) separately, e.g.
-    #   --stage-overrides '{"0": {"gpu_memory_utilization": 0.20}, "1": {"gpu_memory_utilization": 0.10}}'
-    # A global `--gpu-memory-utilization` would replace *both* shares and make
-    # stage 1 die with CUDA OOM. See docs/realtime.md.
+    # On a small or shared card, budget the two stages (keys are stage ids: 0 =
+    # talker, 1 = Code2Wav; both live on the same GPU) separately. The bundled
+    # deploy YAML reserves 0.3 + 0.3, i.e. 60 % of the card whatever the variant,
+    # so lower stage 1 (a ~0.5 GiB vocoder), e.g. with `--max-model-len 2048
+    # --enforce-eager`:
+    #   --stage-overrides '{"0": {"gpu_memory_utilization": 0.30}, "1": {"gpu_memory_utilization": 0.12}}'
+    # Keep stage 0 large enough for the talker's weights (fraction × total VRAM
+    # ≥ ~4.1 GiB for the 1.7B, ~1.3 GiB for the 0.6B). See docs/realtime.md.
     command: >
       vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
       --omni --host 0.0.0.0 --port 8091
