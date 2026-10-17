@@ -41,6 +41,9 @@ services:
       - ./outputs:/app/outputs
       - ./logs:/app/logs
       - hf_cache:/app/hf_cache
+      # Opt-in container control (uncomment *and* set DOCKER_CONTROL=1): the
+      # Docker socket is root-equivalent power over the host, see docs/security.md.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - CONFIG_DEFAULTS=/app/config.defaults.yaml
       - CONFIG_PATH=/app/state/config.yaml
@@ -71,9 +74,6 @@ services:
       - VLLM_REF_ROOT=${VLLM_REF_ROOT:-/svc/voices}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # opt-in, with DOCKER_CONTROL=1:
-    # volumes:
-    #   - /var/run/docker.sock:/var/run/docker.sock:ro
     <<: *nvidia-gpu
     restart: unless-stopped
     networks: [speech]
