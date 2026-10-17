@@ -1,0 +1,27 @@
+# AiUdio Server
+
+> Self-hosted TTS/STT gateway (FastAPI): two interchangeable TTS engines (Qwen3-TTS,
+> Chatterbox), streaming STT proxy (NeMo-Speech.cpp) and an STT → external LLM → TTS
+> conversation loop. The web UI is a demo/admin front; the HTTP/WebSocket API is the
+> integration contract. Runs via Docker Compose.
+
+- Base URL (default): http://localhost:8004
+- Discovery: GET /api/capabilities · OpenAPI: /openapi.json · docs: /docs
+- Auth: HTTP Basic (admin) + API keys (X-API-Key / Bearer / ?api_key=)
+- Makefile: `make test`, `make lint`, `make up`
+
+## Docs
+
+- [README.md](README.md): overview, quick start, env vars, troubleshooting.
+- [docs/integration.md](docs/integration.md): how to integrate another application (REST, OpenAI-compatible, PCM streaming, WebSockets, latency tips).
+- [docs/api.md](docs/api.md): route and field reference.
+- [docs/architecture.md](docs/architecture.md): components and request flows.
+- [docs/backends.md](docs/backends.md): hardware backends and the isolated Chatterbox venv.
+- [docs/conversation.md](docs/conversation.md): STT → LLM → TTS cascade.
+- [docs/security.md](docs/security.md): authentication, API keys, SSRF/hardening.
+- [docs/realtime.md](docs/realtime.md): latency analysis and real-time roadmap.
+
+## Agent / integration entry points
+
+- [AGENTS.md](AGENTS.md): the integration contract, checklist and repo rules for AI agents.
+- [examples/](examples): runnable Python, Node and curl clients.
