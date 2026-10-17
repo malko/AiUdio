@@ -130,7 +130,19 @@ function switchTab(name) {
   document.querySelectorAll(".tab").forEach((el) => el.classList.remove("active"));
   const section = $(`#tab-${name}`);
   if (section) section.classList.add("active");
+  if (name === "chat") fitChatLayout();
 }
+
+// The conversation fills whatever height is left below the header/tabs: measure it
+// instead of hard-coding the chrome height (fonts, zoom and language vary).
+function fitChatLayout() {
+  const layout = document.querySelector("#tab-chat .chat-layout");
+  if (!layout) return;
+  if (window.matchMedia("(max-width: 900px)").matches) { layout.style.height = ""; return; }
+  const top = layout.getBoundingClientRect().top;
+  layout.style.height = `${Math.max(320, window.innerHeight - top - 6)}px`;
+}
+window.addEventListener("resize", () => { fitChatLayout(); scrollChatToBottom(); });
 
 document.querySelectorAll(".tabs button").forEach((btn) => {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -204,6 +216,7 @@ async function init() {
   if (preload) loadVoiceModel(preload);
   buildStartupVoiceSelect();
   await loadMicDevices();
+  fitChatLayout();
   refreshConfigModels();
   refreshStatus();
 }
@@ -1456,7 +1469,6 @@ function scrollChatToBottom(force = false) {
   if (!force && !chatFollowsBottom()) return;
   el.scrollTop = el.scrollHeight;
 }
-window.addEventListener("resize", () => scrollChatToBottom());
 
 function appendTurn(role, text, name) {
   const row = document.createElement("div");
