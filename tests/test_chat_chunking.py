@@ -1,4 +1,9 @@
-from app.main import _pop_chat_chunks
+from app.main import (
+    _CHAT_COALESCE_CHARS,
+    _CHAT_MAX_CHARS,
+    _CHAT_MIN_CHARS,
+    _pop_chat_chunks,
+)
 
 
 def _stream(reply: str):
@@ -44,24 +49,54 @@ def test_pop_chat_chunks_splits_long_text_on_spaces():
     assert rest and text.startswith(chunks[0])
 
 
-def test_pop_chat_chunks_releases_clause_past_min():
-    text = "This is a considerably longer opening clause, followed by more text."
+def test_pop_chat_chunks_releases_complete_sentences_only():
+    # A clause — let alone a single word — is never released on its own: the TTS
+    # engine renders each fragment as a standalone utterance with its own
+    # intonation, which is heard as chopped, word-by-word speech.
+    text = "This is a considerably longer opening clause, followed by more text"
     chunks, rest = _pop_chat_chunks(text)
-    assert len(chunks) == 1
-    assert chunks[0].endswith("clause,")
-    assert rest == "followed by more text."
+    assert chunks == []
+    assert rest == text
 
 
-def test_pop_chat_chunks_releases_at_word_without_punctuation():
-    # A run-on opening with no comma must still let TTS start early (word boundary).
-    text = "This opening sentence has no punctuation at all and keeps going for a while"
-    chunks = _stream(text)
+def test_pop_chat_chunks_releases_a_finished_sentence():
+    text = "This is a considerably longer opening clause, followed by more text. And more"
+    chunks, rest = _pop_chat_chunks(text)
+    assert chunks == ["This is a considerably longer opening clause, followed by more text."]
+    assert rest == "And more"
+
+
+def test_pop_chat_chunks_cuts_a_very_long_unfinished_sentence():
+    # No punctuation at all: audio must not stall forever, so the buffer is cut at
+    # the last clause/space boundary past _CHAT_MAX_CHARS (last resort).
+    text = ("mot " * 200).strip()
+    chunks, rest = _pop_chat_chunks(text)
     assert chunks
-    assert len(chunks[0]) >= 40
-    assert chunks[0].split()[-1] in text.split()
+    assert len(chunks[0]) <= _CHAT_MAX_CHARS + 2
+    assert rest and text.startswith(chunks[0])
+
+
+def test_pop_chat_chunks_coalesces_after_the_first_chunk():
+    # The caller raises `min_chars` once the first sentence is out: the rest of the
+    # reply is grouped into fewer, longer utterances instead of one call per
+    # sentence.
+    text = "Une premiere phrase assez longue pour etre liberee. Deuxieme phrase. Troisieme."
+    first, rest = _pop_chat_chunks(text, min_chars=_CHAT_MIN_CHARS)
+    assert first == ["Une premiere phrase assez longue pour etre liberee."]
+    grouped, rest2 = _pop_chat_chunks(rest, min_chars=_CHAT_COALESCE_CHARS)
+    assert grouped == []  # below the target, kept until the next sentence arrives
+    assert rest2 == rest
 
 
 def test_pop_chat_chunks_keeps_short_sentence():
     chunks, rest = _pop_chat_chunks("Hi, ok")
     assert chunks == []
     assert rest == "Hi, ok"
+
+
+def test_streamed_reply_is_never_cut_mid_sentence():
+    reply = "Bonjour ! Je vais tres bien, merci de demander. Et toi, comment vas-tu ?"
+    chunks = _stream(reply)
+    assert chunks
+    assert all(c[-1] in ".!?…" for c in chunks), chunks
+    assert " ".join(chunks) == reply

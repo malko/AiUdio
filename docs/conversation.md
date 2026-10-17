@@ -63,10 +63,12 @@ Then `LLM_BASE_URL=http://host.docker.internal:8080/v1`.
 - **Replay**: every assistant bubble has a 🔊 button. The last 8 replies' PCM is kept in the
   browser; older ones are re-synthesized on demand via `POST /api/tts` with the current voice.
 - **Time to first audio**: TTS does **not** wait for the full LLM reply. The server synthesizes
-  sentence by sentence as tokens arrive; sentences shorter than `_CHAT_MIN_CHARS` (~40 chars)
-  are merged with the next one, and a long opening sentence is released at the first clause
-  boundary past that length — or at the first **word** boundary on a run-on opening
-  (`_pop_chat_chunks`).
+  sentence by sentence as tokens arrive; only **complete sentences** are released (never a
+  clause or a word, which the engine would render as a chopped utterance with its own
+  intonation). A short opening sentence (< ~40 chars) is merged with the next one so playback
+  does not drain, and once the first chunk is out the following sentences are grouped up to
+  ~200 chars (`_pop_chat_chunks`), so a reply costs a few synthesis calls rather than one per
+  sentence.
 
 ## Endpoints
 

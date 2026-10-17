@@ -277,10 +277,17 @@ async def _stream_vllm(
 
 
 async def _stream_pcm(
-    settings: Settings, scheduler: BatchScheduler, req: TTSRequest, text: str
+    settings: Settings, scheduler: BatchScheduler, req: TTSRequest, text: str,
+    *, split_chunks: bool = True,
 ) -> AsyncIterator[Tuple[str, bytes, int]]:
-    """Generate the text sentence by sentence and yield progressive PCM chunks."""
-    use_chunking = req.chunking if req.chunking is not None else settings.chunking.enabled
+    """Generate the text sentence by sentence and yield progressive PCM chunks.
+
+    ``split_chunks`` is turned off by the chat pipeline, which already hands over
+    sentence-aligned units: splitting them again would cut a sentence mid-way.
+    """
+    use_chunking = split_chunks and (
+        req.chunking if req.chunking is not None else settings.chunking.enabled
+    )
     max_chars = req.max_chars or settings.chunking.max_chars
     chunks = chunk_text(text, max_chars) if use_chunking and text.strip() else ([text] if text.strip() else [])
 
@@ -1240,12 +1247,13 @@ async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text
 
 
 _CHAT_SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
-_CHAT_CLAUSE_RE = re.compile(r"[,;:—–]\s+")
 
-# Sentences shorter than this are merged with the following ones before being
-# released; the first chunk of a long opening sentence is released at the first
-# clause/word boundary past this length, so TTS starts before the sentence ends.
-_CHAT_MIN_CHARS = 40
+# Chat TTS releases whole sentences only. A fragment cut mid-sentence (at a
+# clause, let alone a single word) is synthesized as a standalone utterance with
+# its own intonation, which is heard as chopped, word-by-word speech.
+_CHAT_MIN_CHARS = 40        # first chunk: one complete sentence past this length
+_CHAT_COALESCE_CHARS = 200  # later chunks: group sentences up to this length
+_CHAT_MAX_CHARS = 240       # last resort for a sentence that never ends
 
 
 def _last_boundary(text: str, within: int) -> int:
@@ -1258,37 +1266,21 @@ def _last_boundary(text: str, within: int) -> int:
     return cut + 1 if cut > 0 else 0
 
 
-def _first_clause(text: str, at_least: int, within: int) -> int:
-    """Index just past the first clause boundary at position >= ``at_least``."""
-    for match in _CHAT_CLAUSE_RE.finditer(text[:within]):
-        if match.start() >= at_least:
-            return match.end()
-    return 0
+def _pop_chat_chunks(
+    text: str, max_chars: int = _CHAT_MAX_CHARS, min_chars: int = _CHAT_MIN_CHARS
+) -> Tuple[List[str], str]:
+    """Split streaming LLM text into sentence-aligned TTS chunks.
 
+    Only complete sentences are released; sentences shorter than ``min_chars`` are
+    merged with the following ones (a tiny first chunk such as "Bonjour !" would
+    otherwise drain the playback buffer). The caller raises ``min_chars`` after the
+    first chunk so the rest of the reply is grouped into fewer, longer utterances:
+    the first sentence starts the audio early, the following ones keep a natural
+    prosody.
 
-def _first_break(text: str, at_least: int, within: int) -> int:
-    """First clause boundary past ``at_least``; falls back to the first space.
-
-    The space fallback lets TTS start on a run-on opening sentence (no comma),
-    instead of waiting for the sentence end.
-    """
-    cut = _first_clause(text, at_least, within)
-    if cut > 0:
-        return cut
-    idx = text.find(" ", at_least)
-    return idx + 1 if 0 <= idx < within else 0
-
-
-def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN_CHARS) -> Tuple[List[str], str]:
-    """Split streaming LLM text into TTS chunks.
-
-    Sentence ends first, then clause/space boundaries once a chunk grows too long.
-    Complete sentences shorter than ``min_chars`` are merged with the following
-    ones before being released: a tiny first chunk such as "Bonjour !" would
-    otherwise drain the playback buffer before the next chunk is ready, causing an
-    audible pause. A chunk is still released early at the first clause boundary
-    past ``min_chars`` when the opening sentence is long, so audio starts before
-    the whole sentence has been generated.
+    A sentence that never ends (no punctuation) is cut at the last clause/space
+    boundary past ``max_chars`` — a last resort, so a long paragraph cannot stall
+    the audio forever.
     """
     chunks: List[str] = []
     start = 0
@@ -1304,11 +1296,6 @@ def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN
             break
         chunks.append(text[:cut].strip())
         text = text[cut:].lstrip()
-    if not chunks and len(text) >= min_chars:
-        cut = _first_break(text, min_chars, max_chars)
-        if cut > 0:
-            chunks.append(text[:cut].strip())
-            text = text[cut:].lstrip()
     return [c for c in chunks if c], text
 
 
@@ -1322,6 +1309,7 @@ async def _chat_turn(
     reply = ""
     buffer = ""
     index = 0
+    queued = False
 
     async def send_json(obj: Dict[str, Any]) -> None:
         async with send_lock:
@@ -1338,7 +1326,11 @@ async def _chat_turn(
             if not sentence:
                 continue
             try:
-                async for _, pcm, sr in _stream_pcm(settings, scheduler, req, sentence):
+                # The chat chunker already released whole sentences: synthesize each
+                # one as it is (no second sentence-splitting pass).
+                async for _, pcm, sr in _stream_pcm(
+                    settings, scheduler, req, sentence, split_chunks=False
+                ):
                     # Keep start/pcm/done atomic so concurrent deltas cannot interleave.
                     async with send_lock:
                         await websocket.send_json({
@@ -1360,8 +1352,13 @@ async def _chat_turn(
             await send_json({"type": "llm.delta", "text": token})
             if speak:
                 buffer += token
-                chunks, buffer = _pop_chat_chunks(buffer)
+                # The first complete sentence starts the audio as early as before;
+                # the following ones are then grouped (fewer synthesis calls, no
+                # per-fragment intonation reset).
+                minimum = _CHAT_COALESCE_CHARS if queued else _CHAT_MIN_CHARS
+                chunks, buffer = _pop_chat_chunks(buffer, min_chars=minimum)
                 for sentence in chunks:
+                    queued = True
                     await queue.put(sentence)
         if speak and worker is not None:
             if buffer.strip():
