@@ -1,10 +1,12 @@
 # AiUdio Server
 
-Self-hosted **text-to-speech (TTS)** server built on [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
-(CustomVoice / VoiceDesign / cloning), complemented by a **STT** stage (NeMo-Speech.cpp:
-Parakeet TDT v3 + streaming Nemotron 3.5 + diarization) and a **conversation** mode
-pluggable into an external OpenAI-compatible LLM. Everything is served by a single
-`docker compose` stack, reachable on the LAN or on the Docker network.
+Self-hosted **text-to-speech (TTS)** server with **two selectable engines**:
+[Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) (CustomVoice / VoiceDesign / cloning) and
+[Chatterbox](https://github.com/resemble-ai/chatterbox) (zero-shot multilingual cloning) —
+use one or the other, per family and as the global engine for cloned voices. Complemented
+by a **STT** stage (NeMo-Speech.cpp: Parakeet TDT v3 + streaming Nemotron 3.5 + diarization)
+and a **conversation** mode pluggable into an external OpenAI-compatible LLM. Everything is
+served by a single `docker compose` stack, reachable on the LAN or on the Docker network.
 
 > Status: functional skeleton (API, UI, engines, compose, tests). Hardware validation
 > (GPU, model weights) must be done on the target machine.
@@ -35,17 +37,20 @@ pluggable into an external OpenAI-compatible LLM. Everything is served by a sing
 
 ## Features
 
-- **Qwen3-TTS engine**: 3 model families (CustomVoice, VoiceDesign, Base for cloning),
-  hot-swap or multi-residency, micro-batching for throughput, sentence chunking for long
-  text, progressive PCM streaming.
+- **Two TTS engines**: [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) (CustomVoice,
+  VoiceDesign, Base for cloning) and [Chatterbox](https://github.com/resemble-ai/chatterbox)
+  (zero-shot multilingual cloning + Turbo/Nano English). Hot-swap or multi-residency,
+  micro-batching (Qwen), sentence chunking for long text, progressive PCM streaming.
+  Choose the engine per family, and globally for cloned voices.
 - **API**: first-party REST (`/api/tts`), **OpenAI-compatible** (`/v1/audio/speech`,
   `/v1/audio/voices`), **WebSocket** (`/ws/tts`, vLLM-Omni-style protocol).
 - **STT**: file transcription (OpenAI-compatible `/v1/audio/transcriptions`), realtime
   streaming (WebSocket), diarization.
-- **Web UI**: Synthesis / Transcription / Conversation / Settings tabs, same-origin
-  (no CORS), browser microphone, gapless PCM playback.
+- **Web UI**: Conversation / Synthesis / Avatars / Transcription / Settings tabs,
+  same-origin (no CORS), browser microphone, gapless PCM playback.
 - **Conversation**: plug in an external LLM (llama.cpp, Ollama, vLLM, OpenAI...) and run
-  the STT → LLM → TTS cascade in streaming mode, without serving the LLM.
+  the STT → LLM → TTS cascade in streaming mode, without serving the LLM. Push-to-talk or
+  hands-free **VAD** (auto-send on pause), barge-in interruption, and per-reply replay.
 - **Multilingual UI**: English and French out of the box, easily extensible.
 - **Security**: HTTP Basic for the UI, API keys (Bearer / `X-API-Key`) for machines.
 - **Single CUDA stack**: TTS gateway on the official PyTorch image + STT on the official NVIDIA NGC NeMo-Speech.cpp image (base images overridable via `.env`).
@@ -55,7 +60,7 @@ pluggable into an external OpenAI-compatible LLM. Everything is served by a sing
 ```
                  ┌──────────────────────────────────────────────┐
    Browser  ────▶│ aiudio  (gateway, :8004)                     │
-   / API client  │  • Qwen3-TTS engine (hot-swap + batching)    │
+   / API client  │  • TTS engines: Qwen3-TTS + Chatterbox       │
                  │  • static UI, /api/*, /v1/*, /ws/*           │
                  │  • STT proxy + external LLM proxy            │
                  └───────┬──────────────────────────┬───────────┘
@@ -143,14 +148,34 @@ matters. Base images and torch pins can be overridden via `.env` (`TTS_BASE_IMAG
 
 Override the repositories via `config.yaml` (`models.registry`) or the environment
 variables `TTS_CUSTOM_VOICE`, `TTS_VOICE_DESIGN`, `TTS_BASE`. 0.6B variants are supported.
+Select the clone engine with `models.clone_backend` (`TTS_CLONE_BACKEND`) and point the
+isolated Chatterbox venv with `models.chatterbox.python` (`TTS_CHATTERBOX_PYTHON`).
 
 Pick a per-family version in the Synthesis tab (**Model → Version**), or set the global Qwen
 size with `models.default_size` (`0.6B` or `1.7B`). Families without a matching variant keep
 their repo.
 
+### Qwen3-TTS or Chatterbox?
+
+Each family is bound to a backend: the `chatterbox*` families are served by Chatterbox,
+everything else by Qwen3-TTS. You can therefore run Chatterbox **instead of** Qwen3-TTS:
+
+- **Plain TTS** — request a Chatterbox family. It has a built-in voice, so no reference clip
+  is needed:
+
+  ```bash
+  curl -s localhost:8004/api/tts -H 'Content-Type: application/json' \
+    -d '{"text":"Hello world","family":"chatterbox","language":"English"}' -o out.wav
+  ```
+
+- **Cloned voices / avatars** — set the global clone engine to `chatterbox`
+  (`models.clone_backend`, or the **Avatars** tab) so avatars are synthesized by Chatterbox.
+
+Voice Design (description-based voices) and the Qwen preset speakers always use Qwen3-TTS.
+
 ### Chatterbox backend
 
-Chatterbox (Resemble AI) is offered **in addition** to Qwen3-TTS. It cannot share the same
+Chatterbox (Resemble AI) is offered as an **alternative** to Qwen3-TTS. It cannot share the same
 Python environment: `chatterbox-tts` pins different `torch`/`transformers` versions than
 `qwen-tts` (`transformers==5.2.0` vs `==4.57.3`). AiUdio therefore installs Chatterbox in an
 **isolated virtualenv** (`/opt/cb/venv`) and runs it as a child process
