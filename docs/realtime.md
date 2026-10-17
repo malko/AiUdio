@@ -92,7 +92,10 @@ depth, and per-stage timings (`/api/metrics`).
   ```
 
   `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
-  service is unreachable and the call fell back).
+  service is unreachable and the call fell back). When vLLM does serve CustomVoice, the
+  gateway **unloads its own copy** of that family (logged) so the VRAM is not paid twice —
+  note that the vLLM-Omni service itself always loads **two stages** (the talker and the
+  `Code2Wav` decoder) on the GPU, which its startup log mentions explicitly.
 - **Observability**: `/api/metrics` (TTFA, RTF, counters, queue depth, model
   loads/evictions/hot-swap thrash) and `/ready`. The app logs its own timings at INFO
   (`server.log_level`, now actually applied — editable from **Settings → Logs** or

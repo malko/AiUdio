@@ -324,7 +324,18 @@ async def _stream_pcm(
     if chunks and _vllm_eligible(settings, req):
         streamed = False
         async for out in _stream_vllm(settings, req, text):
-            streamed = True
+            if not streamed:
+                streamed = True
+                # vLLM-Omni serves CustomVoice from now on: holding our own copy in
+                # VRAM too would double the cost for the same family (the vLLM
+                # service loads its own two stages). Drop it once, and only if the
+                # first bytes actually arrived (a failed stream falls back locally).
+                engine = getattr(scheduler, "engine", None)
+                if engine is not None and "custom_voice" in engine.loaded_families():
+                    log.info(
+                        "vLLM-Omni is serving CustomVoice: unloading the local copy to free VRAM"
+                    )
+                    await asyncio.to_thread(engine.unload, "custom_voice")
             yield out
         if streamed:
             return
