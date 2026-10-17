@@ -50,9 +50,18 @@ Then `LLM_BASE_URL=http://host.docker.internal:8080/v1`.
 
 - **Push-to-talk**: the 🎤 button in the Conversation tab (sends the dictation to the field
   and then to the LLM).
-- **Barge-in**: at this stage, ongoing playback is not automatically interrupted by user
-  speech; a **Stop** button is provided. Anti-echo barge-in is an improvement item (see
-  "Future work").
+- **VAD (voice detection)**: the *VAD* button (shown only when a streaming STT model is
+  active + the service is reachable) streams the mic continuously and auto-sends the utterance
+  after a pause. The mic is muted while the assistant speaks to avoid feeding the TTS back
+  into the STT.
+- **Barge-in**: in VAD mode, speaking over the assistant (louder threshold, sustained ~300 ms)
+  interrupts it: playback stops and the turn is cancelled, then the new utterance is captured.
+- **Replay**: every assistant bubble has a 🔊 button. The last 8 replies' PCM is kept in the
+  browser; older ones are re-synthesized on demand via `POST /api/tts` with the current voice.
+- **Time to first audio**: TTS does **not** wait for the full LLM reply. The server synthesizes
+  sentence by sentence as tokens arrive; the first chunk is released at the first clause
+  boundary past `_CHAT_MIN_CHARS`, or at the first **word** boundary on a run-on opening
+  sentence (`_pop_chat_chunks`).
 
 ## Endpoints
 
@@ -61,6 +70,6 @@ Then `LLM_BASE_URL=http://host.docker.internal:8080/v1`.
 
 ## Future work
 
-- True barge-in (cancel synthesis/playback as soon as voice is detected, AEC).
+- Improved barge-in (echo cancellation so the assistant can be interrupted without headphones).
 - Named multiple sessions and persistent context.
 - Tools / function calling (NeMo-Speech STT and vLLM-Omni support it at the transport level).

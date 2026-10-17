@@ -954,19 +954,38 @@ def _first_clause(text: str, at_least: int, within: int) -> int:
     return 0
 
 
+def _first_break(text: str, at_least: int, within: int) -> int:
+    """First clause boundary past ``at_least``; falls back to the first space.
+
+    The space fallback lets TTS start on a run-on opening sentence (no comma),
+    instead of waiting for the sentence end.
+    """
+    cut = _first_clause(text, at_least, within)
+    if cut > 0:
+        return cut
+    idx = text.find(" ", at_least)
+    return idx + 1 if 0 <= idx < within else 0
+
+
 def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN_CHARS) -> Tuple[List[str], str]:
     """Split streaming LLM text into TTS chunks.
 
     Sentence ends first, then clause/space boundaries once a chunk grows too long.
-    A short first chunk is released at the first clause boundary past ``min_chars``
-    so the first audio packet arrives early (perceived real-time) instead of after
-    a whole long sentence has been generated.
+    Complete sentences shorter than ``min_chars`` are merged with the following
+    ones before being released: a tiny first chunk such as "Bonjour !" would
+    otherwise drain the playback buffer before the next chunk is ready, causing an
+    audible pause. A chunk is still released early at the first clause boundary
+    past ``min_chars`` when the opening sentence is long, so audio starts before
+    the whole sentence has been generated.
     """
     chunks: List[str] = []
-    parts = _CHAT_SENTENCE_RE.split(text)
-    if len(parts) > 1:
-        chunks.extend(s.strip() for s in parts[:-1])
-        text = parts[-1]
+    start = 0
+    for match in _CHAT_SENTENCE_RE.finditer(text):
+        end = match.start()  # end of the sentence (before the separating whitespace)
+        if len(text[start:end].strip()) >= min_chars:
+            chunks.append(text[start:end].strip())
+            start = match.end()
+    text = text[start:]
     while len(text) > max_chars:
         cut = _last_boundary(text, max_chars)
         if cut <= 0:
@@ -974,7 +993,7 @@ def _pop_chat_chunks(text: str, max_chars: int = 160, min_chars: int = _CHAT_MIN
         chunks.append(text[:cut].strip())
         text = text[cut:].lstrip()
     if not chunks and len(text) >= min_chars:
-        cut = _first_clause(text, min_chars, max_chars)
+        cut = _first_break(text, min_chars, max_chars)
         if cut > 0:
             chunks.append(text[:cut].strip())
             text = text[cut:].lstrip()
