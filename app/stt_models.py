@@ -112,6 +112,7 @@ class ModelIndex:
                 continue
             path = model.local_path(artifact, models_dir)
             cached = path.is_file() and (not artifact.size or path.stat().st_size == artifact.size)
+            streaming = "streaming" in model.repo.lower() or "streaming" in artifact.filename.lower()
             out.append(
                 {
                     "repo": model.repo,
@@ -120,6 +121,8 @@ class ModelIndex:
                     "filename": artifact.filename,
                     "cached": cached,
                     "active": bool(active_filename) and artifact.filename == active_filename,
+                    # Whether the model supports the realtime WebSocket (VAD-friendly).
+                    "streaming": streaming,
                 }
             )
         return out

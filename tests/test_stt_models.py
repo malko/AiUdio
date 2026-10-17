@@ -51,6 +51,7 @@ def test_local_path_and_status(tmp_path):
     status = index.with_status(str(models_dir))
     assert status[0]["cached"] is False
     assert status[0]["active"] is False
+    assert status[0]["streaming"] is True  # repo name contains "streaming"
     path.parent.mkdir(parents=True)
     path.write_bytes(b"\0" * 100)
     assert index.with_status(str(models_dir))[0]["cached"] is True
