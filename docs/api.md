@@ -13,6 +13,24 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
 | PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models` |
 
+## Access (admin)
+
+Authentication is off by default. When `auth.enabled` is true, machine clients use an
+**API key** (`Authorization: Bearer <key>`, `X-API-Key: <key>`, or `?api_key=<key>`) and the
+admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at creation.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/session` | Basic | Mint a short-lived admin key (`{key, id, expires_at, admin}`) |
+| POST | `/api/session/logout` | session key | Revoke the presented session key |
+| GET | `/api/api-keys` | admin | List client keys (never the secret: `id, name, prefix, created_at, expires_at, expired, last_used_at`) |
+| POST | `/api/api-keys` | admin | `{"name", "expires_in_days"?}` → `{key, …}` (secret shown once) |
+| DELETE | `/api/api-keys/{id}` | admin | Delete (revoke) a client key |
+
+- "admin" = HTTP Basic admin credentials or an admin-scoped session key; a plain client key
+  gets `403`.
+- When `auth.enabled` is false, `GET /api/api-keys` returns `{"enabled": false, "keys": []}`.
+
 ## Models & voices
 
 | Method | Path | Description |

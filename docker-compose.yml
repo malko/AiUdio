@@ -51,7 +51,6 @@ services:
       - AUTH_ENABLED=${AUTH_ENABLED:-}
       - AUTH_USERNAME=${AUTH_USERNAME:-}
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
-      - AUTH_API_KEYS=${AUTH_API_KEYS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     <<: *nvidia-gpu

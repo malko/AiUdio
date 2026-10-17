@@ -334,16 +334,19 @@ By default authentication is **disabled** (trusted LAN use). To enable it:
 AUTH_ENABLED=true
 AUTH_USERNAME=admin
 AUTH_PASSWORD='strong-password'
-AUTH_API_KEYS='machine-key-1,machine-key-2'
 ```
 
-- UI: **HTTP Basic** (the browser prompts for credentials).
-- Machines: `Authorization: Bearer <key>` or the `X-API-Key: <key>` header.
+- UI / admin: **HTTP Basic** (`username` / `password`).
+- Machines: **API keys** created from the admin (**Settings → Access & API keys**), stored
+  **hashed**, shown once, revocable, with an optional expiration. Send them as
+  `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+- The admin UI mints a short-lived **session key** on load (`POST /api/session`), so it
+  needs no manual key — and it works for WebSocket too.
 - `/health` stays public.
 
-⚠️ **A browser cannot send an `Authorization` header over WebSocket**: use an **API key**
-(`?api_key=...`) for protected WS usage. For Internet exposure, put a TLS reverse proxy in
-front (see [`docs/security.md`](docs/security.md)).
+⚠️ **A browser cannot send an `Authorization` header over WebSocket**: the UI uses the
+session key as `?api_key=...`; non-browser clients do the same. For Internet exposure, put a
+TLS reverse proxy in front (see [`docs/security.md`](docs/security.md)).
 
 Reference audio (`ref_audio`) is **restricted by default** — only base64 data-URLs are
 accepted; remote URLs and local paths are rejected to prevent SSRF and local file disclosure
