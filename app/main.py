@@ -1456,10 +1456,15 @@ async def _chat_turn(
             await send_json({"type": "llm.delta", "text": token})
             if speak:
                 buffer += token
-                # The first chunk starts as soon as a sentence (or a long opening
-                # clause) is complete; the following ones are then grouped (fewer
-                # synthesis calls, no per-fragment intonation reset).
-                minimum = _CHAT_COALESCE_CHARS if queued else _CHAT_MIN_CHARS
+                # Low latency first: the first chunk starts at the first sentence (or
+                # a long opening clause). Afterwards, release each complete sentence
+                # as it arrives *while the engine is idle*: the client plays whatever
+                # it has already received, so releasing promptly is what keeps
+                # playback gap-free. Only when the engine already has work queued do
+                # we group sentences (`_CHAT_COALESCE_CHARS`) to limit the number of
+                # synthesis calls (a fast LLM can otherwise release many small ones).
+                busy = queue.qsize() > 0
+                minimum = _CHAT_COALESCE_CHARS if (queued and busy) else _CHAT_MIN_CHARS
                 chunks, buffer = _pop_chat_chunks(
                     buffer, min_chars=minimum, allow_first_clause=not queued
                 )
