@@ -93,3 +93,12 @@ def test_note_cuda_oom_counts_and_logs(caplog):
     # A different error is left alone.
     note_cuda_oom(RuntimeError("boom"), "base", [{"text": "x"}])
     assert metrics.snapshot()["counters"]["tts_cuda_oom"] == before + 1
+
+
+def test_speech_url_accepts_a_custom_path():
+    from app.vllm_backend import speech_url
+
+    assert speech_url("http://tts-vllm:8091") == "http://tts-vllm:8091/v1/audio/speech"
+    assert speech_url("http://tts-vllm:8091/", "/v1/audio/speech/stream") == \
+        "http://tts-vllm:8091/v1/audio/speech/stream"
+    assert speech_url("http://tts-vllm:8091", "") == "http://tts-vllm:8091/v1/audio/speech"

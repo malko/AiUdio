@@ -72,6 +72,16 @@ depth, and per-stage timings (`/api/metrics`).
   a large `/dev/shm`; Docker's default is 64 MB) and remember that the service reserves its
   own VRAM (see [backends](backends.md)), so keep it stopped when unused.
 
+  vLLM-Omni exposes both the OpenAI-compatible `/v1/audio/speech` and a dedicated
+  `/v1/audio/speech/stream`. If the first one buffers the whole audio (no gain in
+  time-to-first-audio), switch the gateway over **without a rebuild**:
+
+  ```bash
+  curl -s -X PUT localhost:8004/api/settings -H 'Content-Type: application/json' \
+       -d '{"vllm":{"enabled":true,"path":"/v1/audio/speech/stream"}}'
+  curl -s localhost:8004/api/config | jq .vllm        # enabled / base_url / path
+  ```
+
   Without Compose, the same service can be started standalone on the stack network:
 
   ```bash

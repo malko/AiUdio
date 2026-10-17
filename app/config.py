@@ -205,6 +205,10 @@ class LLMConfig(BaseModel):
 class VLLMConfig(BaseModel):
     enabled: bool = False
     base_url: str = "http://tts-vllm:8091"
+    # OpenAI-compatible speech route. vLLM-Omni also exposes a dedicated
+    # streaming endpoint (`/v1/audio/speech/stream`) — use it if the standard one
+    # buffers the whole audio before answering.
+    path: str = "/v1/audio/speech"
 
 
 class UIConfig(BaseModel):

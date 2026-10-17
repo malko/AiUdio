@@ -32,15 +32,22 @@ def speech_payload(req, text: str) -> Dict[str, Any]:
     return payload
 
 
+def speech_url(base_url: str, path: str = "/v1/audio/speech") -> str:
+    """Absolute URL of the speech route (``path`` is configurable: vLLM-Omni also
+    exposes ``/v1/audio/speech/stream``)."""
+    return f"{base_url.rstrip('/')}/{(path or '/v1/audio/speech').lstrip('/')}"
+
+
 async def stream_pcm(
     base_url: str,
     payload: Dict[str, Any],
     *,
+    path: str = "/v1/audio/speech",
     timeout: float = 300.0,
     client: Optional[httpx.AsyncClient] = None,
 ) -> AsyncIterator[bytes]:
-    """Yield raw PCM16 chunks from ``POST {base_url}/v1/audio/speech``."""
-    url = f"{base_url.rstrip('/')}/v1/audio/speech"
+    """Yield raw PCM16 chunks from ``POST {base_url}{path}``."""
+    url = speech_url(base_url, path)
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0))
     try:

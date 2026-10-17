@@ -186,6 +186,7 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
         "vllm": {
             "enabled": settings.vllm.enabled,
             "base_url": settings.vllm.base_url,
+            "path": settings.vllm.path,
         },
         "server": {
             "log_level": settings.server.log_level,
@@ -286,7 +287,7 @@ async def _stream_vllm(
     """Yield native PCM from vLLM-Omni; yields nothing (to fall back) on failure."""
     payload = vllm_backend.speech_payload(req, text)
     started = time.perf_counter()
-    stream = vllm_backend.stream_pcm(settings.vllm.base_url, payload)
+    stream = vllm_backend.stream_pcm(settings.vllm.base_url, payload, path=settings.vllm.path)
     try:
         first = await stream.__anext__()
     except StopAsyncIteration:
