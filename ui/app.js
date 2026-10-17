@@ -1047,7 +1047,10 @@ function sttStateLabel(state) { return t(`stt.state.${state}`); }
 class SttPicker {
   constructor(root, opts = {}) {
     this.root = root;
-    this.opts = Object.assign({ load: true, stop: true, refresh: true, desc: true, status: true, initial: null }, opts);
+    this.opts = Object.assign({
+      load: true, stop: true, refresh: true, desc: true, status: true, initial: null,
+      empty: false, label: null,
+    }, opts);
     this.value = "";
     this.touched = false;
     this.build();
@@ -1093,8 +1096,15 @@ class SttPicker {
 
   populate() {
     const prev = this.touched ? this.value : (this.resolveInitial() || this.value);
-    this.labelSpan.textContent = t("stt.model");
+    this.labelSpan.textContent = t(this.opts.label || "stt.model");
     this.select.innerHTML = "";
+    if (this.opts.empty) {
+      // "Do not preload anything": an explicit choice, not a missing value.
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = t("stt.preloadNone");
+      this.select.appendChild(none);
+    }
     if (!sttModels.length) {
       const o = document.createElement("option"); o.value = ""; o.textContent = t("stt.indexUnavailable"); this.select.appendChild(o);
     }
@@ -1106,6 +1116,8 @@ class SttPicker {
     });
     if (prev && sttModels.some((m) => m.repo === prev)) {
       this.select.value = prev;
+    } else if (prev === "" && this.opts.empty) {
+      this.select.value = "";
     } else if (sttModels.length) {
       // sttActive is the active model *filename*; options are keyed by repo.
       const active = sttModels.find((m) => m.filename === sttActive || m.repo === sttActive);
@@ -1120,7 +1132,10 @@ class SttPicker {
   update() {
     const m = this.current();
     const downloading = !!sttDownload && sttDownload.repo === this.select.value;
-    if (this.desc) this.desc.textContent = m ? sttModelDesc(m) : "";
+    if (this.desc) {
+      if (!m && this.opts.empty) this.desc.textContent = t("stt.preloadNoneHint");
+      else this.desc.textContent = m ? sttModelDesc(m) : "";
+    }
     if (this.loadBtn) {
       this.loadBtn.textContent = m && m.cached ? t("stt.load") : t("stt.download");
       this.loadBtn.disabled = !m || !!sttDownload || (m.active && sttService.ready);
@@ -1164,8 +1179,12 @@ function mountSttPickers() {
   const setRoot = $("#set-startup-stt-picker");
   if (setRoot && !setRoot.dataset.mounted) {
     setRoot.dataset.mounted = "1";
+    // Same picker as the Transcription tab (model list, state, description), plus
+    // an explicit "do not preload" entry and an explicit label: this card talks
+    // about STT, not about the TTS models.
     settingsSttPicker = new SttPicker(setRoot, {
-      load: false, stop: false, refresh: false, desc: false, status: false,
+      load: false, stop: false, refresh: false, desc: true, status: false,
+      empty: true, label: "settings.startupStt",
       initial: () => (CONFIG ? CONFIG.startup.stt_model : ""),
     });
   }
