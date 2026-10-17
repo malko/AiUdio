@@ -162,7 +162,7 @@ const MESSAGES = {
     "chat.backendQwen": "Qwen3-TTS (Base)",
     "chat.backendChatterbox": "Chatterbox",
     "chat.watermark": "Watermark output (PerTh)",
-    "chat.cloneEngineHint": "Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.",
+    "chat.cloneEngineHint": "Cloned voices are synthesized with the chosen engine, and for Qwen3-TTS the size of the Base model it loads (0.6B or 1.7B). Voice Design (fingerprint) always uses Qwen3-TTS.",
     "stt.load": "Load",
 
     "settings.llmTitle": "External LLM",
@@ -215,9 +215,6 @@ const MESSAGES = {
     "settings.startupVoice": "Voice to load",
     "settings.modelsTitle": "TTS models",
     "settings.modelsHint": "Model version and generation settings moved to the Synthesis tab.",
-    "settings.modelSize": "Model size (all families)",
-    "settings.modelSizeHint": "0.6B is faster and lighter; 1.7B is more accurate. Voice Design stays 1.7B.",
-    "settings.modelSizeSaved": "Saved. Models will reload on next use.",
 
     "status.online": "online",
     "status.offline": "offline",
@@ -391,7 +388,7 @@ const MESSAGES = {
     "chat.backendQwen": "Qwen3-TTS (Base)",
     "chat.backendChatterbox": "Chatterbox",
     "chat.watermark": "Watermarker la sortie (PerTh)",
-    "chat.cloneEngineHint": "Les voix clonées sont synthétisées avec le moteur choisi. Le Voice Design (empreinte) utilise toujours Qwen3-TTS.",
+    "chat.cloneEngineHint": "Les voix clonées sont synthétisées avec le moteur choisi et, pour Qwen3-TTS, la taille du modèle Base chargé (0.6B ou 1.7B). Le Voice Design (empreinte) utilise toujours Qwen3-TTS.",
     "stt.load": "Charger",
 
     "settings.llmTitle": "LLM externe",
@@ -444,9 +441,6 @@ const MESSAGES = {
     "settings.startupVoice": "Voix à charger",
     "settings.modelsTitle": "Modèles TTS",
     "settings.modelsHint": "Version du modèle et réglages de génération déplacés dans l'onglet Synthèse.",
-    "settings.modelSize": "Taille des modèles (toutes familles)",
-    "settings.modelSizeHint": "0.6B est plus rapide et léger ; 1.7B est plus précis. Le Voice Design reste en 1.7B.",
-    "settings.modelSizeSaved": "Enregistré. Les modèles se rechargeront au prochain usage.",
 
     "status.online": "en ligne",
     "status.offline": "hors ligne",

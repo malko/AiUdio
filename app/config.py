@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -271,17 +271,22 @@ class Settings(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
 
 
-def _apply_default_size(settings: Settings) -> Settings:
-    """Point every family at the variant matching ``default_size`` (when it exists)."""
-    label = (settings.models.default_size or "").strip().lower()
-    if not label:
-        return settings
-    registry = dict(settings.models.registry)
-    for variant in settings.models.variants:
-        if variant.label.lower() == label:
-            registry[variant.family] = variant.repo
-    settings.models.registry = registry
-    return settings
+def _merge_sections(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge ``patch`` into ``base`` (nested dicts are merged, not replaced).
+
+    Values set to ``None`` are ignored, so a partial section such as
+    ``{"models": {"registry": {"base": repo}}}`` only touches that entry instead of
+    dropping the other families.
+    """
+    out = dict(base)
+    for key, value in patch.items():
+        if value is None:
+            continue
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge_sections(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 def _apply_env(settings: Settings) -> Settings:
@@ -366,7 +371,6 @@ class ConfigStore:
             settings = Settings.model_validate(raw)
         else:
             settings = Settings()
-        settings = _apply_default_size(settings)
         settings = _apply_env(settings)
         if settings.models.hf_home:
             os.environ.setdefault("HF_HOME", settings.models.hf_home)
@@ -388,19 +392,12 @@ class ConfigStore:
         )
 
     def update(self, **sections) -> Settings:
-        """Merge partial sections (nested dicts are merged, not replaced)."""
-        data = self.settings.model_dump()
-        for key, value in sections.items():
-            if value is None:
-                continue
-            if isinstance(value, dict) and isinstance(data.get(key), dict):
-                data[key].update({k: v for k, v in value.items() if v is not None})
-            else:
-                data[key] = value
+        """Merge partial sections recursively (nested dicts are merged, not replaced)."""
+        data = _merge_sections(self.settings.model_dump(), sections)
         from pydantic import ValidationError
 
         try:
-            self.save(_apply_default_size(Settings.model_validate(data)))
+            self.save(Settings.model_validate(data))
         except ValidationError as exc:
             raise ValueError(str(exc)) from exc
         return self.settings

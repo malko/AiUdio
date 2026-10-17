@@ -185,9 +185,10 @@ isolated Chatterbox venv with `models.chatterbox.python` (`TTS_CHATTERBOX_PYTHON
 Residency is `single` by default; set `TTS_RESIDENCY=multi` to keep every family in
 `models.resident` loaded.
 
-Pick a per-family version in the Synthesis tab (**Model → Version**), or set the global Qwen
-size with `models.default_size` (`0.6B` or `1.7B`). Families without a matching variant keep
-their repo.
+Pick a per-family version in the Synthesis tab (**Model → Version**), or the cloned-voice
+engine in **Settings → Clone engine** (Chatterbox, or Qwen3-TTS Base `0.6B`/`1.7B`).
+`models.registry` is authoritative — `models.default_size` is only a label — so each family
+keeps the size it was given.
 
 ### Qwen3-TTS or Chatterbox?
 

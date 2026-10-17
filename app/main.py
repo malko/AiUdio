@@ -541,7 +541,7 @@ def create_app(
 
     @app.post("/api/models/select", tags=["Models"])
     async def api_models_select(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Set the global model size (0.6B/1.7B) from a variant id."""
+        """Point a family at one of its variants (e.g. 0.6B / 1.7B)."""
         wanted = str(payload.get("variant") or payload.get("id") or payload.get("repo") or "").strip()
         variant = next(
             (v for v in app.state.settings.models.variants if wanted in (v.id, v.repo)),
@@ -551,8 +551,8 @@ def create_app(
             raise HTTPException(400, f"Unknown model variant: {wanted}")
         models_update: Dict[str, Any] = {"registry": {variant.family: variant.repo}}
         if variant.label:
-            # The size is a global setting: keep it in sync so the choice applies to
-            # every family and survives a restart.
+            # Recorded as a label only: `models.registry` is the source of truth (a
+            # global size would otherwise override every family).
             models_update["default_size"] = variant.label
         try:
             updated = store.update(models=models_update)

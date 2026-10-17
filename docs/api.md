@@ -40,7 +40,7 @@ admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at 
 |---|---|---|
 | GET | `/api/models` | Available families, loaded, active |
 | POST | `/api/models/load` | `{"family": "custom_voice"}` — load (hot-swap) |
-| POST | `/api/models/select` | `{"variant": "custom_voice:0.6B"}` — set the global model size (`models.default_size`) |
+| POST | `/api/models/select` | `{"variant": "custom_voice:0.6B"}` — point a family at one of its variants (`models.registry`) |
 | POST | `/api/models/unload` | `{"family": "..."}` or `{}` to unload everything |
 | GET | `/api/voices?family=custom_voice` | Speakers, languages, reference files |
 | POST | `/api/voices/load` | `{"avatar": "id"}` or `{"family": "custom_voice"}` — warm a conversation voice |

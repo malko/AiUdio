@@ -247,15 +247,66 @@ function applyGenerationFields(cfg) {
 
 function applyCloneEngineFields(cfg) {
   const m = (cfg && cfg.models) || {};
-  if ($("#set-clone-backend")) $("#set-clone-backend").value = m.clone_backend || "qwen3";
+  fillCloneEngineSelect($("#set-clone-backend"));
+  if ($("#set-clone-backend")) $("#set-clone-backend").value = cloneEngineValue(m);
   if ($("#set-cb-watermark")) $("#set-cb-watermark").checked = !!(m.chatterbox && m.chatterbox.watermark);
   toggleCloneEngineFields();
+}
+
+// The clone engine is (1) an engine and, for Qwen3, (2) the size of the Base model:
+// `models.clone_backend` picks the engine, `models.registry.base` the size.
+// Chatterbox first, then every "base" variant offered by the service.
+function cloneEngineChoices() {
+  const base = tt("chat.backendQwen", "Qwen3-TTS (Base)");
+  const choices = [{ value: "chatterbox", label: tt("chat.backendChatterbox", "Chatterbox") }];
+  const variants = ((CONFIG && CONFIG.models && CONFIG.models.variants) || [])
+    .filter((v) => v.family === "base");
+  if (variants.length) {
+    variants.forEach((v) => choices.push({
+      value: `qwen3:${v.label || v.id}`, label: `${base} ${v.label || v.id}`, repo: v.repo,
+    }));
+  } else {
+    choices.push({ value: "qwen3:0.6B", label: `${base} 0.6B`, repo: "Qwen/Qwen3-TTS-12Hz-0.6B-Base" });
+    choices.push({ value: "qwen3:1.7B", label: `${base} 1.7B`, repo: "Qwen/Qwen3-TTS-12Hz-1.7B-Base" });
+  }
+  return choices;
+}
+
+function fillCloneEngineSelect(sel) {
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = "";
+  cloneEngineChoices().forEach((c) => {
+    const o = document.createElement("option");
+    o.value = c.value;
+    o.textContent = c.label;
+    sel.appendChild(o);
+  });
+  if (current) sel.value = current;
+}
+
+function cloneEngineValue(models) {
+  const m = models || {};
+  if ((m.clone_backend || "qwen3") === "chatterbox") return "chatterbox";
+  const repo = (m.registry || {}).base || "";
+  const choices = cloneEngineChoices();
+  const match = repo ? choices.find((c) => c.repo === repo) : null;
+  return (match || choices[1] || { value: "qwen3" }).value;
+}
+
+// Partial settings patch for a clone-engine choice (the API merges nested dicts).
+function cloneEnginePayload(value) {
+  const choice = cloneEngineChoices().find((c) => c.value === value);
+  if (!choice || !choice.repo) return { models: { clone_backend: "chatterbox" } };
+  const label = String(value).split(":")[1] || "";
+  return { models: { clone_backend: "qwen3", registry: { base: choice.repo }, default_size: label } };
 }
 
 function toggleCloneEngineFields() {
   const cb = $("#set-clone-backend") && $("#set-clone-backend").value === "chatterbox";
   document.querySelectorAll(".cb-only").forEach((el) => { el.style.display = cb ? "" : "none"; });
 }
+
 
 // -------------------------------------------------------------- TTS model UI
 function tt(key, fallback) {
@@ -956,7 +1007,10 @@ function updateChatEngineControl() {
 function initCloneEngineSelects() {
   const backend = (CONFIG && CONFIG.models && CONFIG.models.clone_backend) || "qwen3";
   if ($("#chat-clone-engine")) $("#chat-clone-engine").value = backend;
-  if ($("#set-startup-engine")) $("#set-startup-engine").value = backend;
+  fillCloneEngineSelect($("#set-clone-backend"));
+  if ($("#set-clone-backend")) {
+    $("#set-clone-backend").value = cloneEngineValue((CONFIG && CONFIG.models) || {});
+  }
 }
 
 function voiceConfig() {
@@ -1825,32 +1879,17 @@ function buildStartupVoiceSelect() {
   add("base", ttsName("base"));
   avatars.forEach((a) => add(`avatar:${a.id}`, `${t("avatars.voicePrefix")}: ${a.name}`));
   sel.value = current || "";
-  toggleStartupEngine();
 }
-
-// The startup engine only matters for cloned voices; built-in families force
-// Qwen3-TTS.
-function toggleStartupEngine() {
-  const sel = $("#set-startup-voice");
-  const wrap = $("#set-startup-engine-wrap");
-  if (!sel || !wrap) return;
-  wrap.hidden = !(sel.value || "").startsWith("avatar:");
-}
-
-$("#set-startup-voice").addEventListener("change", toggleStartupEngine);
 
 $("#set-startup-save").addEventListener("click", async () => {
   const status = $("#set-startup-status");
   status.textContent = "…";
   const voice = $("#set-startup-voice").value;
+  // A cloned voice is preloaded with the default clone engine (Settings → Clone
+  // engine): there is a single setting, so nothing else to save here.
   const payload = {
     startup: { stt_model: settingsSttPicker ? settingsSttPicker.value : "", voice },
   };
-  if (voice.startsWith("avatar:") && $("#set-startup-engine")) {
-    // Same setting as the conversation default; leaving it untouched keeps the
-    // service default engine.
-    payload.models = { clone_backend: $("#set-startup-engine").value };
-  }
   try {
     const r = await apiFetch("/api/settings", {
       method: "PUT",
@@ -1951,13 +1990,11 @@ $("#set-clone-backend").addEventListener("change", toggleCloneEngineFields);
 $("#set-clone-save").addEventListener("click", async () => {
   const status = $("#set-clone-status");
   status.textContent = "…";
-  const models = {
-    clone_backend: $("#set-clone-backend").value,
-    chatterbox: { watermark: $("#set-cb-watermark").checked },
-  };
+  const payload = cloneEnginePayload($("#set-clone-backend").value);
+  payload.models.chatterbox = { watermark: $("#set-cb-watermark").checked };
   try {
     const r = await apiFetch("/api/settings", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ models }),
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
     const text = await r.text();
     if (!r.ok) {

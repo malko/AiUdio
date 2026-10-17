@@ -126,14 +126,25 @@ def test_update_invalid_section_raises(tmp_path):
     raise AssertionError("expected ValueError for invalid settings")
 
 
-def test_default_size_sets_registry(tmp_path):
+def test_per_family_size_survives_reload(tmp_path):
+    # The registry is authoritative: picking 1.7B for the clone family must not be
+    # overridden by the (informational) global `default_size`.
     store = ConfigStore(tmp_path / "config.yaml")
-    store.update(models={"default_size": "0.6B"})
-    assert store.settings.models.registry["custom_voice"].endswith("0.6B-CustomVoice")
-    assert store.settings.models.registry["base"].endswith("0.6B-Base")
-    # VoiceDesign has no 0.6B variant -> falls back to its current repo.
-    assert store.settings.models.registry["voice_design"].endswith("1.7B-VoiceDesign")
+    store.update(models={"registry": {"base": "Qwen/Qwen3-TTS-12Hz-1.7B-Base"}})
+    assert store.settings.models.registry["base"].endswith("1.7B-Base")
+    # Other families are untouched by the partial registry patch.
+    assert store.settings.models.registry["custom_voice"].endswith("CustomVoice")
 
     reloaded = ConfigStore(tmp_path / "config.yaml")
-    assert reloaded.settings.models.default_size == "0.6B"
-    assert reloaded.settings.models.registry["base"].endswith("0.6B-Base")
+    assert reloaded.settings.models.registry["base"].endswith("1.7B-Base")
+    assert reloaded.settings.models.registry["voice_design"].endswith("VoiceDesign")
+
+
+def test_update_merges_nested_sections(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.update(models={"chatterbox": {"python": "/opt/cb/venv/bin/python", "t3_model": "v3"}})
+    store.update(models={"chatterbox": {"watermark": True}})
+    cb = store.settings.models.chatterbox
+    assert cb.watermark is True
+    assert cb.python == "/opt/cb/venv/bin/python"  # not reset by the partial update
+    assert cb.t3_model == "v3"
