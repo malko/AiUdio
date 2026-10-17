@@ -285,6 +285,16 @@
         <button id="set-log-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="set-log-status" class="muted"></div>
       </div>
+      <div class="card">
+        <h2 data-i18n="settings.vllmTitle">vLLM-Omni (streaming)</h2>
+        <label class="inline"><input id="set-vllm-enabled" type="checkbox" /> <span data-i18n="settings.vllmEnabled">Serve built-in voices with vLLM-Omni</span></label>
+        <label><span data-i18n="settings.vllmUrl">Base URL</span> <input id="set-vllm-url" type="text" /></label>
+        <label><span data-i18n="settings.vllmPath">Route</span> <input id="set-vllm-path" type="text" /></label>
+        <div class="muted" data-i18n="settings.vllmHint">Only built-in (CustomVoice) voices are routed: cloned voices keep using the local engine, and when vLLM serves a family the gateway unloads its own copy of it.</div>
+        <button id="set-vllm-save" class="primary" data-i18n="settings.save">Save</button>
+        <button id="set-vllm-test" data-i18n="settings.test">Test connection</button>
+        <div id="set-vllm-status" class="muted"></div>
+      </div>
       <div class="card wide">
         <h2 data-i18n="settings.accessTitle">Access &amp; API keys</h2>
         <div class="row">

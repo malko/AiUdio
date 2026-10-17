@@ -285,7 +285,7 @@ async def _stream_vllm(
     settings: Settings, req: TTSRequest, text: str
 ) -> AsyncIterator[Tuple[str, bytes, int]]:
     """Yield native PCM from vLLM-Omni; yields nothing (to fall back) on failure."""
-    payload = vllm_backend.speech_payload(req, text)
+    payload = vllm_backend.speech_payload(req, text, sample_rate=settings.audio.sample_rate)
     started = time.perf_counter()
     stream = vllm_backend.stream_pcm(settings.vllm.base_url, payload, path=settings.vllm.path)
     try:
@@ -806,6 +806,31 @@ def create_app(
             # request loads the newly selected repos.
             await asyncio.to_thread(engine.unload)
         return _public_config(updated, engine)
+
+    @app.get("/api/vllm/health", tags=["Settings"])
+    async def api_vllm_health(request: Request) -> Dict[str, Any]:
+        """Probe the configured vLLM-Omni service (admin-only when auth is enabled)."""
+        if not is_admin(
+            app.state.settings,
+            request.headers.get("authorization"),
+            request.headers.get("x-api-key"),
+            request.query_params.get("api_key"),
+        ):
+            raise HTTPException(403, "Admin authentication required")
+        cfg = app.state.settings.vllm
+        out: Dict[str, Any] = {
+            "enabled": cfg.enabled, "base_url": cfg.base_url, "path": cfg.path, "ok": False,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{cfg.base_url.rstrip('/')}/v1/models")
+            out["status"] = resp.status_code
+            out["ok"] = resp.status_code < 400
+            if out["ok"]:
+                out["models"] = [m.get("id") for m in (resp.json().get("data") or [])]
+        except Exception as exc:  # unreachable / not vLLM
+            out["error"] = str(exc)
+        return out
 
     # --------------------------------------------------- admin: keys / session
     def _admin_ok(request: Request) -> None:

@@ -73,14 +73,21 @@ depth, and per-stage timings (`/api/metrics`).
   own VRAM (see [backends](backends.md)), so keep it stopped when unused.
 
   vLLM-Omni exposes both the OpenAI-compatible `/v1/audio/speech` and a dedicated
-  `/v1/audio/speech/stream`. If the first one buffers the whole audio (no gain in
-  time-to-first-audio), switch the gateway over **without a rebuild**:
+  `/v1/audio/speech/stream` (WebSocket). Our client asks for **raw PCM** with
+  `stream_format: "audio"`: with `stream: true` alone the service answers the OpenAI
+  `speech.audio.*` SSE events (base64 deltas), which cannot be forwarded as PCM to our
+  clients. **Settings → vLLM-Omni** has the switch, the base URL, the route and a *Test
+  connection* button (`GET /api/vllm/health`):
 
   ```bash
   curl -s -X PUT localhost:8004/api/settings -H 'Content-Type: application/json' \
-       -d '{"vllm":{"enabled":true,"path":"/v1/audio/speech/stream"}}'
-  curl -s localhost:8004/api/config | jq .vllm        # enabled / base_url / path
+       -d '{"vllm":{"enabled":true,"base_url":"http://tts-vllm:8091","path":"/v1/audio/speech"}}'
+  curl -s localhost:8004/api/vllm/health | jq        # ok / models / error
   ```
+
+  A `speech.audio.error` event or a `Stage-1 has no live replica` message means the
+  service is up but one of its two stages died: restart the container and check that both
+  stages report *EngineCore running*.
 
   Without Compose, the same service can be started standalone on the stack network:
 

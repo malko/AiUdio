@@ -102,3 +102,17 @@ def test_speech_url_accepts_a_custom_path():
     assert speech_url("http://tts-vllm:8091/", "/v1/audio/speech/stream") == \
         "http://tts-vllm:8091/v1/audio/speech/stream"
     assert speech_url("http://tts-vllm:8091", "") == "http://tts-vllm:8091/v1/audio/speech"
+
+
+def test_speech_payload_asks_for_raw_pcm():
+    from app.schemas import TTSRequest
+    from app.vllm_backend import speech_payload
+
+    req = TTSRequest(text="Bonjour", family="custom_voice", speaker="Vivian")
+    payload = speech_payload(req, "Bonjour", sample_rate=24000)
+    # Without stream_format='audio' the service answers SSE events, not PCM.
+    assert payload["stream_format"] == "audio"
+    assert payload["response_format"] == "pcm"
+    assert payload["stream"] is True
+    assert payload["sample_rate"] == 24000
+    assert payload["voice"] == "vivian"  # served speakers are lowercase

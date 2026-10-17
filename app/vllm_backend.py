@@ -19,16 +19,25 @@ import httpx
 log = logging.getLogger(__name__)
 
 
-def speech_payload(req, text: str) -> Dict[str, Any]:
-    """Map a ``TTSRequest`` to the vLLM-Omni OpenAI-style speech payload."""
+def speech_payload(req, text: str, sample_rate: Optional[int] = None) -> Dict[str, Any]:
+    """Map a ``TTSRequest`` to the vLLM-Omni OpenAI-style speech payload.
+
+    ``stream_format: "audio"`` is what asks for **raw PCM16 bytes** over HTTP.
+    With ``stream: true`` alone, vLLM-Omni answers the OpenAI ``speech.audio.*``
+    SSE events (base64 deltas), which cannot be forwarded to our clients as PCM.
+    """
     payload: Dict[str, Any] = {
         "input": text,
         "response_format": "pcm",
         "stream": True,
+        "stream_format": "audio",
     }
+    if sample_rate:
+        payload["sample_rate"] = int(sample_rate)
     voice = req.resolve_speaker()
     if voice:
-        payload["voice"] = voice
+        # The served CustomVoice speakers are lowercase ('vivian', 'serena'…).
+        payload["voice"] = voice.strip().lower()
     return payload
 
 

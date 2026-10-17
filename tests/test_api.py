@@ -404,3 +404,11 @@ def test_openai_voices_includes_avatars(client):
     assert r.status_code == 200, r.text
     body = client.get("/v1/audio/voices").json()
     assert any(a["name"] == "Narrator" for a in body["avatars"])
+
+
+def test_vllm_health_probe_is_safe_when_unreachable(client):
+    r = client.get("/api/vllm/health")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False          # nothing listening at tts-vllm:8091
+    assert body["base_url"].startswith("http")

@@ -226,8 +226,16 @@ function applySettingsFields(cfg) {
   $("#set-llm-model").value = cfg.llm.model || "";
   $("#set-llm-system").value = cfg.llm.system_prompt || "";
   if ($("#set-log-level")) $("#set-log-level").value = (cfg.server || {}).log_level || "info";
+  applyVllmFields(cfg);
   applyGenerationFields(cfg);
   applyCloneEngineFields(cfg);
+}
+
+function applyVllmFields(cfg) {
+  const v = (cfg && cfg.vllm) || {};
+  if ($("#set-vllm-enabled")) $("#set-vllm-enabled").checked = !!v.enabled;
+  if ($("#set-vllm-url")) $("#set-vllm-url").value = v.base_url || "";
+  if ($("#set-vllm-path")) $("#set-vllm-path").value = v.path || "/v1/audio/speech";
 }
 
 function applyGenerationFields(cfg) {
@@ -2057,6 +2065,46 @@ $("#set-log-save").addEventListener("click", async () => {
     const cfg = JSON.parse(text);
     CONFIG = Object.assign({}, CONFIG, { server: cfg.server });
     status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+});
+
+$("#set-vllm-save").addEventListener("click", async () => {
+  const status = $("#set-vllm-status");
+  status.textContent = "…";
+  const vllm = {
+    enabled: $("#set-vllm-enabled").checked,
+    base_url: $("#set-vllm-url").value.trim() || "http://tts-vllm:8091",
+    path: $("#set-vllm-path").value.trim() || "/v1/audio/speech",
+  };
+  try {
+    const r = await apiFetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vllm }),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    const cfg = JSON.parse(text);
+    CONFIG = Object.assign({}, CONFIG, { vllm: cfg.vllm });
+    applyVllmFields(cfg);
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+});
+
+$("#set-vllm-test").addEventListener("click", async () => {
+  const status = $("#set-vllm-status");
+  status.textContent = t("status.testing");
+  try {
+    const r = await getJSON("/api/vllm/health");
+    const models = (r.models || []).join(", ");
+    status.textContent = r.ok
+      ? `${t("status.online")} — ${models || r.base_url}`
+      : `${t("status.offline")} ${r.error || r.status || ""}`;
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }
