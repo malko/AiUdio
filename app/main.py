@@ -186,6 +186,9 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
             "enabled": settings.vllm.enabled,
             "base_url": settings.vllm.base_url,
         },
+        "server": {
+            "log_level": settings.server.log_level,
+        },
         "languages": [
             "Auto", "Chinese", "English", "Japanese", "Korean", "German",
             "French", "Russian", "Portuguese", "Spanish", "Italian",
@@ -764,8 +767,16 @@ def create_app(
 
     @app.put("/api/settings", tags=["Settings"])
     async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
-        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models", "vllm"}
+        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models",
+                   "vllm", "server"}
         sections = {k: v for k, v in payload.items() if k in allowed}
+        # `server` is huge (host, port, CORS...): only the log level is editable, and
+        # it is applied immediately (no restart).
+        if "server" in sections:
+            level = str((sections.get("server") or {}).get("log_level") or "").strip()
+            sections["server"] = {"log_level": level} if level else {}
+            if not sections["server"]:
+                del sections["server"]
         if not sections:
             raise HTTPException(400, "No editable section provided")
         try:
@@ -775,6 +786,8 @@ def create_app(
         app.state.settings = updated
         app.state.llm = LLMClient(updated.llm)
         engine.settings = updated
+        if "server" in sections:
+            _configure_logging(updated.server.log_level)
         if "models" in sections:
             # The registry/size may have changed: drop resident models so the next
             # request loads the newly selected repos.

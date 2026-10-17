@@ -95,7 +95,9 @@ depth, and per-stage timings (`/api/metrics`).
   service is unreachable and the call fell back).
 - **Observability**: `/api/metrics` (TTFA, RTF, counters, queue depth, model
   loads/evictions/hot-swap thrash) and `/ready`. The app logs its own timings at INFO
-  (`server.log_level`, now actually applied): one line per synthesis call
+  (`server.log_level`, now actually applied — editable from **Settings → Logs** or
+  `PUT /api/settings {"server":{"log_level":"warning"}}`, effective immediately): one line per
+  synthesis call
   (`TTS family=… chars=… gen=… total=… rtf=…`), one per model load/eviction, and — per chat
   turn — `chat tts: first audio Xs after the turn started (llm first token …s, first chunk
   queued …s, synth …s, N chars, Ys of audio, margin +Zs)` followed by one line per following

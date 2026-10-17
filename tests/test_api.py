@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 
 import numpy as np
 import soundfile as sf
@@ -94,6 +95,34 @@ def test_settings_update_default_size(client):
 def test_settings_update_vllm(client):
     # The experimental vLLM-Omni streaming backend is switchable from the API
     # (there is no UI field for it).
+    r = client.put(
+        "/api/settings",
+        json={"vllm": {"enabled": True, "base_url": "http://tts-vllm:8091"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["vllm"]["enabled"] is True
+    assert client.get("/api/config").json()["vllm"]["enabled"] is True
+
+
+def test_settings_update_log_level(client):
+    # Only `log_level` is editable in the `server` section, and it applies at once.
+    root = logging.getLogger()
+    previous = root.level
+    try:
+        r = client.put(
+            "/api/settings",
+            json={"server": {"log_level": "warning", "host": "1.2.3.4", "port": 9999}},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["server"]["log_level"] == "warning"
+        assert root.level == logging.WARNING
+        assert client.get("/api/config").json()["server"]["log_level"] == "warning"
+        # Other server fields are ignored (the API does not rebind the listener).
+        assert client.get("/api/config").json()["version"]  # still serving
+    finally:
+        root.setLevel(previous)
+    # A payload with no editable section is rejected.
+    assert client.put("/api/settings", json={"server": {}}).status_code == 400
     r = client.put(
         "/api/settings",
         json={"vllm": {"enabled": True, "base_url": "http://tts-vllm:8091"}},

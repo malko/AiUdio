@@ -212,6 +212,7 @@ function applySettingsFields(cfg) {
   $("#set-llm-url").value = cfg.llm.base_url || "";
   $("#set-llm-model").value = cfg.llm.model || "";
   $("#set-llm-system").value = cfg.llm.system_prompt || "";
+  if ($("#set-log-level")) $("#set-log-level").value = (cfg.server || {}).log_level || "info";
   applyGenerationFields(cfg);
   applyCloneEngineFields(cfg);
 }
@@ -1933,6 +1934,27 @@ $("#set-clone-save").addEventListener("click", async () => {
     CONFIG = Object.assign({}, CONFIG, { models: cfg.models });
     applyCloneEngineFields(cfg);
     initCloneEngineSelects();
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+});
+
+$("#set-log-save").addEventListener("click", async () => {
+  const status = $("#set-log-status");
+  status.textContent = "…";
+  try {
+    const r = await apiFetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ server: { log_level: $("#set-log-level").value } }),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    const cfg = JSON.parse(text);
+    CONFIG = Object.assign({}, CONFIG, { server: cfg.server });
     status.textContent = t("status.saved");
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
