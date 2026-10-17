@@ -126,9 +126,15 @@ async function init() {
   try {
     CONFIG = await getJSON("/api/config");
   } catch (e) {
-    $("#health").className = "dot err";
-    $("#active-model").textContent = t("status.configUnavailable");
-    return;
+    // A stale/expired stored key: try to (re)establish an admin session.
+    try {
+      await ensureSession();
+      CONFIG = await getJSON("/api/config");
+    } catch (e2) {
+      $("#health").className = "dot err";
+      $("#active-model").textContent = t("status.configUnavailable");
+      return;
+    }
   }
   $("#title").textContent = CONFIG.ui.title || t("app.title");
   TTS_SESSION.sample_rate = CONFIG.audio.sample_rate;
@@ -155,6 +161,12 @@ async function init() {
 
   applySettingsFields(CONFIG);
 
+  applyAccessState();
+  if (CONFIG.auth_required && !apiKey()) {
+    try { await ensureSession(); } catch (e) { /* not admin-authenticated yet */ }
+  }
+  loadApiKeys();
+
   mountSttPickers();
   await loadVoices();
   await loadSttModels();
@@ -172,7 +184,6 @@ function applySettingsFields(cfg) {
   $("#set-llm-url").value = cfg.llm.base_url || "";
   $("#set-llm-model").value = cfg.llm.model || "";
   $("#set-llm-system").value = cfg.llm.system_prompt || "";
-  $("#set-apikey").value = apiKey();
   applyGenerationFields(cfg);
   applyCloneEngineFields(cfg);
 }
@@ -1830,9 +1841,175 @@ $("#set-llm-ping").addEventListener("click", async () => {
   }
 });
 
-$("#set-apikey-save").addEventListener("click", () => {
-  localStorage.setItem("apiKey", $("#set-apikey").value);
-  $("#set-apikey-save").textContent = t("status.remembered");
+// ------------------------------------------------- admin session & API keys
+function sessionState(text, cls) {
+  const el = $("#set-session-state");
+  if (el) { el.textContent = text; el.className = cls || "muted grow"; }
+}
+
+function fmtDate(v) {
+  return v ? new Date(v).toLocaleString() : "—";
+}
+
+async function ensureSession() {
+  const r = await apiFetch("/api/session", { method: "POST" });
+  const text = await r.text();
+  if (!r.ok) {
+    let detail = text;
+    try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+    throw new Error(detail || `HTTP ${r.status}`);
+  }
+  const data = JSON.parse(text);
+  if (data.key) localStorage.setItem("apiKey", data.key);
+  return data;
+}
+
+async function logoutSession() {
+  try { await apiFetch("/api/session/logout", { method: "POST" }); } catch (e) { /* ignore */ }
+  localStorage.removeItem("apiKey");
+}
+
+function renderApiKeys(keys) {
+  const body = $("#set-keys-body");
+  if (!body) return;
+  body.innerHTML = "";
+  if (!keys.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 6; td.className = "muted"; td.textContent = t("settings.noKeys");
+    tr.appendChild(td); body.appendChild(tr);
+    return;
+  }
+  keys.forEach((k) => {
+    const tr = document.createElement("tr");
+    const label = k.name || "—";
+    const cells = [
+      label,
+      k.prefix || "—",
+      fmtDate(k.created_at),
+      k.expires_at ? fmtDate(k.expires_at) : t("settings.never"),
+      k.last_used_at ? fmtDate(k.last_used_at) : "—",
+    ];
+    cells.forEach((c) => { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); });
+    const actions = document.createElement("td");
+    if (k.expired) {
+      const badge = document.createElement("span");
+      badge.className = "muted"; badge.textContent = `${t("settings.expired")} `;
+      actions.appendChild(badge);
+    }
+    const del = document.createElement("button");
+    del.textContent = t("settings.delete");
+    del.addEventListener("click", () => deleteApiKey(k.id));
+    actions.appendChild(del);
+    tr.appendChild(actions);
+    body.appendChild(tr);
+  });
+}
+
+async function loadApiKeys() {
+  const wrap = $("#set-keys-wrap");
+  if (!wrap) return;
+  if (!(CONFIG && CONFIG.auth_required)) {
+    wrap.hidden = true;
+    if ($("#set-keys-disabled")) $("#set-keys-disabled").hidden = false;
+    return;
+  }
+  try {
+    const data = await getJSON("/api/api-keys");
+    if (!data.enabled) { wrap.hidden = true; return; }
+    if ($("#set-keys-disabled")) $("#set-keys-disabled").hidden = true;
+    wrap.hidden = false;
+    renderApiKeys(data.keys || []);
+    sessionState(t("settings.sessionActive"), "muted grow");
+  } catch (e) {
+    wrap.hidden = true;
+    sessionState(t("settings.notAdmin"), "muted grow");
+  }
+}
+
+async function createApiKey() {
+  const name = $("#set-key-name").value.trim();
+  const days = parseInt($("#set-key-days").value, 10);
+  const status = $("#set-keys-status");
+  if (!name) { status.textContent = t("settings.keyNameRequired"); return; }
+  status.textContent = "…";
+  try {
+    const payload = { name };
+    if (Number.isFinite(days) && days > 0) payload.expires_in_days = days;
+    const r = await apiFetch("/api/api-keys", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    const data = JSON.parse(text);
+    const box = $("#set-key-new");
+    box.textContent = "";
+    const label = document.createElement("span");
+    label.textContent = `${t("settings.newKey")} `;
+    const code = document.createElement("code");
+    code.textContent = data.key;
+    const copy = document.createElement("button");
+    copy.textContent = t("settings.copy");
+    copy.addEventListener("click", () => {
+      navigator.clipboard.writeText(data.key);
+      copy.textContent = t("settings.copied");
+    });
+    box.appendChild(label); box.appendChild(code); box.appendChild(copy);
+    $("#set-key-name").value = "";
+    $("#set-key-days").value = "";
+    status.textContent = "";
+    await loadApiKeys();
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+}
+
+async function deleteApiKey(id) {
+  const status = $("#set-keys-status");
+  status.textContent = "…";
+  try {
+    const r = await apiFetch(`/api/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!r.ok) {
+      let detail = await r.text(); try { detail = JSON.parse(detail).detail || detail; } catch (e) { /* keep */ }
+      throw new Error(detail);
+    }
+    await loadApiKeys();
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+}
+
+function applyAccessState() {
+  const enabled = !!(CONFIG && CONFIG.auth_required);
+  if ($("#set-session-login")) $("#set-session-login").hidden = !enabled;
+  if ($("#set-session-logout")) $("#set-session-logout").hidden = !enabled;
+  if (!enabled) {
+    sessionState(t("settings.accessDisabled"), "muted grow");
+    if ($("#set-keys-wrap")) $("#set-keys-wrap").hidden = true;
+    if ($("#set-keys-disabled")) $("#set-keys-disabled").hidden = false;
+  }
+}
+
+$("#set-session-login").addEventListener("click", async () => {
+  try {
+    await ensureSession();
+    sessionState(t("settings.sessionActive"), "muted grow");
+    await loadApiKeys();
+  } catch (e) {
+    sessionState(`${t("settings.loginFailed")}: ${e}`, "muted grow");
+  }
 });
+
+$("#set-session-logout").addEventListener("click", async () => {
+  await logoutSession();
+  sessionState(t("settings.sessionEnded"), "muted grow");
+  applyAccessState();
+});
+
+$("#set-key-create").addEventListener("click", createApiKey);
 
 init();

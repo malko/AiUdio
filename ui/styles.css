@@ -205,3 +205,12 @@ button.danger { border-color: var(--err); color: var(--err); }
 button.danger:hover { background: var(--err); border-color: var(--err); color: #fff; }
 .modal-actions { margin-top: 14px; }
 #chat-lang-wrap { margin-bottom: 10px; }
+
+.keys-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: .85rem; }
+.keys-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+#set-key-new { margin: 8px 0; }
+#set-key-new code {
+  background: var(--bg); padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--border); word-break: break-all;
+}
+#set-key-new button { margin-left: 8px; }

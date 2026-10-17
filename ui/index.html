@@ -261,13 +261,24 @@
         <button id="set-llm-ping" data-i18n="settings.test">Test connection</button>
         <div id="set-llm-status" class="muted"></div>
       </div>
-      <div class="card">
-        <h2 data-i18n="settings.clientKeyTitle">Client API key</h2>
-        <label><span data-i18n="settings.apiKey">API key</span>
-          <input id="set-apikey" type="password" data-i18n-ph="settings.clientKeyPlaceholder" placeholder="if auth is enabled" />
-        </label>
-        <button id="set-apikey-save" data-i18n="settings.remember">Remember (localStorage)</button>
-        <div class="muted" data-i18n="settings.clientKeyHint">Used by the UI for protected endpoints.</div>
+      <div class="card wide">
+        <h2 data-i18n="settings.accessTitle">Access &amp; API keys</h2>
+        <div class="row">
+          <span id="set-session-state" class="muted grow"></span>
+          <button id="set-session-login" data-i18n="settings.login" hidden>Admin login</button>
+          <button id="set-session-logout" data-i18n="settings.logout" hidden>Log out</button>
+        </div>
+        <div id="set-keys-wrap" hidden>
+          <div class="row">
+            <input id="set-key-name" type="text" class="grow" data-i18n-ph="settings.keyNamePlaceholder" placeholder="Client name" />
+            <input id="set-key-days" type="number" min="0" step="1" data-i18n-ph="settings.keyDaysPlaceholder" placeholder="Expires in days (0 = never)" />
+            <button id="set-key-create" class="primary" data-i18n="settings.createKey">Create key</button>
+          </div>
+          <div id="set-key-new" class="muted"></div>
+          <table class="keys-table"><tbody id="set-keys-body"></tbody></table>
+          <div id="set-keys-status" class="muted"></div>
+        </div>
+        <div id="set-keys-disabled" class="muted" data-i18n="settings.accessDisabled">Authentication is disabled; everyone with network access can use the service.</div>
       </div>
     </div>
   </section>
