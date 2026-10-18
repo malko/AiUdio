@@ -304,17 +304,20 @@ def test_engine_toggle_starts_and_stops_the_container(monkeypatch):
     from app.main import _vllm_lifecycle
 
     calls = []
+    state = {"running": False}  # the daemon's truth, moved by start/stop
 
     async def fake_start(socket, name):
         calls.append(("start", socket, name))
+        state["running"] = True
         return {"running": True}
 
     async def fake_stop(socket, name):
         calls.append(("stop", socket, name))
+        state["running"] = False
         return {"running": False}
 
     async def fake_status(socket, name):
-        return {"exists": True, "running": calls and calls[-1][0] == "start"}
+        return {"exists": True, "running": state["running"]}
 
     async def fake_warm(settings, *a, **kw):
         calls.append(("warm",))
@@ -693,3 +696,59 @@ def test_flag_plan_leaves_an_uncomputable_budget_alone(monkeypatch):
     values, _ = main_mod._vllm_flag_plan(settings, "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
     assert "--stage-overrides" not in values  # nothing to say: do not strip the flag
     assert values["--max-model-len"] == "2048"
+
+
+def test_local_engine_stops_a_container_started_behind_our_back(monkeypatch):
+    from app import main as main_mod
+
+    calls = []
+
+    async def fake_status(socket, name):
+        return {"exists": True, "running": True, "name": name}
+
+    async def fake_stop(socket, name):
+        calls.append(("stop", name))
+        return {"exists": True, "running": False, "name": name}
+
+    monkeypatch.setattr(main_mod.docker_ctl, "status", fake_status)
+    monkeypatch.setattr(main_mod.docker_ctl, "stop", fake_stop)
+
+    settings = Settings()
+    settings.docker.control = True
+    settings.vllm.enabled = False  # local engine
+
+    # Docker (restart policy, a compose up, a manual Start) brought it up anyway: the
+    # gateway takes its VRAM back.
+    assert asyncio.run(main_mod._vllm_enforce_engine(settings)) is True
+    assert calls == [("stop", "tts-vllm")]
+
+    # vLLM is the engine: never stop it.
+    calls.clear()
+    settings.vllm.enabled = True
+    assert asyncio.run(main_mod._vllm_enforce_engine(settings)) is False
+    assert calls == []
+
+    # No Docker control: nothing to enforce.
+    settings.vllm.enabled = False
+    settings.docker.control = False
+    assert asyncio.run(main_mod._vllm_enforce_engine(settings)) is False
+    assert calls == []
+
+
+def test_nothing_is_logged_when_the_service_is_already_stopped(monkeypatch, caplog):
+    from app import main as main_mod
+
+    async def fake_status(socket, name):
+        return {"exists": True, "running": False, "name": name}
+
+    async def fake_stop(*a, **kw):  # pragma: no cover - must not be called
+        raise AssertionError("nothing to stop")
+
+    monkeypatch.setattr(main_mod.docker_ctl, "status", fake_status)
+    monkeypatch.setattr(main_mod.docker_ctl, "stop", fake_stop)
+
+    settings = Settings()
+    settings.docker.control = True
+    with caplog.at_level("INFO"):
+        assert asyncio.run(main_mod._vllm_enforce_engine(settings)) is False
+    assert caplog.text == ""

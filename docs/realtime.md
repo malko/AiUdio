@@ -152,7 +152,10 @@ depth, and per-stage timings (`/api/metrics`).
   `docker.control` enabled, **Settings → vLLM-Omni** becomes a plain engine toggle —
   selecting **vLLM-Omni** starts the container (at boot too, since the gateway honours the
   choice on startup) and **Local models** stops it, which hands its VRAM back to our own
-  models. The model picker recreates the container on the selected checkpoint (the gateway
+  models. The choice is *enforced*, not just applied once: a container that Docker's
+  `restart: unless-stopped`, a `compose up` from a manager or a manual Start brings up while
+  the local engine is selected is stopped again at boot (before our own models load) and
+  every ~30 s afterwards, with a log line saying why. The model picker recreates the container on the selected checkpoint (the gateway
   copies the container's own configuration, keeps its flags and only replaces the
   `vllm serve <model>` argument) and flips `vllm.family` to match it; changing the model
   while the local engine is selected prepares it *stopped*. Raw endpoints:

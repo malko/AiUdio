@@ -102,6 +102,16 @@ async def _apply_startup(app: FastAPI) -> None:
     settings: Settings = app.state.settings
     engine: TTSEngine = app.state.engine
 
+    if settings.docker.control and not settings.vllm.enabled:
+        # The local engine is selected: a vLLM-Omni container that is running holds
+        # VRAM we are about to need. Docker may have started it on its own (and there
+        # is nothing to do when it is already stopped), so the choice is enforced here
+        # — *before* loading our own models.
+        try:
+            await _vllm_enforce_engine(settings)
+        except Exception:  # pragma: no cover - defensive
+            log.debug("vLLM-Omni stop at startup skipped", exc_info=True)
+
     if settings.startup.stt_model:
         try:
             index = await asyncio.to_thread(load_index, settings.stt.model_index)
@@ -799,13 +809,46 @@ async def _vllm_sleep_if_idle(settings: Settings) -> bool:
     return True
 
 
+async def _vllm_enforce_engine(settings: Settings) -> bool:
+    """Stop the service if it runs while the local engine is selected.
+
+    Docker's `restart: unless-stopped`, a `compose up` from a manager or a manual
+    Start can bring the container up although the settings say the local engine
+    serves: it would then hold VRAM our own models need. Returns True when it did
+    stop something. Silent when there is nothing to do (or nothing to pilot).
+    """
+    if not settings.docker.control or settings.vllm.enabled:
+        return False
+    try:
+        state = await docker_ctl.status(settings.docker.socket, settings.docker.container)
+    except docker_ctl.DockerError as exc:
+        log.debug("Could not check %s: %s", settings.docker.container, exc)
+        return False
+    if not (state.get("exists") and state.get("running")):
+        return False
+    log.info(
+        "The local engine is selected but %s is running: stopping it (its VRAM "
+        "belongs to our models)", settings.docker.container,
+    )
+    await _vllm_lifecycle(settings, start=False)
+    return True
+
+
 async def _vllm_idle_loop(app_state) -> None:
-    """Background ticker: hibernate the service when nothing uses it."""
+    """Background ticker: hibernate the service when nothing uses it.
+
+    It also enforces the engine choice every 30 s, so a container started behind the
+    gateway's back does not keep the VRAM.
+    """
     global _VLLM_IDLE_SINCE
+    ticks = 0
     while True:
         try:
             settings: Settings = app_state.settings
             await _vllm_sleep_if_idle(settings)
+            ticks += 1
+            if ticks % 6 == 0:
+                await _vllm_enforce_engine(settings)
         except Exception:  # pragma: no cover - defensive, the loop must survive
             log.debug("vLLM-Omni idle check failed", exc_info=True)
         await asyncio.sleep(5.0)
@@ -841,8 +884,11 @@ async def _vllm_lifecycle(settings: Settings, *, start: bool) -> None:
             await _warm_vllm(settings, attempts=20, delay=15.0)
             _vllm_mark_used()
         else:
-            state = await docker_ctl.stop(cfg.socket, cfg.container)
+            before = await docker_ctl.status(cfg.socket, cfg.container)
             _forget_vllm_sleep()
+            if not before.get("running"):
+                return  # already stopped: nothing to log
+            state = await docker_ctl.stop(cfg.socket, cfg.container)
             log.info(
                 "vLLM-Omni container %s stopped (local engine): its VRAM is free again",
                 state.get("name") or cfg.container,
