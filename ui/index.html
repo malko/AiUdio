@@ -219,37 +219,41 @@
 
   <!-- --------------------------------------------------------- SETTINGS -->
   <section id="tab-settings" class="tab">
-    <div class="grid">
+    <div class="stack">
 
-      <details class="card wide" id="sec-text">
-        <summary><span class="card-title" data-i18n="settings.textTitle">Text cleanup</span></summary>
-        <div class="row">
-          <label class="grow"><span data-i18n="settings.textCleanup">Input text cleanup</span>
-            <select id="gen-cleanup">
-              <option value="off" data-i18n="settings.cleanupOff">off</option>
-              <option value="light" data-i18n="settings.cleanupLight">light (invisible characters, spacing)</option>
-              <option value="llm" data-i18n="settings.cleanupLlm">llm (markdown from an LLM)</option>
-            </select></label>
-          <label class="grow"><span data-i18n="settings.textEmoji">Emojis</span>
-            <select id="gen-emoji">
-              <option value="keep" data-i18n="settings.emojiKeep">keep</option>
-              <option value="strip" data-i18n="settings.emojiStrip">remove</option>
-              <option value="name" data-i18n="settings.emojiName">spoken name</option>
-            </select></label>
-          <label class="grow"><span data-i18n="settings.textCode">Code blocks (llm)</span>
-            <select id="gen-codeblocks">
-              <option value="drop" data-i18n="settings.codeDrop">drop</option>
-              <option value="announce" data-i18n="settings.codeAnnounce">announce</option>
-            </select></label>
+      <details class="card" id="sec-access">
+        <summary><span class="card-title" data-i18n="settings.accessTitle">Access &amp; API keys</span></summary>
+        <div id="set-keys-wrap" hidden>
+          <div class="row">
+            <button id="set-key-create" class="primary" data-i18n="settings.createKey">Create key</button>
+            <span class="muted grow" data-i18n="settings.keysHint">A key is a client: it can carry its own text cleanup, and is shown only once.</span>
+          </div>
+          <div id="set-key-new" class="muted"></div>
+          <table class="keys-table"><tbody id="set-keys-body"></tbody></table>
+          <div id="set-keys-status" class="muted"></div>
         </div>
-        <div class="muted" data-i18n="settings.textHint">Applied before the text is split (streaming and non-streaming). "off" sends the client's text as-is; "llm" also strips markdown and code fences; emojis have their own setting.</div>
-        <div class="muted" data-i18n="settings.keyTextHint">A client API key can override these for itself (Access &amp; API keys).</div>
-        <button id="text-save" class="primary" data-i18n="settings.save">Save</button>
-        <div id="text-status" class="muted"></div>
+        <div id="set-keys-disabled" class="muted" data-i18n="settings.accessDisabled">Authentication is disabled; everyone with network access can use the service.</div>
       </details>
 
-      <details class="card wide" id="sec-generation">
-        <summary><span class="card-title" data-i18n="settings.genTitle">Generation / audio</span></summary>
+      <details class="card" id="sec-stt">
+        <summary><span class="card-title" data-i18n="settings.sttDefaultTitle">Default STT engine</span></summary>
+        <div id="set-startup-stt-picker"></div>
+        <div class="muted" data-i18n="settings.sttDefaultHint">Activated when the server starts. The Transcription tab can switch model at any time; "do not preload" loads on first use instead.</div>
+        <button id="set-startup-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="set-startup-status" class="muted"></div>
+      </details>
+
+      <details class="card" id="sec-tts">
+        <summary><span class="card-title" data-i18n="settings.ttsDefaultTitle">Default TTS engine</span></summary>
+        <label><span data-i18n="chat.cloneBackend">Engine used to synthesize cloned voices</span>
+          <select id="set-clone-backend">
+            <option value="qwen3" data-i18n="chat.backendQwen">Qwen3-TTS (Base)</option>
+            <option value="chatterbox" data-i18n="chat.backendChatterbox">Chatterbox</option>
+          </select>
+        </label>
+        <label class="inline cb-only"><input id="set-cb-watermark" type="checkbox" /> <span data-i18n="chat.watermark">Watermark output (PerTh)</span></label>
+        <div class="muted" data-i18n="chat.cloneEngineHint">Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.</div>
+        <h3 data-i18n="settings.genTitle">Generation / audio</h3>
         <div class="row">
           <label class="grow"><span data-i18n="settings.temperature">Temperature</span>
             <input id="gen-temp" type="number" step="0.05" /></label>
@@ -278,49 +282,41 @@
             </select></label>
         </div>
         <div class="muted" data-i18n="settings.genHint">Defaults for every request that does not override them. The sample rate is not a setting: each PCM response announces its own in X-Sample-Rate (24 kHz for the local engines).</div>
-        <button id="gen-save" class="primary" data-i18n="settings.save">Save</button>
-        <div id="gen-save-status" class="muted"></div>
+        <button id="tts-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="tts-status" class="muted"></div>
       </details>
 
-      <details class="card" id="sec-stt">
-        <summary><span class="card-title" data-i18n="settings.sttDefaultTitle">Default STT engine</span></summary>
-        <div id="set-startup-stt-picker"></div>
-        <div class="muted" data-i18n="settings.sttDefaultHint">Activated when the server starts. The Transcription tab can switch model at any time; "do not preload" loads on first use instead.</div>
-        <button id="set-startup-save" class="primary" data-i18n="settings.save">Save</button>
-        <div id="set-startup-status" class="muted"></div>
+      <details class="card" id="sec-text">
+        <summary><span class="card-title" data-i18n="settings.textTitle">Text cleanup</span></summary>
+        <div class="row">
+          <label class="grow"><span data-i18n="settings.textCleanup">Input text cleanup</span>
+            <select id="gen-cleanup">
+              <option value="off" data-i18n="settings.cleanupOff">off</option>
+              <option value="light" data-i18n="settings.cleanupLight">light (invisible characters, spacing)</option>
+              <option value="llm" data-i18n="settings.cleanupLlm">llm (markdown from an LLM)</option>
+            </select></label>
+          <label class="grow"><span data-i18n="settings.textEmoji">Emojis</span>
+            <select id="gen-emoji">
+              <option value="keep" data-i18n="settings.emojiKeep">keep</option>
+              <option value="strip" data-i18n="settings.emojiStrip">remove</option>
+              <option value="name" data-i18n="settings.emojiName">spoken name</option>
+            </select></label>
+          <label class="grow"><span data-i18n="settings.textCode">Code blocks (llm)</span>
+            <select id="gen-codeblocks">
+              <option value="drop" data-i18n="settings.codeDrop">drop</option>
+              <option value="announce" data-i18n="settings.codeAnnounce">announce</option>
+            </select></label>
+        </div>
+        <div class="muted" data-i18n="settings.textHint">Applied before the text is split (streaming and non-streaming). "off" sends the client's text as-is; "llm" also strips markdown and code fences; emojis have their own setting.</div>
+        <div class="muted" data-i18n="settings.keyTextHint">A client API key can override these for itself (Access &amp; API keys).</div>
+        <button id="text-save" class="primary" data-i18n="settings.save">Save</button>
+        <div id="text-status" class="muted"></div>
       </details>
 
-      <details class="card" id="sec-clone">
-        <summary><span class="card-title" data-i18n="settings.cloneEngineTitle">Clone engine (default)</span></summary>
-        <label><span data-i18n="chat.cloneBackend">Engine used to synthesize cloned voices</span>
-          <select id="set-clone-backend">
-            <option value="qwen3" data-i18n="chat.backendQwen">Qwen3-TTS (Base)</option>
-            <option value="chatterbox" data-i18n="chat.backendChatterbox">Chatterbox</option>
-          </select>
-        </label>
-        <label class="inline cb-only"><input id="set-cb-watermark" type="checkbox" /> <span data-i18n="chat.watermark">Watermark output (PerTh)</span></label>
-        <div class="muted" data-i18n="chat.cloneEngineHint">Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.</div>
-        <button id="set-clone-save" class="primary" data-i18n="settings.save">Save</button>
-        <div id="set-clone-status" class="muted"></div>
-      </details>
-
-      <details class="card wide" id="sec-llm">
-        <summary><span class="card-title" data-i18n="settings.llmTitle">External LLM</span></summary>
-        <label><span data-i18n="settings.baseUrl">Base URL</span> <input id="set-llm-url" type="text" /></label>
-        <label><span data-i18n="settings.model">Model</span> <input id="set-llm-model" type="text" /></label>
-        <label><span data-i18n="settings.apiKey">API key</span> <input id="set-llm-key" type="password" /></label>
-        <label><span data-i18n="settings.systemPrompt">System prompt</span> <textarea id="set-llm-system" rows="3"></textarea></label>
-        <button id="set-llm-ping" data-i18n="settings.test">Test connection</button>
-        <div id="set-llm-status" class="muted"></div>
-      </details>
-
-      <details class="card wide" id="sec-vllm">
+      <details class="card" id="sec-vllm">
         <summary><span class="card-title" data-i18n="settings.vllmTitle">vLLM-Omni (streaming)</span></summary>
-        <label class="inline" data-i18n="settings.engineLabel">TTS engine</label>
-        <label class="inline"><input type="radio" name="set-vllm-engine" value="local" checked />
-          <span data-i18n="settings.engineLocal">Local models (stops the vLLM-Omni service)</span></label>
-        <label class="inline"><input type="radio" name="set-vllm-engine" value="vllm" />
-          <span data-i18n="settings.engineVllm">vLLM-Omni service (starts it)</span></label>
+        <label class="switch"><input type="checkbox" id="set-vllm-enabled" />
+          <span data-i18n="settings.vllmEnable">Serve this family with the vLLM-Omni service (starts it; off returns to the local models and stops it)</span></label>
         <label><span data-i18n="settings.vllmModel">Model served by the service</span>
           <select id="set-vllm-model"></select>
         </label>
@@ -361,8 +357,18 @@
         <div id="set-vllm-status" class="muted"></div>
       </details>
 
-      <details class="card" id="sec-server">
-        <summary><span class="card-title" data-i18n="settings.serverTitle">Server</span></summary>
+      <details class="card" id="sec-llm">
+        <summary><span class="card-title" data-i18n="settings.llmTitle">External LLM (chat)</span></summary>
+        <label><span data-i18n="settings.baseUrl">Base URL</span> <input id="set-llm-url" type="text" /></label>
+        <label><span data-i18n="settings.model">Model</span> <input id="set-llm-model" type="text" /></label>
+        <label><span data-i18n="settings.apiKey">API key</span> <input id="set-llm-key" type="password" /></label>
+        <label><span data-i18n="settings.systemPrompt">System prompt</span> <textarea id="set-llm-system" rows="3"></textarea></label>
+        <button id="set-llm-ping" data-i18n="settings.test">Test connection</button>
+        <div id="set-llm-status" class="muted"></div>
+      </details>
+
+      <details class="card" id="sec-logs">
+        <summary><span class="card-title" data-i18n="settings.logsTitle">Logs</span></summary>
         <label><span data-i18n="settings.logLevel">Log level</span>
           <select id="set-log-level">
             <option value="debug">Debug</option>
@@ -374,20 +380,6 @@
         <div class="muted" data-i18n="settings.logLevelHint">Info logs the per-call engine timings and the chat timeline (useful to diagnose latency); Warning silences them.</div>
         <button id="set-log-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="set-log-status" class="muted"></div>
-      </details>
-
-      <details class="card wide" id="sec-access">
-        <summary><span class="card-title" data-i18n="settings.accessTitle">Access &amp; API keys</span></summary>
-        <div id="set-keys-wrap" hidden>
-          <div class="row">
-            <button id="set-key-create" class="primary" data-i18n="settings.createKey">Create key</button>
-            <span class="muted grow" data-i18n="settings.keysHint">A key is a client: it can carry its own text cleanup, and is shown only once.</span>
-          </div>
-          <div id="set-key-new" class="muted"></div>
-          <table class="keys-table"><tbody id="set-keys-body"></tbody></table>
-          <div id="set-keys-status" class="muted"></div>
-        </div>
-        <div id="set-keys-disabled" class="muted" data-i18n="settings.accessDisabled">Authentication is disabled; everyone with network access can use the service.</div>
       </details>
 
     </div>

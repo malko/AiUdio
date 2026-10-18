@@ -2238,8 +2238,11 @@ async function saveSettings() {
   }
 }
 
-$("#gen-save").addEventListener("click", async () => {
-  const status = $("#gen-save-status");
+// The "Default TTS engine" section saves both halves in one request. The clone
+// engine only joins the payload when it actually changed: sending `models` makes
+// the gateway drop every loaded model (the next request pays a full reload).
+$("#tts-save").addEventListener("click", async () => {
+  const status = $("#tts-status");
   status.textContent = "…";
   const payload = {
     generation: {},
@@ -2263,18 +2266,30 @@ $("#gen-save").addEventListener("click", async () => {
   setIf(payload.chunking, "max_chars",
     maxChars === undefined ? undefined : Math.min(600, Math.max(40, maxChars)));
   if ($("#gen-format").value) payload.audio.format = $("#gen-format").value;
+
+  const backend = $("#set-clone-backend").value;
+  const watermark = $("#set-cb-watermark").checked;
+  const current = (CONFIG && CONFIG.models) || {};
+  if (backend !== (current.clone_backend || "") ||
+      watermark !== !!((current.chatterbox || {}).watermark)) {
+    const clone = cloneEnginePayload(backend);
+    clone.models.chatterbox = { watermark };
+    Object.assign(payload, clone);
+  }
   try {
     const r = await apiFetch("/api/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
     const text = await r.text();
-    if (!r.ok) {
-      const detail = errorFromBody(text);
-      throw new Error(detail);
-    }
+    if (!r.ok) throw new Error(errorFromBody(text));
     const cfg = JSON.parse(text);
-    CONFIG = Object.assign({}, CONFIG, { generation: cfg.generation, chunking: cfg.chunking, text: cfg.text || {}, audio: cfg.audio });
+    CONFIG = Object.assign({}, CONFIG, {
+      generation: cfg.generation, chunking: cfg.chunking, text: cfg.text || {},
+      audio: cfg.audio, models: cfg.models || CONFIG.models,
+    });
     applyGenerationFields(cfg);
+    applyCloneEngineFields(cfg);
+    initCloneEngineSelects();
     status.textContent = t("status.saved");
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
@@ -2310,30 +2325,6 @@ $("#text-save").addEventListener("click", async () => {
   }
 });
 
-$("#set-clone-save").addEventListener("click", async () => {
-  const status = $("#set-clone-status");
-  status.textContent = "…";
-  const payload = cloneEnginePayload($("#set-clone-backend").value);
-  payload.models.chatterbox = { watermark: $("#set-cb-watermark").checked };
-  try {
-    const r = await apiFetch("/api/settings", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    });
-    const text = await r.text();
-    if (!r.ok) {
-      const detail = errorFromBody(text);
-      throw new Error(detail);
-    }
-    const cfg = JSON.parse(text);
-    CONFIG = Object.assign({}, CONFIG, { models: cfg.models });
-    applyCloneEngineFields(cfg);
-    initCloneEngineSelects();
-    status.textContent = t("status.saved");
-  } catch (e) {
-    status.textContent = `${t("status.error")} ${e}`;
-  }
-});
-
 $("#set-log-save").addEventListener("click", async () => {
   const status = $("#set-log-status");
   status.textContent = "…";
@@ -2358,14 +2349,12 @@ $("#set-log-save").addEventListener("click", async () => {
 // ------------------------------------------------------------ vLLM-Omni card
 
 function vllmEngine() {
-  const checked = document.querySelector('input[name="set-vllm-engine"]:checked');
-  return checked && checked.value === "vllm";
+  const el = $("#set-vllm-enabled");
+  return !!(el && el.checked);
 }
 
 function setVllmEngine(enabled) {
-  const value = enabled ? "vllm" : "local";
-  const radio = document.querySelector(`input[name="set-vllm-engine"][value="${value}"]`);
-  if (radio) radio.checked = true;
+  if ($("#set-vllm-enabled")) $("#set-vllm-enabled").checked = !!enabled;
 }
 
 function vllmStageMemory() {

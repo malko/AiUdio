@@ -74,6 +74,10 @@ details.card > .row { margin-left: 16px; margin-right: 16px; }
 .grid .wide { grid-column: 1 / -1; }
 @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
 
+/* One section under another: a 2-column grid stretched a short card (the log
+   level) to the height of a tall neighbour, and accordions read better stacked. */
+.stack { display: flex; flex-direction: column; gap: 14px; }
+
 .card {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 12px; padding: 16px;
@@ -260,4 +264,25 @@ button.danger:hover { background: var(--err); border-color: var(--err); color: #
 #set-key-new button { margin-left: 8px; }
 
 .chat-clone-engine { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+
+/* On/off toggle (vLLM-Omni engine) — a single switch instead of two radios. */
+label.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+label.switch input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 46px; min-width: 46px; height: 26px; min-height: 26px; margin: 0;
+  position: relative; border-radius: 999px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border);
+  transition: background .15s, border-color .15s;
+}
+label.switch input[type="checkbox"]::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+  border-radius: 50%; background: var(--muted);
+  transition: transform .15s, background .15s;
+}
+label.switch input[type="checkbox"]:checked {
+  background: var(--accent); border-color: var(--accent);
+}
+label.switch input[type="checkbox"]:checked::after {
+  transform: translateX(20px); background: #201203;
+}
 .chat-clone-engine h3 { margin: 0 0 8px; font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
