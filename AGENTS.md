@@ -13,9 +13,9 @@ conversation loop over an external LLM. The bundled web UI is a **demo/admin** f
 | Item | Value |
 |---|---|
 | Gateway | FastAPI, default `http://localhost:8004` |
-| Auth | HTTP Basic for the admin; API keys for machines (`X-API-Key` / `Bearer` / `?api_key=`) |
-| Discovery | `GET /api/capabilities`, OpenAPI at `/openapi.json` / `/docs` |
-| Key routes | TTS `/api/tts` (streaming PCM with `stream:true`), OpenAI `/v1/audio/speech`, TTS WS `/ws/tts`, chat WS `/ws/chat`, STT `/v1/audio/transcriptions` + WS `/ws/stt` |
+| Auth | HTTP Basic for the admin; API keys for machines (`X-API-Key` / `Bearer` / `?api_key=`). Reads/synthesis accept any client key; **writes** (settings, models, voices, STT downloads) require an admin credential |
+| Discovery | `GET /api/capabilities` (includes the WS message names), OpenAPI at `/openapi.json` / `/docs` (HTTP only — the WebSocket protocols live in `docs/api.md`) |
+| Key routes | TTS `/api/tts` (streaming PCM with `stream:true`), OpenAI `/v1/audio/speech`, TTS WS `/ws/tts`, chat WS `/ws/chat`, STT `/v1/audio/transcriptions` + WS `/ws/stt` (PCM16 16 kHz, one session per socket) |
 | Language/stack | Python 3.12, FastAPI, pydantic; static vanilla-JS UI in `ui/` |
 
 Terminology: the UI's **Voice Bank** holds reusable cloned voices; the API calls them
@@ -49,7 +49,8 @@ To integrate AiUdio into a host application, you only need:
 1. **A base URL** (e.g. `http://aiudio:8004` from another container on the `aiudio-net`
    network, or `http://<host>:8004`).
 2. **A credential**: an API key (header `X-API-Key: aiud_...`) when auth is enabled,
-   otherwise nothing.
+   otherwise nothing. Synthesis and reads need only this client key; **creating voices or
+   changing settings** needs an admin credential (HTTP Basic `/api/session`, or an admin key).
 3. **Requests**:
 
 ```python
@@ -68,8 +69,8 @@ with httpx.stream("POST", f"{BASE}/api/tts", headers=H,
         speaker.write(chunk)
 ```
 
-Full recipes (TTS/STT/chat, WS protocols, latency tips): [`docs/integration.md`](docs/integration.md).
-Runnable clients: [`examples/`](examples/).
+Full recipes (TTS/STT/chat, WS protocols, latency tips, limits): [`docs/integration.md`](docs/integration.md).
+Runnable clients: [`examples/`](examples/) (TTS, streaming, chat, STT file + realtime).
 
 ## Integration checklist (for an agent asked to "add AiUdio to project X")
 

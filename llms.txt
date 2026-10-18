@@ -6,8 +6,9 @@
 > integration contract. Runs via Docker Compose.
 
 - Base URL (default): http://localhost:8004
-- Discovery: GET /api/capabilities · OpenAPI: /openapi.json · docs: /docs
-- Auth: HTTP Basic (admin) + API keys (X-API-Key / Bearer / ?api_key=)
+- Discovery: GET /api/capabilities (families, routes, WS message names) · OpenAPI: /openapi.json · docs: /docs
+- Auth: HTTP Basic (admin) + API keys (X-API-Key / Bearer / ?api_key=). Reads/synthesis accept any client key; writes (settings/models/voices/STT downloads) require an admin
+- WebSocket protocols (ws/tts, ws/chat, ws/stt) are not in OpenAPI: see docs/api.md; runnable clients in examples/ (incl. STT file + realtime)
 - Makefile: `make test`, `make lint`, `make up`
 
 ## Docs

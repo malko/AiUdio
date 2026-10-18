@@ -81,7 +81,9 @@ Body (`TTSRequest`, aliases accepted):
 | `max_chars` | int | `chunking.max_chars` | Chunk size |
 | `generation` | object | — | `temperature`, `top_k`, `top_p`, `repetition_penalty`, `max_new_tokens` (Qwen); `exaggeration`, `cfg_weight`, `min_p` (Chatterbox) |
 
-Response: `audio/wav` or `audio/pcm`. On error: JSON `{"detail": "..."}`.
+Response: `audio/wav` or `audio/pcm` (mono signed-16-bit little-endian). For `pcm` the sample
+rate is announced in the `X-Sample-Rate` header, streaming and non-streaming alike. On error:
+JSON `{"detail": "..."}`.
 
 ### `POST /v1/audio/speech`
 Same body (OpenAI: `input`, `voice`, `response_format`, `speed`). `speed` is not applied.
@@ -132,9 +134,24 @@ GGUF into the shared cache (SHA-256 verified), yields SSE progress events and po
 container at it. Admin-only.
 
 ### `WS /ws/stt`
-Passthrough to the STT service's `/v1/audio/transcriptions/realtime`. Events:
-`session.created`, `session.update`, PCM16 frames, `input_audio_buffer.commit`,
-`conversation.item.input_audio_transcription.delta` / `.completed`.
+Passthrough to NeMo-Speech.cpp's realtime endpoint. Requires a **streaming** model
+(`GET /api/stt/models` → `streaming: true`) and serves **one session per client socket**.
+Connect with `ws://<host>:8004/ws/stt?api_key=<key>` when auth is enabled.
+
+```
+-> {"type":"session.update","session":{"sample_rate":16000,"language":"English","automatic_punctuation":true}}
+-> <binary PCM16 mono 16 kHz frames>        # e.g. 3200-byte (100 ms) frames
+-> {"type":"input_audio_buffer.commit"}     # end of utterance
+<- {"type":"session.created", ...}
+<- {"type":"conversation.item.input_audio_transcription.delta","delta":"..."}
+<- {"type":"conversation.item.input_audio_transcription.completed","transcript":"..."}
+<- {"type":"error","message":"..."}
+```
+
+Audio frames are **raw binary** (not base64) at 16 kHz mono. `language` is optional;
+`automatic_punctuation` defaults to `true`. The gateway retries a slow upstream handshake
+once; a client that leaves its socket open keeps the single upstream session busy
+(see [realtime.md](realtime.md#stt-sessions)). Runnable client: `examples/python/stt_ws.py`.
 
 ## LLM / chat
 

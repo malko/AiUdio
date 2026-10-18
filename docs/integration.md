@@ -95,7 +95,8 @@ List voices: `GET /v1/audio/voices`.
 
 Set `stream: true` (single text only). `format` is forced to `pcm`; chunks are emitted
 **sentence by sentence** as they are synthesized, so playback can start early. The sample
-rate is in the `X-Sample-Rate` response header.
+rate is in the `X-Sample-Rate` response header. A non-streaming `format: "pcm"` response
+carries the same header (WAV already embeds its rate).
 
 ```bash
 curl -N http://localhost:8004/api/tts -H 'Content-Type: application/json' \
@@ -151,9 +152,13 @@ Use `ws://<host>:8004/ws/tts?api_key=<key>` when auth is enabled.
 - **File** — `POST /v1/audio/transcriptions` (multipart `file`, OpenAI-compatible
   `response_format` in `json`/`verbose_json`/`text`/`srt`/`vtt`, optional `language`).
 - **Diarization** — `POST /api/stt/diarize` → segments `{start, end, speaker}`.
-- **Realtime** — `WS /ws/stt` (passthrough to NeMo-Speech.cpp): stream PCM16 frames and
-  receive `conversation.item.input_audio_transcription.delta` / `.completed` events.
-  Requires a **streaming** STT model (see `streaming` flag in `GET /api/stt/models`).
+- **Realtime** — `WS /ws/stt` (passthrough to NeMo-Speech.cpp): send a `session.update`
+  (`sample_rate`, optional `language`, `automatic_punctuation`), stream **raw binary PCM16
+  mono 16 kHz** frames, then `input_audio_buffer.commit`; receive
+  `conversation.item.input_audio_transcription.delta` / `.completed` events. Requires a
+  **streaming** STT model (see `streaming` in `GET /api/stt/models`) and serves **one session
+  per client socket** — close it when done. Runnable client: `examples/python/stt_ws.py`
+  (see [api.md](api.md#ws-wsstt) for the exact frames).
 
 Model management (download/select) is done from the admin; `GET /api/stt/models` lists
 availability and cache status.
@@ -191,16 +196,37 @@ If you prefer to own the orchestration, chain the pieces yourself:
 
 ## 6. Errors, health and limits
 
-- Errors are JSON `{"detail": "..."}` with a 4xx/5xx status. `400` bad request/validation,
-  `401`/`403` auth, `404` unknown voice/avatar, `503` model not loadable (or engine
-  unavailable).
-- `/health` (liveness) and `/ready` (readiness: scheduler up) are always public.
-- **First call to a model family downloads weights** (several GB) and loads them: expect a
-  slow first request. Pre-warm with `POST /api/voices/load` (`{"avatar": "id"}` or
-  `{"family": "custom_voice"}`).
-- Inference is serialized by the engine; throughput benefits from batching (REST), while
-  streaming and Chatterbox requests are per-item. Treat the service as a shared, bounded
-  GPU resource.
+Errors are JSON `{"detail": "..."}` with a 4xx/5xx status:
+
+| Status | Meaning |
+|---|---|
+| `400` | Bad request / validation (unknown variant, unreadable `ref_audio`, disabled feature) |
+| `401` | Authentication required (missing/invalid Basic or API key) |
+| `403` | Valid key but **not an admin** on a write route |
+| `404` | Unknown voice/avatar id |
+| `409` | vLLM-Omni container control disabled (`docker.control`) |
+| `501` | STT disabled (`stt.enabled: false`) |
+| `502` | Upstream failure (STT service or the Docker API) |
+| `503` | Model not loadable / engine unavailable (or first-time download in progress) |
+
+`/health` (liveness) and `/ready` (readiness: scheduler up) are always public.
+
+### Limits and behaviour per route
+
+| Route | Limit / behaviour |
+|---|---|
+| `POST /api/tts` (REST) | Micro-batched; inference is **serialized** by the engine. Throughput scales with `generation.batch_size`; there is no server-side queue cap (pressure shows up as latency and `GET /api/metrics` queue depth). |
+| `POST /api/tts` `stream:true` | Per sentence, one text at most. A mid-stream failure **ends the stream without an error frame** (HTTP headers are already sent): treat a short/abrupt end as an error and retry the request. |
+| `/v1/audio/speech` | Same engine and limits as `/api/tts`. |
+| Chatterbox families | No batch API: requests are processed **sequentially** (one at a time). |
+| `POST /v1/audio/transcriptions`, `/api/stt/diarize` | The whole upload is read into memory by the gateway and forwarded (300 s upstream timeout). Accepted audio formats are those of the loaded NeMo-Speech model. |
+| `WS /ws/stt` | **One realtime session per client socket**; a leaked open socket keeps the upstream busy. Requires a streaming model. |
+| `WS /ws/chat` | One turn at a time per socket; `input.cancel` stops the LLM stream and synthesis. The LLM is external, so its latency/limits are yours. |
+| First call to a family | Downloads several GB of weights and loads them: expect a slow first request. Pre-warm with `POST /api/voices/load` (`{"avatar":"id"}` or `{"family":"custom_voice"}`). |
+| Writes (`/api/settings`, models, avatars, STT download) | Admin only when `auth.enabled` (see §2). |
+
+Treat the service as a **shared, bounded GPU resource**: prefer streaming, pre-warm voices,
+and keep an eye on `/api/metrics`.
 
 ## 7. Real-time best practices
 

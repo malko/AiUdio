@@ -1171,22 +1171,53 @@ def create_app(
                 "openai": "/v1/audio/speech",
                 "websocket": "/ws/tts",
                 "voices": "/api/voices",
+                "ws": {
+                    "encoding": "pcm16le",
+                    "client": ["session.config", "input.text", "input.done"],
+                    "server": ["audio.start", "audio.done", "session.done", "error"],
+                },
             },
             "avatars": {
                 "rest": "/api/avatars",
                 "fingerprint": "/api/avatars/fingerprint",
+                "write_requires": "admin" if s.auth.enabled else "none",
             },
             "stt": {
                 "enabled": s.stt.enabled,
                 "http": "/v1/audio/transcriptions",
                 "diarization": "/api/stt/diarize",
                 "websocket": "/ws/stt",
+                "models": "/api/stt/models",
+                "download_requires": "admin" if s.auth.enabled else "none",
+                "realtime": {
+                    "encoding": "pcm16le",
+                    "sample_rate": 16000,
+                    "protocol": "passthrough to NeMo-Speech.cpp /v1/audio/transcriptions/realtime",
+                    "requires": "a streaming model (see /api/stt/models -> streaming)",
+                    "constraint": "one realtime session per client socket",
+                    "client": ["session.update", "input_audio_buffer.commit", "pcm16 frames"],
+                    "server": [
+                        "session.created",
+                        "conversation.item.input_audio_transcription.delta",
+                        "conversation.item.input_audio_transcription.completed",
+                        "error",
+                    ],
+                },
             },
             "chat": {
                 "websocket": "/ws/chat",
                 "sse": "/api/chat",
                 "llm": "external OpenAI-compatible",
+                "ws": {
+                    "client": ["session.config", "input.text", "input.cancel"],
+                    "server": [
+                        "transcript", "llm.delta", "audio.start", "audio.done",
+                        "llm.done", "turn.cancelled", "error",
+                    ],
+                    "turn_id": "optional client id echoed on the turn's events",
+                },
             },
+            "writes_require": "admin" if s.auth.enabled else "none",
         }
 
     @app.get("/api/models", tags=["Models"])
@@ -1776,9 +1807,14 @@ def create_app(
         except Exception as exc:
             raise HTTPException(503, f"Generation failed: {exc}") from exc
         fmt = req.resolve_format(app.state.settings.audio.format)
+        headers: Dict[str, str] = {}
         if fmt == "pcm":
+            sample_rate = results[0][1] if results else app.state.settings.audio.sample_rate
             body = b"".join(to_pcm16(wav) for wav, _sr in results)
             media = "audio/pcm"
+            # Raw PCM has no header of its own: always announce the rate (streaming
+            # and non-streaming alike), so a client can decode it.
+            headers["X-Sample-Rate"] = str(sample_rate)
         elif len(results) == 1:
             body = wav_bytes(results[0][0], results[0][1])
             media = "audio/wav"
@@ -1794,7 +1830,7 @@ def create_app(
             )
             body = wav_bytes(combined, sample_rate)
             media = "audio/wav"
-        return Response(content=body, media_type=media)
+        return Response(content=body, media_type=media, headers=headers)
 
     async def _stream_http(settings, sched, req, text) -> AsyncIterator[bytes]:
         try:

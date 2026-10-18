@@ -332,6 +332,27 @@ def test_capabilities(client):
     assert any(f["family"] == "chatterbox" for f in body["tts"]["families"])
 
 
+def test_capabilities_expose_ws_protocols(client):
+    body = client.get("/api/capabilities").json()
+    # The WS protocols are not in OpenAPI: capabilities carries their message names.
+    assert "session.config" in body["tts"]["ws"]["client"]
+    assert "session.done" in body["tts"]["ws"]["server"]
+    realtime = body["stt"]["realtime"]
+    assert realtime["sample_rate"] == 16000 and realtime["encoding"] == "pcm16le"
+    assert "input_audio_buffer.commit" in realtime["client"]
+    assert "turn.cancelled" in body["chat"]["ws"]["server"]
+
+
+def test_pcm_samples_announce_the_rate(client):
+    # Raw PCM has no header: the rate is in X-Sample-Rate (streaming and not).
+    r = client.post("/api/tts", json={"text": "Bonjour.", "format": "pcm"})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("audio/pcm")
+    assert r.headers["x-sample-rate"] == "24000"
+    s = client.post("/api/tts", json={"text": "Bonjour. Salut.", "stream": True})
+    assert s.headers["x-sample-rate"] == "24000"
+
+
 def test_ready(client):
     r = client.get("/ready")
     assert r.status_code == 200
