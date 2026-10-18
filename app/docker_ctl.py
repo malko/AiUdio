@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -124,23 +125,73 @@ def with_model(cmd: Optional[List[str]], model: str) -> List[str]:
     return args
 
 
+def _rank(entry: Dict[str, Any], name: str) -> int:
+    """How well a daemon listing entry matches the configured container name.
+
+    Compose names containers ``<project>-<service>-<index>``, and a recreate leaves
+    a ``<name>-previous`` behind: prefer the exact name, then the compose service
+    label, then the project-prefixed name, then any name carrying it as a word.
+    Lower is better; ``-1`` means "not it".
+    """
+    names = [str(n).lstrip("/") for n in (entry.get("Names") or [])]
+    labels = entry.get("Labels") or {}
+    score = -1
+    if name in names:
+        score = 0
+    elif labels.get("com.docker.compose.service") == name:
+        score = 1
+    elif any(
+        re.search(rf"(^|[-_/]){re.escape(name)}([-_/]|$)", candidate) for candidate in names
+    ):
+        score = 3
+    elif name and name in str(entry.get("Id", ""))[:12]:
+        score = 4
+    if score < 0:
+        return -1
+    if any(candidate.endswith("-previous") for candidate in names):
+        score += 10  # our own leftover from a recreate
+    if (entry.get("State") or "").lower() == "running":
+        score -= 1  # at equal specificity, the live one wins
+    return score
+
+
 async def find(socket: str, name: str) -> Optional[Dict[str, Any]]:
     """Inspect the configured container (None when it does not exist)."""
     filter_json = json.dumps({"name": [name]})
     containers = await _call(
         socket, "GET", "/containers/json", params={"all": 1, "filters": filter_json}
     ) or []
-    target: Optional[Dict[str, Any]] = None
-    for entry in containers:
-        names = [str(n).lstrip("/") for n in (entry.get("Names") or [])]
-        if name in names:  # the daemon filters by substring: require the exact name
-            target = entry
-            break
-        if name and name in str(entry.get("Id", ""))[:12]:
-            target = target or entry
-    if target is None:
+    ranked = [(rank, entry) for entry in containers if (rank := _rank(entry, name)) >= 0]
+    if not ranked:
         return None
-    return await _call(socket, "GET", f"/containers/{target['Id']}/json")
+    best = min(ranked, key=lambda item: (item[0], item[1].get("Id", "")))[1]
+    return await _call(socket, "GET", f"/containers/{best['Id']}/json")
+
+
+async def candidates(socket: str, name: str) -> List[str]:
+    """Names the daemon knows that could be the configured container (for errors)."""
+    filter_json = json.dumps({"name": [name]})
+    try:
+        containers = await _call(
+            socket, "GET", "/containers/json", params={"all": 1, "filters": filter_json}
+        ) or []
+    except DockerError:  # pragma: no cover - the caller is already failing
+        return []
+    return sorted(
+        str(entry.get("Names", [""])[0]).lstrip("/") for entry in containers
+    )
+
+
+async def _container_id(socket: str, name: str) -> Dict[str, Any]:
+    info = await find(socket, name)
+    if info is None:
+        seen = await candidates(socket, name)
+        hint = f" — the daemon sees: {', '.join(seen)}" if seen else ""
+        raise DockerError(
+            f"container {name!r} not found{hint}. Set docker.container to the exact "
+            "name (compose prefixes it with the project: <project>-<service>-1)."
+        )
+    return info
 
 
 def describe(info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -167,18 +218,14 @@ async def status(socket: str, name: str) -> Dict[str, Any]:
 
 
 async def start(socket: str, name: str) -> Dict[str, Any]:
-    info = await find(socket, name)
-    if info is None:
-        raise DockerError(f"container {name!r} not found")
+    info = await _container_id(socket, name)
     if not (info.get("State") or {}).get("Running"):
         await _call(socket, "POST", f"/containers/{info['Id']}/start")
     return await status(socket, name)
 
 
 async def stop(socket: str, name: str, timeout: float = 60.0) -> Dict[str, Any]:
-    info = await find(socket, name)
-    if info is None:
-        raise DockerError(f"container {name!r} not found")
+    info = await _container_id(socket, name)
     if (info.get("State") or {}).get("Running"):
         await _call(
             socket, "POST", f"/containers/{info['Id']}/stop",
@@ -188,9 +235,7 @@ async def stop(socket: str, name: str, timeout: float = 60.0) -> Dict[str, Any]:
 
 
 async def restart(socket: str, name: str, timeout: float = 60.0) -> Dict[str, Any]:
-    info = await find(socket, name)
-    if info is None:
-        raise DockerError(f"container {name!r} not found")
+    info = await _container_id(socket, name)
     await _call(
         socket, "POST", f"/containers/{info['Id']}/restart",
         params={"t": int(timeout)}, timeout=timeout + 60.0,
@@ -218,9 +263,7 @@ async def set_model(
     removed — a failure leaves the previous container available under
     ``<name>-previous``.
     """
-    info = await find(socket, name)
-    if info is None:
-        raise DockerError(f"container {name!r} not found")
+    info = await _container_id(socket, name)
     config = dict(info.get("Config") or {})
     current = list(config.get("Cmd") or [])
     wanted = with_flags(
@@ -250,7 +293,10 @@ async def set_model(
     if networks:
         body["NetworkingConfig"] = {"EndpointsConfig": {net: {} for net in networks}}
 
-    previous = f"{name}-previous"
+    # Compose names containers <project>-<service>-<index>: keep that identity, or
+    # the next `docker compose up` would create a second one next to ours.
+    service = str(info.get("Name") or "").lstrip("/") or name
+    previous = f"{service}-previous"
     old_id, renamed = info["Id"], False
     if (info.get("State") or {}).get("Running"):
         await _call(socket, "POST", f"/containers/{old_id}/stop",
@@ -260,11 +306,11 @@ async def set_model(
                     params={"name": previous})
         renamed = True
         created = await _call(socket, "POST", "/containers/create",
-                              params={"name": name}, json=body)
+                              params={"name": service}, json=body)
     except DockerError:
         if renamed:  # put the old container back under its name
             await _call(socket, "POST", f"/containers/{old_id}/rename",
-                        params={"name": name})
+                        params={"name": service})
         raise
     new_id = (created or {}).get("Id")
     if start:
@@ -272,7 +318,7 @@ async def set_model(
             await _call(socket, "POST", f"/containers/{new_id}/start", timeout=timeout)
         except DockerError:
             log.error("The new %s container failed to start; the previous one is %r",
-                      name, previous)
+                      service, previous)
             raise
     try:
         await _call(socket, "DELETE", f"/containers/{old_id}", params={"v": 1})

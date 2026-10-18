@@ -38,6 +38,33 @@ def _daemon(monkeypatch, containers, calls):
     )
 
 
+def _daemon_entries(monkeypatch, containers, calls):
+    """Fake daemon whose listing entries carry their own inspect payload."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        path = request.url.path
+        if path == "/containers/json":
+            listing = [{k: v for k, v in c.items() if k != "_inspect"} for c in containers]
+            return httpx.Response(200, json=listing)
+        if path.endswith("/json"):
+            cid = path.split("/")[2]
+            for c in containers:
+                if c["Id"] == cid:
+                    # The daemon answers with the container's real id.
+                    return httpx.Response(200, json=dict(c["_inspect"], Id=c["Id"]))
+            return httpx.Response(404, json={"message": "no such container"})
+        if path == "/containers/create":
+            return httpx.Response(201, json={"Id": "new"})
+        return httpx.Response(204)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        docker_ctl, "client",
+        lambda socket, timeout=30.0: httpx.AsyncClient(transport=transport, base_url="http://docker"),
+    )
+
+
 def _inspect(cmd, running=True):
     return {
         "Id": "abcdef1234567890",
@@ -202,3 +229,42 @@ def test_set_model_does_nothing_when_the_profile_already_matches(monkeypatch):
                              values={"--max-model-len": None})  # already absent
     )
     assert "/containers/create" not in [p for _, p in calls]
+
+
+def test_compose_prefixed_names_are_resolved(monkeypatch):
+    """Compose names containers <project>-<service>-<index>."""
+    calls = []
+    containers = [
+        {"Id": "aaaa11112222", "Names": ["/aiudio-tts-vllm-previous"],
+         "State": "exited",
+         "Labels": {"com.docker.compose.project": "aiudio", "com.docker.compose.service": "tts-vllm"},
+         "_inspect": _inspect(CMD, running=False)},
+        {"Id": "bbbb33334444", "Names": ["/aiudio-tts-vllm-1"],
+         "State": "running",
+         "Labels": {"com.docker.compose.project": "aiudio", "com.docker.compose.service": "tts-vllm"},
+         "_inspect": _inspect(CMD)},
+    ]
+    _daemon_entries(monkeypatch, containers, calls)
+
+    state = asyncio.run(docker_ctl.status("/var/run/docker.sock", "tts-vllm"))
+    assert state["running"] is True
+    # The live container wins over our own `<name>-previous` leftover.
+    assert ("GET", "/containers/bbbb33334444/json") in calls
+
+    # Stopping it works too (that was the reported bug).
+    asyncio.run(docker_ctl.stop("/var/run/docker.sock", "tts-vllm", timeout=5))
+    assert ("POST", "/containers/bbbb33334444/stop") in calls
+
+
+def test_a_missing_container_lists_what_the_daemon_sees(monkeypatch):
+    calls = []
+    _daemon_entries(monkeypatch, [{"Id": "bbbb33334444", "Names": ["/aiudio-other-1"],
+                                   "State": "running", "Labels": {}}], calls)
+
+    import pytest
+
+    with pytest.raises(docker_ctl.DockerError) as excinfo:
+        asyncio.run(docker_ctl.start("/var/run/docker.sock", "tts-vllm"))
+    message = str(excinfo.value)
+    assert "docker.container" in message
+    assert "aiudio-other-1" in message  # what to fix the setting to
