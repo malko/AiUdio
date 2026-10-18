@@ -137,6 +137,13 @@ llm:
   max_tokens: -1
   history_turns: 12
 vllm:
+  # EXPERIMENTAL, and may be dropped in a future release. It can cut the
+  # time-to-first-audio of Qwen3-TTS (native codec-window PCM) but costs a much
+  # larger VRAM footprint (a per-stage share of the whole card), a ~1 min cold
+  # start, extra stack complexity (a second container to pilot) and per-stage
+  # budgets to tune by hand. The local engines are the supported path; see
+  # docs/backends.md#why-vllm-omni-stays-optional.
+  #
   # The TTS engine switch: true routes the family below to the vLLM-Omni service
   # (started on demand when docker.control is enabled), false keeps everything on
   # our own models and stops the service.

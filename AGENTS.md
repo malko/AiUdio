@@ -23,6 +23,12 @@ Terminology: the UI's **Voice Bank** holds reusable cloned voices; the API calls
 `voice`/`speaker`. The clone engine defaults to `models.clone_backend` and can be overridden
 per request with `clone_backend`/`engine`.
 
+> The vLLM-Omni integration (`vllm.*`, `/api/vllm/*`, the `vllm` compose profile) is
+> **experimental and may be dropped in a future release**: bigger VRAM footprint, ~1 min cold
+> start, degraded stability, extra stack complexity and UI tuning. Prefer the local engines
+> unless you specifically want the last bit of Qwen3-TTS latency
+> ([measurements](docs/backends.md#why-vllm-omni-stays-optional)).
+
 ## Run it (for manual testing)
 
 Everything runs in Docker, including validation:

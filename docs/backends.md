@@ -97,14 +97,18 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
 
 - **Gateway (native)**: **per-sentence** streaming (PCM16). Reduced perceived latency but no
   token-level streaming (not exposed by `qwen-tts`).
-- **`vllm` profile** (official vLLM-Omni image): set `vllm.enabled: true` for **native
+- **`vllm` profile** (official vLLM-Omni image): **experimental, may be dropped in a future
+  release.** Set `vllm.enabled: true` for **native
   codec-window PCM** (`POST {vllm.base_url}/v1/audio/speech` with `stream=true`,
   `response_format=pcm`, `stream_format=audio`) on the family named by `vllm.family`
   (`custom_voice` for the preset speakers, `base` for voice cloning — the service serves one
   checkpoint, so both need their own deployment); the local per-sentence engine handles the
   other families and is never a silent substitute: a request routed to a selected-but-down
-  service fails (503 / `error` event) unless `vllm.fallback_to_local` is enabled. Experimental,
-  NVIDIA. See `app/vllm_backend.py`.
+  service fails (503 / `error` event) unless `vllm.fallback_to_local` is enabled. It buys the
+  time-to-first-audio above at the cost of a large VRAM reservation, a ~1 min cold start, an
+  extra container to pilot and hand-tuned per-stage budgets; see
+  [why it stays optional](#why-vllm-omni-stays-optional). NVIDIA only.
+  See `app/vllm_backend.py`.
 - **STT**: NeMo-Speech.cpp exposes a realtime WebSocket
   (`/v1/audio/transcriptions/realtime`, ~160 ms with Nemotron 3.5). Parakeet TDT v3 stays
   offline (no cache-aware streaming).
@@ -143,6 +147,24 @@ reference path — Qwen3-TTS for the preset speakers, cloning and `voice_design`
 clone quality matters most. The gateway keeps the coexistence cheap (the engine switch
 starts/stops the service, drops our own copy of the family it serves, enforces the choice at
 boot), so trying it costs one setting and turning it off frees the VRAM again.
+
+**Status: experimental — this feature may be dropped in a future release.** It is kept because
+it can be worth it for someone chasing the last bit of latency on Qwen3-TTS, but it is provided
+as-is and the local engine is the supported path. What you take on:
+
+- **VRAM**: the service reserves its share of the **whole** card per stage (0.36 + 0.11 on a
+  15.5 GiB card for a 1.7B, see [realtime](realtime.md#streaming-backends)) and holds it while
+  running, where the local engine simply allocates what it needs;
+- **cold start ≈ 1 min** (two stages to load; the first request after a restart is slower still
+  — kernel/graph warm-up and the speech caches);
+- **stability**: two stage processes, per-stage budgets and a checkpoint per service; an
+  undersized stage or a network/alias change can leave the service unstartable (the gateway now
+  rebuilds it and fails loudly instead of falling back, but it is still more to go wrong);
+- **stack complexity**: a second container image (several GB) to pull, pilot and keep in step,
+  plus a Docker socket if you want the UI to manage it (root-equivalent power, see
+  [security](security.md));
+- **manual tuning**: `--stage-overrides` per checkpoint/card, `--max-model-len`, `--enforce-eager`
+  — the UI exposes them (`GET /api/vllm/budget` suggests values), but they are yours to get right.
 
 **When to revisit**: if `qwen-tts` (or an equivalent) ever exposes incremental generation, the
 latency argument disappears and the local engine wins outright; conversely, on a large GPU or a

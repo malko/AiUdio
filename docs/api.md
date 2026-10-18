@@ -57,6 +57,12 @@ admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at 
 | POST | `/api/voices/load` | `{"avatar": "id"}` or `{"family": "custom_voice"}` — warm a conversation voice |
 | GET | `/v1/audio/voices` | OpenAI-compatible list (`voices` + `avatars` = voice-bank ids) |
 
+> The `/api/vllm/*` routes pilot the **experimental** vLLM-Omni streaming service (**may be
+> dropped in a future release**): it buys time-to-first-audio at the cost of a larger VRAM
+> reservation, a ~1 min cold start, an extra container to manage and per-stage budgets to tune.
+> The local engines are the supported path — see
+> [backends](backends.md#why-vllm-omni-stays-optional).
+
 ## TTS
 
 ### `POST /api/tts`

@@ -6,7 +6,7 @@
 |---|---|---|
 | `aiudio` | `aiudio-server:local` (built on official PyTorch/ROCm/Python base) | Qwen3-TTS engine + REST/OpenAI API + WebSocket + UI + STT/LLM proxies |
 | `stt` | official NGC `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (non-NVIDIA: built from source) | offline/streaming ASR + diarization |
-| `tts-vllm` | `vllm/vllm-omni` (official, `vllm` profile) | experimental native PCM streaming |
+| `tts-vllm` | `vllm/vllm-omni` (official, `vllm` profile) | experimental native PCM streaming (**may be dropped in a future release**) |
 | LLM | *outside compose* | external OpenAI-compatible endpoint |
 
 All services share the Docker network `aiudio-net`; they are reachable by name

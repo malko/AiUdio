@@ -73,6 +73,7 @@ served by a single `docker compose` stack, reachable on the LAN or on the Docker
               │ Parakeet/Nemotron  │      │  llama.cpp, Ollama...)  │
               └────────────────────┘      └─────────────────────────┘
    ("vllm" profile) tts-vllm : official vLLM-Omni image — experimental PCM streaming
+                              (may be dropped: larger VRAM, ~1 min cold start)
 ```
 
 Details: [`docs/architecture.md`](docs/architecture.md) · API: [`docs/api.md`](docs/api.md) ·
@@ -153,10 +154,19 @@ One **CUDA** compose (the default `docker-compose.yml`, CUDA 13), works with any
 
 - **TTS gateway**: `pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime` (official image).
 - **STT**: `nvcr.io/nvidia/nemo-speech.cpp:0.2.0` (official NVIDIA NGC image, CUDA, multi-arch), wrapped with busybox for the wait entrypoint.
-- Optional: `docker compose --profile vllm up -d` for the experimental vLLM-Omni streaming service
+- Optional: `docker compose --profile vllm up -d` for the vLLM-Omni streaming service
   (preset voices with a `-CustomVoice` checkpoint, cloned voices with a `-Base` one; with the
   Docker socket mounted + `DOCKER_CONTROL=1`, the UI starts/stops it and switches the
   checkpoint — see [security](docs/security.md)).
+
+> [!WARNING]
+> **vLLM-Omni streaming is experimental and may be dropped in a future release.** It can cut
+> the time-to-first-audio of Qwen3-TTS (native codec-window PCM), but at a price: a much larger
+> VRAM footprint (a per-stage share of the whole card), a **~1 min cold start**, extra stack
+> complexity (a second container to pull, pilot and keep in step) and per-stage budgets to tune
+> by hand in the UI — i.e. **degraded stability** compared to the local engine. It is provided
+> as-is; the local engines remain the supported path. Details and measurements:
+> [why vLLM-Omni stays optional](docs/backends.md#why-vllm-omni-stays-optional).
 
 Non-NVIDIA hardware uses **additive overrides** (the CUDA default is unchanged):
 
