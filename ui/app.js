@@ -1357,37 +1357,44 @@ function mountSttPickers() {
 
 function renderSttPickers() { sttPickers.forEach((p) => p.populate()); updateVadAvailability(); renderSttLanguage(); }
 
-// Input language for the STT requests: free-form so any code can be typed, with the
-// configured `stt.languages` offered as suggestions. Empty = "auto" (model default).
+// Input language for the STT requests: a single select over the configured
+// `stt.languages`, or the service's language list when none is configured. The
+// empty value is "auto" (the model's own default: detection for the multilingual
+// models). The service takes a single code, so only one is ever sent.
+function sttLanguageOptions() {
+  const configured = (CONFIG && CONFIG.stt && CONFIG.stt.languages) || [];
+  if (configured.length) return configured.slice();
+  return ((CONFIG && CONFIG.languages) || []).filter((l) => l && l !== "Auto");
+}
 function sttLanguage() {
-  const el = $("#stt-lang");
-  const typed = el && el.value.trim();
-  return typed || localStorage.getItem("sttLanguage") || "";
+  const select = $("#stt-lang");
+  return (select && select.value) || localStorage.getItem("sttLanguage") || "";
 }
 function setSttLanguage(value) {
-  const el = $("#stt-lang");
-  if (el) el.value = value || "";
   if (value) localStorage.setItem("sttLanguage", value);
   else localStorage.removeItem("sttLanguage");
+  localStorage.removeItem("sttLanguages");  // superseded by the single value
 }
 function renderSttLanguage() {
-  const input = $("#stt-lang");
-  const list = $("#stt-lang-list");
-  if (!input || !list) return;
-  const codes = (CONFIG && CONFIG.stt && CONFIG.stt.languages) || [];
-  list.innerHTML = "";
-  codes.forEach((code) => {
+  const select = $("#stt-lang");
+  if (!select) return;
+  const options = sttLanguageOptions();
+  const configured = (CONFIG && CONFIG.stt && CONFIG.stt.language) || "";
+  const wanted = localStorage.getItem("sttLanguage") || configured || "";
+  select.innerHTML = "";
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = t("stt.langAuto");
+  select.appendChild(auto);
+  options.forEach((code) => {
     const option = document.createElement("option");
     option.value = code;
-    list.appendChild(option);
+    option.textContent = code;
+    select.appendChild(option);
   });
-  if (!input.value) {
-    input.value = localStorage.getItem("sttLanguage")
-      || (CONFIG && CONFIG.stt && CONFIG.stt.language)
-      || "";
-  }
+  select.value = options.includes(wanted) ? wanted : "";
 }
-$("#stt-lang") && $("#stt-lang").addEventListener("change", () => setSttLanguage($("#stt-lang").value.trim()));
+$("#stt-lang") && $("#stt-lang").addEventListener("change", (e) => setSttLanguage(e.target.value));
 
 // The chat VAD needs a streaming-capable STT model (and a reachable service).
 function chatSttModel() {
