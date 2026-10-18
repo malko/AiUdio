@@ -2,6 +2,8 @@
 
 import asyncio
 
+from fastapi import HTTPException
+
 from app.config import Settings
 from app.main import _stream_pcm
 from app.schemas import TTSRequest
@@ -256,11 +258,22 @@ def test_clone_routing_requires_a_reference_clip(tmp_path):
     settings.vllm.family = "base"
     # A Base task with nothing to clone from has to stay on the local engine.
     assert _vllm_eligible(settings, TTSRequest(text="Bonjour", family="base")) is False
+    # A client-supplied local path is refused by default (SSRF/file disclosure),
+    # even on the vLLM route.
+    blocked = TTSRequest(text="Bonjour", ref_audio=str(tmp_path / "avatars" / "bugatti.wav"))
+    try:
+        _vllm_payload(settings, blocked, "Bonjour")
+        raise AssertionError("a local ref_audio path must be refused by default")
+    except HTTPException as exc:
+        assert exc.status_code == 400
     # Chatterbox is a local clone engine: the vLLM service cannot serve it.
     settings.models.clone_backend = "chatterbox"
     assert _vllm_eligible(settings, TTSRequest(text="Bonjour", avatar="bugatti")) is False
-    # A clip without a transcript clones from the speaker embedding only.
+    # With local paths explicitly allowed (confined to reference_audio), a clip
+    # without a transcript clones from the speaker embedding only.
     settings.models.clone_backend = "qwen3"
+    settings.audio.allow_local_ref_paths = True
+    settings.paths.reference_audio = str(tmp_path)
     payload = _vllm_payload(
         settings,
         TTSRequest(text="Bonjour", ref_audio=str(tmp_path / "avatars" / "bugatti.wav")),
@@ -306,7 +319,7 @@ def test_engine_toggle_starts_and_stops_the_container(monkeypatch):
     calls = []
     state = {"running": False}  # the daemon's truth, moved by start/stop
 
-    async def fake_start(socket, name):
+    async def fake_start(socket, name, timeout=None):
         calls.append(("start", socket, name))
         state["running"] = True
         return {"running": True}

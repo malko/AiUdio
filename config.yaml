@@ -5,10 +5,8 @@ server:
   - '*'
   log_level: info
 paths:
-  output: outputs
   voices: voices
   reference_audio: reference_audio
-  logs: logs
 models:
   registry:
     custom_voice: Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
@@ -130,11 +128,11 @@ stt:
   models_dir: /app/hf_cache/nemo-speech/models
   hf_base_url: https://huggingface.co
 llm:
-  base_url: http://llama.desk.home/v1
-  api_key: testing
-  model: Qwen3.8-27B-GSQ-RCO-IQ3_S
-  system_prompt: You are a helpful voice assistant named Bugatti. Answer concisely,
-    in complete sentences, in the language of the user.
+  base_url: http://host.docker.internal:8080/v1
+  api_key: ''
+  model: ''
+  system_prompt: You are a helpful voice assistant. Answer concisely, in complete
+    sentences, in the language of the user.
   temperature: 0.7
   max_tokens: -1
   history_turns: 12
@@ -177,8 +175,8 @@ ui:
   show_stt_tab: true
   show_chat_tab: true
 startup:
-  stt_model: nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
-  voice: avatar:bugatti
+  stt_model: ''
+  voice: ''
   tts_family: ''
   warmup: false
 auth:

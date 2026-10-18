@@ -45,6 +45,31 @@ class _Queued:
     future: asyncio.Future
 
 
+#: Families whose synthesis uses a single reference for the whole batch (see
+#: ``TTSEngine.synthesize_batch``): only items with the same reference may be grouped.
+CLONE_FAMILIES = ("base", "chatterbox", "chatterbox_turbo", "chatterbox_nano")
+
+
+def _batch_key(family: str, item: Dict[str, Any]):
+    """Identity of the synthesis call an item belongs to.
+
+    Grouping by family alone is not enough for the clone families: the engine
+    synthesizes a whole group from ``items[0]``'s reference, so two requests must
+    never share a batch when their clip, transcript, language or x-vector mode differ.
+    """
+    if family not in CLONE_FAMILIES:
+        return (family,)
+    prompt = item.get("voice_clone_prompt")
+    return (
+        family,
+        str(item.get("ref_audio") or ""),
+        str(item.get("ref_text") or ""),
+        bool(item.get("x_vector_only_mode")),
+        str(item.get("language") or ""),
+        id(prompt) if prompt is not None else 0,
+    )
+
+
 class BatchScheduler:
     def __init__(self, engine, batch_size: int = 4, window_ms: int = 25):
         self.engine = engine
@@ -52,9 +77,11 @@ class BatchScheduler:
         self.window = max(0, window_ms) / 1000.0
         self._queue: asyncio.Queue[_Queued] = asyncio.Queue()
         self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self) -> None:
         if self._task is None:
+            self._loop = asyncio.get_running_loop()
             self._task = asyncio.create_task(self._worker())
 
     async def stop(self) -> None:
@@ -104,20 +131,37 @@ class BatchScheduler:
             await asyncio.to_thread(self._run_batch, batch)
 
     def _run_batch(self, batch: List[_Queued]) -> None:
-        groups: Dict[str, List[_Queued]] = {}
+        groups: Dict[Any, List[_Queued]] = {}
         for entry in batch:
-            groups.setdefault(entry.family, []).append(entry)
+            groups.setdefault(_batch_key(entry.family, entry.item), []).append(entry)
 
-        for family, entries in groups.items():
+        for entries in groups.values():
+            family = entries[0].family
             items = [e.item for e in entries]
             try:
                 results = self.engine.synthesize_batch(family, items)
                 for entry, result in zip(entries, results, strict=False):
-                    if not entry.future.done():
-                        entry.future.set_result(result)
+                    self._settle(entry.future, result=result)
             except Exception as exc:  # propagate the error to every caller
                 note_cuda_oom(exc, family, items)
                 log.exception("Generation failed (family=%s, n=%d)", family, len(entries))
                 for entry in entries:
-                    if not entry.future.done():
-                        entry.future.set_exception(exc)
+                    self._settle(entry.future, exc=exc)
+
+    def _settle(self, future: asyncio.Future, *, result=None, exc: BaseException | None = None) -> None:
+        """Complete a future raised by the worker thread, on the event loop."""
+        if future.done():
+            return
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._do_settle, future, result, exc)
+        else:  # pragma: no cover - the scheduler is always started before use
+            self._do_settle(future, result, exc)
+
+    @staticmethod
+    def _do_settle(future: asyncio.Future, result, exc: BaseException | None) -> None:
+        if future.done():
+            return
+        if exc is not None:
+            future.set_exception(exc)
+        else:
+            future.set_result(result)

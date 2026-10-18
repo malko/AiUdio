@@ -59,6 +59,20 @@ def _run_turn(tokens) -> _Scheduler:
     return scheduler
 
 
+def test_chat_turn_echoes_the_turn_id():
+    sock = _Socket()
+    asyncio.run(
+        _chat_turn(
+            sock, Settings(), _Scheduler(), _Tokens(["Bonjour. Comment ça va ? "]), {},
+            [{"role": "user", "content": "salut"}], True, None, turn=7,
+        )
+    )
+    deltas = [e for e in sock.events if e["type"] == "llm.delta"]
+    audio = [e for e in sock.events if e["type"] == "audio.start"]
+    assert deltas and all(e["turn"] == 7 for e in deltas)
+    assert audio and all(e["turn"] == 7 for e in audio)
+
+
 def test_chat_turn_skips_punctuation_only_chunks():
     # The sentence splitter leaves the trailing "." in the buffer, and a sentence
     # released earlier empties the rest: a lone "." must not become a TTS call.

@@ -20,6 +20,7 @@ services:
       dockerfile: docker/stt.Dockerfile
       args:
         BACKEND: vulkan
+        NEMO_SPEECH_REF: ${NEMO_SPEECH_REF:-main}
     deploy:
       resources:
         reservations:

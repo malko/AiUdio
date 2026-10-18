@@ -90,6 +90,14 @@ class AvatarStore:
         for path in (self._meta(avatar_id), self.wav_path(avatar_id), self.photo_path(avatar_id)):
             path.unlink(missing_ok=True)
 
+    def _file_count(self, avatar_id: str) -> int:
+        """Files actually on disk for one voice (json + wav + optional png)."""
+        return sum(
+            1
+            for path in (self._meta(avatar_id), self.wav_path(avatar_id), self.photo_path(avatar_id))
+            if path.is_file()
+        )
+
     def hygiene(self) -> dict:
         """Audit the directory: what it holds, what is duplicated, what is stranded.
 
@@ -127,7 +135,7 @@ class AvatarStore:
             "by_kind": by_kind,
             "total_bytes": total,
             "duplicates": [
-                {"name": name, "ids": ids, "files": len(ids) * 2}
+                {"name": name, "ids": ids, "files": sum(self._file_count(i) for i in ids)}
                 for name, ids in by_name.items()
                 if len(ids) > 1
             ],

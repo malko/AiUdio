@@ -35,10 +35,8 @@ class ServerConfig(BaseModel):
 
 
 class PathsConfig(BaseModel):
-    output: str = "outputs"
     voices: str = "voices"
     reference_audio: str = "reference_audio"
-    logs: str = "logs"
 
 
 class ModelVariant(BaseModel):

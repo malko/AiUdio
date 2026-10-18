@@ -24,6 +24,7 @@ services:
       dockerfile: docker/stt.Dockerfile
       args:
         BACKEND: cpu
+        NEMO_SPEECH_REF: ${NEMO_SPEECH_REF:-main}
     deploy:
       resources:
         reservations:

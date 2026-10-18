@@ -251,8 +251,9 @@ def _reply(obj: dict) -> None:
 
 if __name__ == "__main__":
     # Running as a script puts this file's directory first on sys.path, which can
-    # shadow installed packages with same-named local modules (e.g. app/chatterbox.py
-    # vs the `chatterbox` package). Drop it. Then keep library prints off the protocol.
+    # shadow installed packages with same-named local modules. Drop it so the
+    # isolated worker only ever imports its own venv's packages. Then keep library
+    # prints off the JSON protocol stream.
     _HERE = os.path.dirname(os.path.abspath(__file__))
     sys.path = [p for p in sys.path if os.path.abspath(p or ".") != _HERE]
     sys.stdout = sys.stderr

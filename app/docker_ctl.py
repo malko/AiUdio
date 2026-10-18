@@ -217,10 +217,10 @@ async def status(socket: str, name: str) -> Dict[str, Any]:
     return describe(await find(socket, name))
 
 
-async def start(socket: str, name: str) -> Dict[str, Any]:
+async def start(socket: str, name: str, timeout: float = 30.0) -> Dict[str, Any]:
     info = await _container_id(socket, name)
     if not (info.get("State") or {}).get("Running"):
-        await _call(socket, "POST", f"/containers/{info['Id']}/start")
+        await _call(socket, "POST", f"/containers/{info['Id']}/start", timeout=timeout)
     return await status(socket, name)
 
 
@@ -272,7 +272,7 @@ async def set_model(
     if wanted == current:
         # Nothing to change: just make sure it is in the wanted state.
         if not (info.get("State") or {}).get("Running"):
-            return await start(socket, name) if start else describe(info)
+            return await start(socket, name, timeout=timeout) if start else describe(info)
         return await stop(socket, name) if not start else describe(info)
     cmd = wanted
 

@@ -469,3 +469,41 @@ def test_voice_bank_hygiene_reports_and_cleans_orphans(client, tmp_path):
     assert after["avatars"] == 3 and after["files"] == 5
     assert after["orphans"] == []
     assert (root / "bugatti.wav").is_file() and (root / "bugatti-3f2a1c.json").is_file()
+
+
+def test_multi_text_wav_has_a_single_header(client):
+    r = client.post("/api/tts", json={"text": ["One. Two.", "Three."], "format": "wav"})
+    assert r.status_code == 200, r.text
+    assert r.content[:4] == b"RIFF"
+    # One WAV file, not several concatenated blobs (which only play the first).
+    assert r.content.count(b"RIFF") == 1
+
+
+def test_non_admin_key_cannot_change_settings(auth_client):
+    headers = {"X-API-Key": "k-123"}  # a plain (non-admin) client key
+    assert auth_client.put(
+        "/api/settings", json={"llm": {"base_url": "http://x/v1"}}, headers=headers
+    ).status_code == 403
+    assert auth_client.post(
+        "/api/avatars", data={"name": "x", "prompt": "p"}, headers=headers
+    ).status_code == 403
+    assert auth_client.post(
+        "/api/models/select", json={"variant": "base:0.6B"}, headers=headers
+    ).status_code == 403
+    assert auth_client.post(
+        "/api/voices/load", json={"family": "custom_voice"}, headers=headers
+    ).status_code == 403
+    # The admin (HTTP Basic here) still can.
+    assert auth_client.put(
+        "/api/settings", json={"llm": {"base_url": "http://x/v1"}}, auth=ADMIN
+    ).status_code == 200
+
+
+def test_cors_preflight_is_not_blocked_by_auth(auth_client):
+    # A browser preflight carries no credentials: CORS (outermost) answers it.
+    r = auth_client.options(
+        "/api/tts",
+        headers={"Origin": "http://app.example", "Access-Control-Request-Method": "POST"},
+    )
+    assert r.status_code < 400, r.text
+    assert "access-control-allow-origin" in {k.lower() for k in r.headers}

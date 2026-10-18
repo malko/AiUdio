@@ -13,6 +13,8 @@ import logging
 import math
 import re
 import time
+from collections import OrderedDict
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -28,7 +30,7 @@ from . import __version__, apikeys, docker_ctl, vllm_backend
 from .audio import to_pcm16, wav_bytes
 from .avatars import Avatar, AvatarStore
 from .chatterbox_backend import is_available as is_chatterbox_available
-from .chunking import chunk_text
+from .chunking import chunk_text, concat_audio
 from .config import ConfigStore, Settings, get_store
 from .engine import TTSEngine, design_ref_text
 from .llm import LLMClient, build_messages, trim_history
@@ -72,11 +74,6 @@ def _fmt_s(seconds: Optional[float]) -> str:
 
 def _avatar_dir(settings: Settings) -> Path:
     return Path(settings.paths.voices) / "avatars"
-
-
-def _clone_family(settings: Settings) -> str:
-    """Family used to synthesize cloned avatars (global clone-engine setting)."""
-    return "chatterbox" if settings.models.clone_backend == "chatterbox" else "base"
 
 
 def _parse_expiry(value: Any, days: Any):
@@ -226,6 +223,14 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
             "enabled": settings.vllm.enabled,
             "base_url": settings.vllm.base_url,
             "path": settings.vllm.path,
+            "family": _vllm_family(settings),
+            "ref_root": settings.vllm.ref_root,
+            "model": settings.vllm.model,
+            "max_model_len": settings.vllm.max_model_len,
+            "enforce_eager": settings.vllm.enforce_eager,
+            "stage_memory": dict(settings.vllm.stage_memory or {}),
+            "sleep_after": settings.vllm.sleep_after,
+            "sleep_level": settings.vllm.sleep_level,
         },
         "server": {
             "log_level": settings.server.log_level,
@@ -310,8 +315,19 @@ def _item_from_request(settings: Settings, req: TTSRequest, text: str) -> Dict[s
 
 #: Families the vLLM-Omni service can serve (it loads a single checkpoint).
 _VLLM_FAMILIES = ("custom_voice", "base")
-#: Cache of inline reference clips: locator key → data URL.
-_REF_LOCATORS: Dict[str, str] = {}
+#: Cache of inline reference clips: locator key → data URL (bounded: a chat must
+#: not re-encode the same clip per sentence, but an unbounded map would grow with
+#: every distinct clip/voice ever used).
+_REF_LOCATORS: OrderedDict[str, str] = OrderedDict()
+_REF_LOCATORS_MAX = 64
+
+
+def _cache_locator(key: str, value: str) -> str:
+    _REF_LOCATORS[key] = value
+    _REF_LOCATORS.move_to_end(key)
+    while len(_REF_LOCATORS) > _REF_LOCATORS_MAX:
+        _REF_LOCATORS.popitem(last=False)
+    return value
 
 
 def _vllm_family(settings: Settings) -> str:
@@ -572,6 +588,7 @@ async def _vllm_reconcile(settings: Settings) -> None:
                 await docker_ctl.set_model(
                     cfg.socket, cfg.container, wanted_model or None,
                     values=values, switches=switches, start=bool(settings.vllm.enabled),
+                    timeout=cfg.start_timeout,
                 )
                 _forget_vllm_sleep()
         except docker_ctl.DockerError as exc:
@@ -632,8 +649,7 @@ def _ref_locator(value: str) -> str:
     key = f"{path}:{stat.st_mtime_ns}:{stat.st_size}"
     cached = _REF_LOCATORS.get(key)
     if cached is None:
-        cached = vllm_backend.audio_data_url(path.read_bytes())
-        _REF_LOCATORS[key] = cached
+        cached = _cache_locator(key, vllm_backend.audio_data_url(path.read_bytes()))
     return cached
 
 
@@ -668,10 +684,16 @@ def _vllm_reference(
         ref_text = (avatar.ref_text or "").strip() or None
         return locator, ref_text, bool(avatar.x_vector_only) or not ref_text
     if req.ref_audio:
-        if req.ref_audio.startswith(("http://", "https://", "data:")):
-            locator = req.ref_audio
+        # A client-supplied reference must obey the same policy as the local engine
+        # (SSRF / local file disclosure): the chat routes reach this helper without
+        # a prior `validate_media_ref`.
+        ref = validate_media_ref(req.ref_audio, settings, settings.paths.reference_audio)
+        if not ref:
+            return None
+        if ref.startswith(("http://", "https://", "data:")):
+            locator = ref
         else:
-            locator = _clip_locator(settings, Path(req.ref_audio))
+            locator = _clip_locator(settings, Path(ref))
         if not locator:
             return None
         ref_text = (req.ref_text or "").strip() or None
@@ -879,7 +901,7 @@ async def _vllm_lifecycle(settings: Settings, *, start: bool) -> None:
                 )
                 return
             if not state.get("running"):
-                await docker_ctl.start(cfg.socket, cfg.container)
+                await docker_ctl.start(cfg.socket, cfg.container, timeout=cfg.start_timeout)
                 log.info("vLLM-Omni container %s started (engine selected)", cfg.container)
             await _warm_vllm(settings, attempts=20, delay=15.0)
             _vllm_mark_used()
@@ -1003,7 +1025,25 @@ def create_app(
     )
     llm = LLMClient(settings.llm)
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Start/stop the background workers with the application."""
+        await scheduler.start()
+        log.info("Gateway started (auth=%s)", app.state.settings.auth.enabled)
+        tasks = [
+            asyncio.create_task(_apply_startup(app)),
+            asyncio.create_task(_vllm_idle_loop(app.state)),
+        ]
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await scheduler.stop()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="AiUdio Server",
         version=__version__,
         description=(
@@ -1028,15 +1068,6 @@ def create_app(
     app.state.scheduler = scheduler
     app.state.llm = llm
 
-    if settings.server.cors_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=settings.server.cors_origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-
     @app.middleware("http")
     async def _auth_middleware(request: Request, call_next):
         metrics.incr("http_requests")
@@ -1048,16 +1079,17 @@ def create_app(
             )
         return await call_next(request)
 
-    @app.on_event("startup")
-    async def _startup() -> None:
-        await scheduler.start()
-        log.info("Gateway started (auth=%s)", app.state.settings.auth.enabled)
-        asyncio.create_task(_apply_startup(app))
-        asyncio.create_task(_vllm_idle_loop(app.state))
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        await scheduler.stop()
+    if settings.server.cors_origins:
+        # Added *after* the auth middleware so CORS remains the outermost layer:
+        # a browser preflight (OPTIONS) carries no credentials and must be answered
+        # by CORS rather than rejected by the auth check.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.server.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # ------------------------------------------------------------------ pages
     @app.get("/health", tags=["Service"])
@@ -1168,8 +1200,9 @@ def create_app(
         }
 
     @app.post("/api/models/select", tags=["Models"])
-    async def api_models_select(payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def api_models_select(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         """Point a family at one of its variants (e.g. 0.6B / 1.7B)."""
+        _admin_ok(request)
         wanted = str(payload.get("variant") or payload.get("id") or payload.get("repo") or "").strip()
         variant = next(
             (v for v in app.state.settings.models.variants if wanted in (v.id, v.repo)),
@@ -1197,7 +1230,8 @@ def create_app(
         }
 
     @app.post("/api/models/load", tags=["Models"])
-    async def api_models_load(payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def api_models_load(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+        _admin_ok(request)
         family = str(payload.get("family", "")).strip()
         if family not in app.state.settings.models.registry:
             raise HTTPException(400, f"Unknown family: {family}")
@@ -1209,7 +1243,8 @@ def create_app(
         return {"loaded": engine.loaded_families(), "active_family": engine.active_family()}
 
     @app.post("/api/models/unload", tags=["Models"])
-    async def api_models_unload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def api_models_unload(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+        _admin_ok(request)
         family = payload.get("family")
         await asyncio.to_thread(engine.unload, family)
         return {"loaded": engine.loaded_families()}
@@ -1227,8 +1262,9 @@ def create_app(
 
     # ------------------------------------------------------------- avatars
     @app.post("/api/voices/load", tags=["Models"])
-    async def api_voices_load(payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def api_voices_load(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         """Warm a conversation voice: load the model and prepare its clone prompt."""
+        _admin_ok(request)
         avatar_id = str(payload.get("avatar") or "").strip()
         try:
             if avatar_id:
@@ -1281,6 +1317,7 @@ def create_app(
 
     @app.post("/api/avatars", tags=["Avatars"])
     async def create_avatar(
+        request: Request,
         name: str = Form(...),
         prompt: str = Form(""),
         language: str = Form("Auto"),
@@ -1290,6 +1327,7 @@ def create_app(
         ref_audio: Optional[UploadFile] = File(None),
         image: Optional[UploadFile] = File(None),
     ) -> Dict[str, Any]:
+        _admin_ok(request)
         store = AvatarStore(_avatar_dir(app.state.settings))
         aid = store.new_id(name)
         avatar = Avatar(id=aid, name=name, kind="clone",
@@ -1324,6 +1362,7 @@ def create_app(
     @app.put("/api/avatars/{avatar_id}", tags=["Avatars"])
     async def update_avatar(
         avatar_id: str,
+        request: Request,
         name: Optional[str] = Form(None),
         prompt: Optional[str] = Form(None),
         language: Optional[str] = Form(None),
@@ -1333,6 +1372,7 @@ def create_app(
         ref_audio: Optional[UploadFile] = File(None),
         image: Optional[UploadFile] = File(None),
     ) -> Dict[str, Any]:
+        _admin_ok(request)
         store = AvatarStore(_avatar_dir(app.state.settings))
         avatar = store.get(avatar_id)
         if avatar is None:
@@ -1368,7 +1408,8 @@ def create_app(
         return asdict(store.get(avatar_id))
 
     @app.post("/api/avatars/{avatar_id}/regenerate", tags=["Avatars"])
-    async def regenerate_avatar(avatar_id: str) -> Dict[str, Any]:
+    async def regenerate_avatar(avatar_id: str, request: Request) -> Dict[str, Any]:
+        _admin_ok(request)
         store = AvatarStore(_avatar_dir(app.state.settings))
         avatar = store.get(avatar_id)
         if avatar is None:
@@ -1384,7 +1425,8 @@ def create_app(
         return asdict(store.get(avatar_id))
 
     @app.delete("/api/avatars/{avatar_id}", tags=["Avatars"])
-    async def delete_avatar(avatar_id: str) -> Dict[str, Any]:
+    async def delete_avatar(avatar_id: str, request: Request) -> Dict[str, Any]:
+        _admin_ok(request)
         store = AvatarStore(_avatar_dir(app.state.settings))
         store.delete(avatar_id)
         await asyncio.to_thread(engine.clear_clone_prompts)
@@ -1396,8 +1438,9 @@ def create_app(
         return await asyncio.to_thread(AvatarStore(_avatar_dir(app.state.settings)).hygiene)
 
     @app.post("/api/avatars/hygiene/clean", tags=["Avatars"])
-    async def avatars_clean() -> Dict[str, Any]:
+    async def avatars_clean(request: Request) -> Dict[str, Any]:
         """Delete the files no voice entry references (a voice is never touched)."""
+        _admin_ok(request)
         store = AvatarStore(_avatar_dir(app.state.settings))
         removed = await asyncio.to_thread(store.clean_orphans)
         if removed:
@@ -1420,7 +1463,8 @@ def create_app(
         return FileResponse(str(path))
 
     @app.put("/api/settings", tags=["Settings"])
-    async def api_settings_update(payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def api_settings_update(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+        _admin_ok(request)
         allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models",
                    "vllm", "server", "docker"}
         sections = {k: v for k, v in payload.items() if k in allowed}
@@ -1562,7 +1606,11 @@ def create_app(
         if not cfg.control:
             raise HTTPException(409, "Container control is disabled (docker.control)")
         try:
-            state = await getattr(docker_ctl, action)(cfg.socket, cfg.container)
+            operation = getattr(docker_ctl, action)
+            if action == "start":
+                state = await operation(cfg.socket, cfg.container, timeout=cfg.start_timeout)
+            else:
+                state = await operation(cfg.socket, cfg.container)
         except docker_ctl.DockerError as exc:
             raise HTTPException(502, str(exc)) from exc
         if action in ("start", "restart"):
@@ -1599,7 +1647,7 @@ def create_app(
             values, switches = _vllm_flag_plan(app.state.settings, model)
             state = await docker_ctl.set_model(
                 cfg.socket, cfg.container, model, values=values, switches=switches,
-                start=updated_enabled,
+                start=updated_enabled, timeout=cfg.start_timeout,
             )
         except docker_ctl.DockerError as exc:
             raise HTTPException(502, str(exc)) from exc
@@ -1728,12 +1776,24 @@ def create_app(
         except Exception as exc:
             raise HTTPException(503, f"Generation failed: {exc}") from exc
         fmt = req.resolve_format(app.state.settings.audio.format)
-        out_bytes: List[bytes] = [
-            to_pcm16(wav) if fmt == "pcm" else wav_bytes(wav, sample_rate)
-            for wav, sample_rate in results
-        ]
-        body = b"".join(out_bytes)
-        media = "audio/pcm" if fmt == "pcm" else "audio/wav"
+        if fmt == "pcm":
+            body = b"".join(to_pcm16(wav) for wav, _sr in results)
+            media = "audio/pcm"
+        elif len(results) == 1:
+            body = wav_bytes(results[0][0], results[0][1])
+            media = "audio/wav"
+        else:
+            # Several texts: concatenate the *audio* and emit a single WAV file.
+            # Joining the per-text WAV blobs would stack RIFF headers and only the
+            # first text would play.
+            sample_rate = results[0][1]
+            combined = concat_audio(
+                [wav for wav, _sr in results],
+                sample_rate,
+                app.state.settings.chunking.silence_ms,
+            )
+            body = wav_bytes(combined, sample_rate)
+            media = "audio/wav"
         return Response(content=body, media_type=media)
 
     async def _stream_http(settings, sched, req, text) -> AsyncIterator[bytes]:
@@ -1822,7 +1882,8 @@ def create_app(
         }
 
     @app.post("/api/stt/download", tags=["STT"])
-    async def stt_download(payload: Dict[str, Any]) -> StreamingResponse:
+    async def stt_download(payload: Dict[str, Any], request: Request) -> StreamingResponse:
+        _admin_ok(request)
         cfg = app.state.settings.stt
         if not cfg.enabled:
             raise HTTPException(501, "STT disabled")
@@ -1973,7 +2034,7 @@ def create_app(
             async with send_lock:
                 await websocket.send_json(obj)
 
-        async def run_turn(user_text: str) -> None:
+        async def run_turn(user_text: str, turn_id: Optional[int] = None) -> None:
             system = app.state.settings.llm.system_prompt
             if personality:
                 system = f"{system}\n\n{personality}" if system else personality
@@ -1985,18 +2046,18 @@ def create_app(
             try:
                 reply = await _chat_turn(
                     websocket, app.state.settings, scheduler, app.state.llm,
-                    tts_config, messages, speak, send_lock,
+                    tts_config, messages, speak, send_lock, turn=turn_id,
                 )
             except asyncio.CancelledError:
-                await send({"type": "turn.cancelled"})
+                await send({"type": "turn.cancelled", "turn": turn_id})
                 raise
             except Exception as exc:
                 log.exception("Chat turn failed")
-                await send({"type": "error", "message": str(exc)})
+                await send({"type": "error", "message": str(exc), "turn": turn_id})
                 return
             history.append({"role": "user", "content": user_text})
             history.append({"role": "assistant", "content": reply})
-            await send({"type": "llm.done", "text": reply})
+            await send({"type": "llm.done", "text": reply, "turn": turn_id})
 
         def cancel_turn() -> None:
             if turn is not None and not turn.done():
@@ -2022,8 +2083,14 @@ def create_app(
                     if not user_text:
                         continue
                     cancel_turn()
-                    await send({"type": "transcript", "text": user_text})
-                    turn = asyncio.create_task(run_turn(user_text))
+                    # Optional client turn id, echoed on every event of the turn so
+                    # a late `turn.cancelled`/`error` from the previous turn cannot
+                    # be mistaken for the current one.
+                    turn_id = event.get("turn")
+                    if not isinstance(turn_id, int):
+                        turn_id = None
+                    await send({"type": "transcript", "text": user_text, "turn": turn_id})
+                    turn = asyncio.create_task(run_turn(user_text, turn_id))
         except WebSocketDisconnect:
             cancel_turn()
             return
@@ -2278,6 +2345,7 @@ def _pop_chat_chunks(
 async def _chat_turn(
     websocket, settings, scheduler, llm, tts_config, messages,
     speak: bool = True, send_lock: Optional[asyncio.Lock] = None,
+    turn: Optional[int] = None,
 ) -> str:
     req = TTSRequest(**{k: v for k, v in (tts_config or {}).items() if k in TTSRequest.model_fields})
     send_lock = send_lock or asyncio.Lock()
@@ -2327,10 +2395,12 @@ async def _chat_turn(
                         await websocket.send_json({
                             "type": "audio.start", "sentence_index": index,
                             "sentence_text": sentence, "format": "pcm", "sample_rate": sr,
+                            "turn": turn,
                         })
                         await websocket.send_bytes(pcm)
                         await websocket.send_json({
                             "type": "audio.done", "sentence_index": index, "total_bytes": len(pcm),
+                            "turn": turn,
                         })
                     index += 1
                     chunk_audio += len(pcm) / (2.0 * (sr or 1))  # mono PCM16
@@ -2360,7 +2430,7 @@ async def _chat_turn(
                         audio_total, margin,
                     )
             except Exception as exc:  # TTS failure must not break the text conversation
-                await send_json({"type": "error", "message": f"TTS: {exc}"})
+                await send_json({"type": "error", "message": f"TTS: {exc}", "turn": turn})
 
     worker = asyncio.create_task(tts_worker()) if speak else None
     try:
@@ -2369,7 +2439,7 @@ async def _chat_turn(
                 first_token = time.perf_counter() - started
             last_token = time.perf_counter() - started
             reply += token
-            await send_json({"type": "llm.delta", "text": token})
+            await send_json({"type": "llm.delta", "text": token, "turn": turn})
             if speak:
                 buffer += token
                 # Low latency first: the first chunk starts at the first sentence (or
