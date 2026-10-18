@@ -1876,6 +1876,11 @@ def create_app(
             if not name:
                 raise HTTPException(400, "A name is required")
             record.name = name
+        if "expires_at" in payload or "expires_in_days" in payload:
+            # `0` / `null` clears the expiry ("never").
+            record.expires_at = _parse_expiry(
+                payload.get("expires_at"), payload.get("expires_in_days")
+            )
         if "text" in payload:
             # `null` (or {}) clears the override: the key follows the global policy.
             record.text = _parse_policy(payload.get("text"))

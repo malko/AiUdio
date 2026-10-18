@@ -34,6 +34,32 @@ header h1 { font-size: 1.15rem; margin: 0; }
 .dot.ok { color: var(--ok); }
 .dot.err { color: var(--err); }
 
+/* Sticky chrome: the header and the tab bar stay visible inside a long tab. */
+.topbar {
+  position: sticky; top: 0; z-index: 30;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
+#session-chip { display: inline-flex; align-items: center; gap: 8px; }
+#session-chip button { min-height: 30px; min-width: 0; padding: 4px 10px; }
+
+/* Settings sections are collapsible cards. */
+details.card { padding: 0; }
+details.card > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 16px; font-size: 1rem; font-weight: 600; color: var(--text);
+}
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary:hover { color: var(--accent); }
+details.card > summary::after {
+  content: "▸"; margin-left: auto; color: var(--muted); transition: transform .15s;
+}
+details.card[open] > summary { border-bottom: 1px solid var(--border); }
+details.card[open] > summary::after { transform: rotate(90deg); }
+details.card > *:not(summary) { margin-left: 16px; margin-right: 16px; }
+details.card > summary + * { margin-top: 16px; }
+details.card > *:last-child { margin-bottom: 16px; }
+details.card > .row { margin-left: 16px; margin-right: 16px; }
+
 .tabs { display: flex; gap: 4px; padding: 10px 18px 0; }
 .tabs button {
   background: transparent; color: var(--muted); border: 1px solid transparent;
@@ -223,6 +249,9 @@ button.danger:hover { background: var(--err); border-color: var(--err); color: #
 
 .keys-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: .85rem; }
 .keys-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+.keys-table tr:last-child td { border-bottom: none; }
+.keys-table .key-policy { color: var(--muted); font-size: .78rem; }
+.keys-table button { min-width: 0; min-height: 30px; padding: 4px 10px; }
 #set-key-new { margin: 8px 0; }
 #set-key-new code {
   background: var(--bg); padding: 2px 6px; border-radius: 4px;

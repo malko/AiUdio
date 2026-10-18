@@ -341,6 +341,16 @@ def test_api_key_text_policy(auth_client, monkeypatch):
         f"/api/api-keys/{created['id']}", json={"text": None}, **admin
     ).json()["text"] is None
 
+    # The expiry is editable too (and `null` means "never").
+    patched = auth_client.patch(
+        f"/api/api-keys/{created['id']}", json={"expires_in_days": 2}, **admin
+    ).json()
+    assert patched["expires_at"] and patched["expired"] is False
+    patched = auth_client.patch(
+        f"/api/api-keys/{created['id']}", json={"expires_at": None}, **admin
+    ).json()
+    assert patched["expires_at"] is None
+
 
 def test_api_key_patch_is_admin_only_and_validated(auth_client):
     admin = {"auth": ("admin", "s3cret")}

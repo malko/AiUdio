@@ -2182,29 +2182,16 @@ $("#chat-vad").addEventListener("click", () => {
 
 // ------------------------------------------------------------- settings tab
 function buildStartupVoiceSelect() {
-  const sel = $("#set-startup-voice");
-  if (!sel) return;
-  const current = sel.value || (CONFIG ? CONFIG.startup.voice : "");
-  sel.innerHTML = "";
-  const add = (value, label) => {
-    const o = document.createElement("option"); o.value = value; o.textContent = label; sel.appendChild(o);
-  };
-  add("", "—");
-  add("custom_voice", ttsName("custom_voice"));
-  add("voice_design", ttsName("voice_design"));
-  add("base", ttsName("base"));
-  avatars.forEach((a) => add(`avatar:${a.id}`, `${t("avatars.voicePrefix")}: ${a.name}`));
-  sel.value = current || "";
+  // The TTS preload settings (`startup.voice`, `tts_family`, `warmup`) stay in
+  // config.yaml / env: they only save the *first* call after a boot, and the chat
+  // keeps its own voice choice on the client side.
 }
 
 $("#set-startup-save").addEventListener("click", async () => {
   const status = $("#set-startup-status");
   status.textContent = "…";
-  const voice = $("#set-startup-voice").value;
-  // A cloned voice is preloaded with the default clone engine (Settings → Clone
-  // engine): there is a single setting, so nothing else to save here.
   const payload = {
-    startup: { stt_model: settingsSttPicker ? settingsSttPicker.value : "", voice },
+    startup: { stt_model: settingsSttPicker ? settingsSttPicker.value : "" },
   };
   try {
     const r = await apiFetch("/api/settings", {
@@ -2284,11 +2271,6 @@ $("#gen-save").addEventListener("click", async () => {
   // One chunk must fit in a single generation: the server clamps this too (40..600).
   setIf(payload.chunking, "max_chars",
     maxChars === undefined ? undefined : Math.min(600, Math.max(40, maxChars)));
-  payload.text = {
-    cleanup: $("#gen-cleanup").value,
-    emoji: $("#gen-emoji").value,
-    code_blocks: $("#gen-codeblocks").value,
-  };
   if ($("#gen-format").value) payload.audio.format = $("#gen-format").value;
   try {
     const r = await apiFetch("/api/settings", {
@@ -2309,6 +2291,33 @@ $("#gen-save").addEventListener("click", async () => {
 });
 
 $("#set-clone-backend").addEventListener("change", toggleCloneEngineFields);
+
+// Text cleanup: its own section (it is a server-wide policy, and an API key can
+// override it per client).
+$("#text-save").addEventListener("click", async () => {
+  const status = $("#text-status");
+  status.textContent = "…";
+  const payload = {
+    text: {
+      cleanup: $("#gen-cleanup").value,
+      emoji: $("#gen-emoji").value,
+      code_blocks: $("#gen-codeblocks").value,
+    },
+  };
+  try {
+    const r = await apiFetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const raw = await r.text();
+    if (!r.ok) throw new Error(errorFromBody(raw));
+    const cfg = JSON.parse(raw);
+    CONFIG = Object.assign({}, CONFIG, { text: cfg.text || {} });
+    applyGenerationFields(cfg);
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+});
 
 $("#set-clone-save").addEventListener("click", async () => {
   const status = $("#set-clone-status");
@@ -2562,8 +2571,14 @@ $("#set-llm-ping").addEventListener("click", async () => {
 
 // ------------------------------------------------- admin session & API keys
 function sessionState(text, cls) {
-  const el = $("#set-session-state");
-  if (el) { el.textContent = text; el.className = cls || "muted grow"; }
+  const chip = $("#session-chip");
+  const el = $("#session-label");
+  if (el) { el.textContent = text || ""; el.className = cls || "muted"; }
+  const enabled = !!(CONFIG && CONFIG.auth_required);
+  const logged = !!apiKey();
+  if ($("#session-login")) $("#session-login").hidden = !enabled || logged;
+  if ($("#session-logout")) $("#session-logout").hidden = !enabled || !logged;
+  if (chip) chip.hidden = !enabled;
 }
 
 function fmtDate(v) {
@@ -2588,6 +2603,8 @@ async function logoutSession() {
   localStorage.removeItem("apiKey");
 }
 
+let lastKeys = [];
+
 function renderApiKeys(keys) {
   const body = $("#set-keys-body");
   if (!body) return;
@@ -2595,44 +2612,43 @@ function renderApiKeys(keys) {
   if (!keys.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 7; td.className = "muted"; td.textContent = t("settings.noKeys");
+    td.colSpan = 4; td.className = "muted"; td.textContent = t("settings.noKeys");
     tr.appendChild(td); body.appendChild(tr);
     return;
   }
   keys.forEach((k) => {
     const tr = document.createElement("tr");
-    const label = k.name || "—";
-    const cells = [
-      label,
-      k.prefix || "—",
-      fmtDate(k.created_at),
-      k.expires_at ? fmtDate(k.expires_at) : t("settings.never"),
-      k.last_used_at ? fmtDate(k.last_used_at) : "—",
-    ];
-    cells.forEach((c) => { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); });
-    const policy = document.createElement("td");
-    policy.title = t("settings.keyTextHint");
-    ["cleanup", "emoji", "code_blocks"].forEach((field) => {
-      policy.appendChild(keyPolicySelect(k.id, field, (k.text || {})[field]));
-    });
-    tr.appendChild(policy);
-    const actions = document.createElement("td");
+    const nameCell = document.createElement("td");
+    const name = document.createElement("div");
+    name.textContent = k.name || "—";
     if (k.expired) {
       const badge = document.createElement("span");
-      badge.className = "muted"; badge.textContent = `${t("settings.expired")} `;
-      actions.appendChild(badge);
+      badge.className = "muted";
+      badge.textContent = ` ${t("settings.expired")}`;
+      name.appendChild(badge);
     }
-    const del = document.createElement("button");
-    del.textContent = t("settings.delete");
-    del.addEventListener("click", () => deleteApiKey(k.id));
-    actions.appendChild(del);
+    nameCell.appendChild(name);
+    const policy = policySummary(k.text);
+    if (policy) {
+      const line = document.createElement("div");
+      line.className = "key-policy";
+      line.textContent = policy;
+      nameCell.appendChild(line);
+    }
+    tr.appendChild(nameCell);
+    [fmtDate(k.created_at), k.expires_at ? fmtDate(k.expires_at) : t("settings.never")]
+      .forEach((c) => { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); });
+    const actions = document.createElement("td");
+    const edit = document.createElement("button");
+    edit.textContent = t("settings.edit");
+    edit.addEventListener("click", () => openKeyDialog(k.id));
+    actions.appendChild(edit);
     tr.appendChild(actions);
     body.appendChild(tr);
   });
 }
 
-// Per-key text policy: each field is a select whose "" option means "inherit the
-// global setting" (the key then stores no override for that field).
+// Per-key text policy: a field left on "" inherits the global setting.
 const KEY_POLICY_FIELDS = {
   cleanup: [["off", "settings.cleanupOff"], ["light", "settings.cleanupLight"],
             ["llm", "settings.cleanupLlm"]],
@@ -2641,46 +2657,135 @@ const KEY_POLICY_FIELDS = {
   code_blocks: [["drop", "settings.codeDrop"], ["announce", "settings.codeAnnounce"]],
 };
 
-function keyPolicySelect(keyId, field, value) {
-  const sel = document.createElement("select");
-  sel.dataset.key = keyId;
-  sel.dataset.field = field;
-  const add = (v, label) => {
-    const o = document.createElement("option");
-    o.value = v;
-    o.textContent = label;
-    sel.appendChild(o);
-  };
-  add("", t("settings.inherit"));
-  KEY_POLICY_FIELDS[field].forEach(([v, label]) => add(v, t(label)));
-  sel.value = value || "";
-  sel.addEventListener("change", () => patchApiKey(keyId));
-  return sel;
+function policyLabel(field, value) {
+  const entry = KEY_POLICY_FIELDS[field].find(([v]) => v === value);
+  return entry ? t(entry[1]) : value;
 }
 
-async function patchApiKey(id) {
-  const status = $("#set-keys-status");
-  const text = {};
-  document.querySelectorAll(`select[data-key="${CSS.escape(id)}"]`).forEach((sel) => {
-    if (sel.value) text[sel.dataset.field] = sel.value;
-  });
+function policySummary(text) {
+  if (!text) return "";
+  return Object.keys(KEY_POLICY_FIELDS)
+    .filter((f) => text[f])
+    .map((f) => `${t("settings.textCleanup")}: ${policyLabel(f, text[f])}`)
+    .join(" · ");
+}
+
+function policyFields() {
+  return {
+    cleanup: $("#kd-cleanup").value,
+    emoji: $("#kd-emoji").value,
+    code_blocks: $("#kd-codeblocks").value,
+  };
+}
+
+function applyPolicyToDialog(text) {
+  const policy = text || {};
+  $("#kd-cleanup").value = policy.cleanup || "";
+  $("#kd-emoji").value = policy.emoji || "";
+  $("#kd-codeblocks").value = policy.code_blocks || "";
+}
+
+function openKeyDialog(id) {
+  const dlg = $("#key-dialog");
+  dlg.dataset.id = id || "";
+  dlg.dataset.created = "";
+  $("#kd-status").textContent = "";
+  $("#kd-name").value = "";
+  $("#kd-days").value = "";
+  applyPolicyToDialog(null);
+  $("#kd-delete").hidden = !id;
+  $("#kd-title").textContent = id ? t("settings.keyEdit") : t("settings.keyNew");
+  if (!id) {
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
+    return;
+  }
+  const key = (lastKeys || []).find((k) => k.id === id) || {};
+  $("#kd-name").value = key.name || "";
+  applyPolicyToDialog(key.text);
+  if (key.expires_at) {
+    const days = Math.max(0, Math.round((new Date(key.expires_at) - Date.now()) / 86400000));
+    $("#kd-days").value = String(days);
+  }
+  if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
+}
+
+async function saveKeyDialog() {
+  const dlg = $("#key-dialog");
+  const id = dlg.dataset.id;
+  const status = $("#kd-status");
+  const name = $("#kd-name").value.trim();
+  if (!name) { status.textContent = t("settings.keyNameRequired"); return; }
+  const days = parseInt($("#kd-days").value, 10);
+  const expiry = Number.isFinite(days) && days > 0 ? { expires_in_days: days } : { expires_at: null };
+  const text = policyFields();
+  const hasPolicy = Object.keys(text).some((f) => text[f]);
   status.textContent = "…";
   try {
-    const r = await apiFetch(`/api/api-keys/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: Object.keys(text).length ? text : null }),
-    });
-    if (!r.ok) throw new Error(errorFromBody(await r.text()));
+    let r;
+    if (id) {
+      const body = Object.assign({ name, text: hasPolicy ? text : null }, expiry);
+      r = await apiFetch(`/api/api-keys/${encodeURIComponent(id)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      const body = Object.assign({ name }, expiry);
+      if (hasPolicy) body.text = text;
+      r = await apiFetch("/api/api-keys", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+    const raw = await r.text();
+    if (!r.ok) throw new Error(errorFromBody(raw));
+    const data = JSON.parse(raw);
+    if (data.key) showNewKey(data.key);
+    dlg.close();
     await loadApiKeys();
-    status.textContent = t("status.saved");
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }
 }
 
+async function deleteKeyFromDialog() {
+  const id = $("#key-dialog").dataset.id;
+  if (!id) return;
+  const status = $("#kd-status");
+  status.textContent = "…";
+  try {
+    const r = await apiFetch(`/api/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(errorFromBody(await r.text()));
+    $("#key-dialog").close();
+    await loadApiKeys();
+    $("#set-keys-status").textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
+}
+
+function showNewKey(secret) {
+  const box = $("#set-key-new");
+  box.textContent = "";
+  const label = document.createElement("span");
+  label.textContent = `${t("settings.newKey")} `;
+  const code = document.createElement("code");
+  code.textContent = secret;
+  const copy = document.createElement("button");
+  copy.textContent = t("settings.copy");
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(secret);
+      copy.textContent = t("settings.copied");
+    } catch (e) {
+      copy.textContent = t("status.error");
+    }
+  });
+  box.appendChild(label); box.appendChild(code); box.appendChild(copy);
+}
+
 async function loadApiKeys() {
   const wrap = $("#set-keys-wrap");
+  applyAccessState();
   if (!wrap) return;
   if (!(CONFIG && CONFIG.auth_required)) {
     wrap.hidden = true;
@@ -2692,111 +2797,58 @@ async function loadApiKeys() {
     if (!data.enabled) { wrap.hidden = true; return; }
     if ($("#set-keys-disabled")) $("#set-keys-disabled").hidden = true;
     wrap.hidden = false;
-    renderApiKeys(data.keys || []);
-    sessionState(t("settings.sessionActive"), "muted grow");
+    lastKeys = data.keys || [];
+    renderApiKeys(lastKeys);
+    sessionState(t("settings.sessionActive"));
   } catch (e) {
     wrap.hidden = true;
-    sessionState(t("settings.notAdmin"), "muted grow");
-  }
-}
-
-async function createApiKey() {
-  const name = $("#set-key-name").value.trim();
-  const days = parseInt($("#set-key-days").value, 10);
-  const status = $("#set-keys-status");
-  if (!name) { status.textContent = t("settings.keyNameRequired"); return; }
-  status.textContent = "…";
-  try {
-    const payload = { name };
-    if (Number.isFinite(days) && days > 0) payload.expires_in_days = days;
-    const textPolicy = {};
-    [["cleanup", "set-key-cleanup"], ["emoji", "set-key-emoji"],
-     ["code_blocks", "set-key-codeblocks"]].forEach(([field, id]) => {
-      const sel = $(`#${id}`);
-      if (sel && sel.value) textPolicy[field] = sel.value;
-    });
-    if (Object.keys(textPolicy).length) payload.text = textPolicy;
-    const r = await apiFetch("/api/api-keys", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    });
-    const text = await r.text();
-    if (!r.ok) {
-      const detail = errorFromBody(text);
-      throw new Error(detail);
-    }
-    const data = JSON.parse(text);
-    const box = $("#set-key-new");
-    box.textContent = "";
-    const label = document.createElement("span");
-    label.textContent = `${t("settings.newKey")} `;
-    const code = document.createElement("code");
-    code.textContent = data.key;
-    const copy = document.createElement("button");
-    copy.textContent = t("settings.copy");
-    copy.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(data.key);
-        copy.textContent = t("settings.copied");
-      } catch (e) {
-        copy.textContent = t("status.error");
-      }
-    });
-    box.appendChild(label); box.appendChild(code); box.appendChild(copy);
-    $("#set-key-name").value = "";
-    $("#set-key-days").value = "";
-    ["set-key-cleanup", "set-key-emoji", "set-key-codeblocks"].forEach((id) => {
-      if ($(`#${id}`)) $(`#${id}`).value = "";
-    });
-    status.textContent = "";
-    await loadApiKeys();
-  } catch (e) {
-    status.textContent = `${t("status.error")} ${e}`;
-  }
-}
-
-async function deleteApiKey(id) {
-  const status = $("#set-keys-status");
-  status.textContent = "…";
-  try {
-    const r = await apiFetch(`/api/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!r.ok) {
-      const detail = errorFromBody(await r.text());
-      throw new Error(detail);
-    }
-    await loadApiKeys();
-    status.textContent = t("status.saved");
-  } catch (e) {
-    status.textContent = `${t("status.error")} ${e}`;
+    sessionState(t("settings.notAdmin"));
   }
 }
 
 function applyAccessState() {
   const enabled = !!(CONFIG && CONFIG.auth_required);
-  if ($("#set-session-login")) $("#set-session-login").hidden = !enabled;
-  if ($("#set-session-logout")) $("#set-session-logout").hidden = !enabled;
+  sessionState(enabled ? "" : t("settings.accessDisabled"));
   if (!enabled) {
-    sessionState(t("settings.accessDisabled"), "muted grow");
     if ($("#set-keys-wrap")) $("#set-keys-wrap").hidden = true;
     if ($("#set-keys-disabled")) $("#set-keys-disabled").hidden = false;
   }
 }
 
-$("#set-session-login").addEventListener("click", async () => {
+// The API-key dialog (create and edit share it; delete lives in it too).
+$("#set-key-create").addEventListener("click", () => openKeyDialog(""));
+$("#kd-close").addEventListener("click", () => $("#key-dialog").close());
+$("#kd-save").addEventListener("click", saveKeyDialog);
+$("#kd-delete").addEventListener("click", deleteKeyFromDialog);
+
+$("#session-login").addEventListener("click", async () => {
   try {
     await ensureSession();
-    sessionState(t("settings.sessionActive"), "muted grow");
     await loadApiKeys();
   } catch (e) {
-    sessionState(`${t("settings.loginFailed")}: ${e}`, "muted grow");
+    sessionState(`${t("settings.loginFailed")}: ${e}`);
   }
 });
 
-$("#set-session-logout").addEventListener("click", async () => {
+$("#session-logout").addEventListener("click", async () => {
   await logoutSession();
-  sessionState(t("settings.sessionEnded"), "muted grow");
-  applyAccessState();
+  await loadApiKeys();
 });
 
-$("#set-key-create").addEventListener("click", createApiKey);
+// Settings sections are `<details>` accordions: remember which ones are open.
+function initSettingsSections() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("settingsSections") || "{}"); } catch (e) { saved = {}; }
+  const sections = document.querySelectorAll("#tab-settings details.card");
+  sections.forEach((sec, idx) => {
+    if (sec.id in saved) sec.open = !!saved[sec.id];
+    else sec.open = idx < 2;      // the two most used ones start open
+    sec.addEventListener("toggle", () => {
+      saved[sec.id] = sec.open;
+      try { localStorage.setItem("settingsSections", JSON.stringify(saved)); } catch (e) { /* ignore */ }
+    });
+  });
+}
+initSettingsSections();
 
 init();

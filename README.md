@@ -306,10 +306,11 @@ voices; Voice Design always uses Qwen3-TTS. Voices are stored as `<name>.wav` + 
 `voice`/`speaker` in `/api/tts` and `/v1/audio/speech`.
 
 **Conversation is the home page** and lets you pick the voice (presets or an avatar) and the
-STT model. In **Settings → Startup** you can mark an STT model and a voice to preload when the
-server starts (`startup.stt_model`, `startup.voice`); the STT picker there offers the same
-models as the Transcription tab, plus a "— do not preload" entry if you prefer loading the
-model on first use only.
+STT model. In **Settings → Default STT engine** you can mark the STT model to activate when the
+server starts (`startup.stt_model`); the picker offers the same models as the Transcription tab,
+plus a "— do not preload" entry if you prefer loading the model on first use only. The Settings
+tab is a set of collapsible sections (the open ones are remembered), and every client API key
+carries its own text-cleanup policy, edited from the same panel.
 
 ## API
 
