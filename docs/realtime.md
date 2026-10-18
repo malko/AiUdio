@@ -302,6 +302,18 @@ depth, and per-stage timings (`/api/metrics`).
   (`[chat] first audio … ms after send`).
 - **Client jitter buffer**: `PCMPlayer` buffers the first ~200 ms before starting playback
   (forced flush after 250 ms for very short clips) to avoid underruns.
+- **Barge-in (VAD)**: the chat microphone stops the assistant when the user speaks over it.
+  Two things make it reliable: the detector follows the *measured* ambient floor and asks the
+  voice to stand `3×` above it (a fixed RMS is meaningless across microphones, gains and
+  echo-cancellation residuals), and it accumulates voiced time across syllables while
+  tolerating a ~260 ms dip — a single quiet tick used to reset the counter, so only shouting
+  interrupted. "Assistant speaking" includes the audio still buffered on the client
+  (`PCMPlayer.remainingSeconds()`), not just `chatBusy`: otherwise the tail of a reply counted
+  as silence. The reply is ducked to 35 % as soon as the user starts (immediate feedback, and
+  less of our own audio in the mic), and the ~0.6 s of microphone held back while the assistant
+  spoke is handed to the STT right after the barge-in, so the first words are not lost (a
+  natural end drops it instead: it is mostly our own tail). Starting a new turn resets the
+  previous playback, including from dictation, so two replies never overlap.
 
 ### Diagnosing a slow engine (Qwen3-TTS vs Chatterbox)
 

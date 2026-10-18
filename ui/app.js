@@ -43,6 +43,11 @@ class PCMPlayer {
     this.pending = [];
     this.pendingSeconds = 0;
     this.flushTimer = null;
+    // Master gain: barge-in ducks the assistant so the user hears themselves and
+    // the mic picks up less of our own audio (which helps the detector).
+    this.gain = this.ctx.createGain();
+    this.gain.gain.value = 1;
+    this.gain.connect(this.ctx.destination);
   }
   pushBytes(bytes) {
     let raw;
@@ -81,10 +86,23 @@ class PCMPlayer {
     const buf = this.ctx.createBuffer(1, f.length, this.sr);
     buf.copyToChannel(f, 0);
     const src = this.ctx.createBufferSource();
-    src.buffer = buf; src.connect(this.ctx.destination);
+    src.buffer = buf; src.connect(this.gain);
     const clock = Math.max(this.ctx.currentTime, this.time);
     src.start(clock);
     this.time = clock + buf.duration;
+  }
+  // Audio still scheduled on the output: the server may have finished the turn
+  // while the client keeps speaking for a moment.
+  remainingSeconds() { return Math.max(0, this.time - this.ctx.currentTime); }
+  setVolume(value) {
+    const target = Math.max(0, Math.min(1, value));
+    const now = this.ctx.currentTime;
+    try {
+      this.gain.gain.cancelScheduledValues(now);
+      this.gain.gain.setTargetAtTime(target, now, 0.05);
+    } catch (e) {
+      this.gain.gain.value = target;
+    }
   }
   reset() {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
@@ -1734,6 +1752,8 @@ async function chatSend() {
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
+  // A new turn replaces whatever is still playing: never let two replies overlap.
+  if (assistantSpeaking()) interruptChat("");
   appendTurn("user", text);
   currentAssistant = appendTurn("assistant", "");
   $("#chat-status").textContent = "";
@@ -1762,11 +1782,39 @@ $("#chat-stop").addEventListener("click", () => interruptChat(t("chat.stopped"))
 let dictateActive = false, dictateCtx = null, dictateStream = null, dictateSource = null, dictateNode = null, dictateSink = null;
 let dictateSocket = null, dictateText = "", dictatePartial = "", dictateTimer = null;
 let dictateVadActive = false, dictateAnalyser = null, dictateVadTimer = null;
-let vadSpeaking = false, vadLastVoice = 0, bargeStart = 0;
-const VAD_THRESHOLD = 0.015;        // RMS above which we consider speech
+let vadSpeaking = false, vadLastVoice = 0;
+// Absolute floor for a quiet room (AGC makes levels vary a lot), plus the margin
+// the voice must show above the *measured* ambient floor: a fixed RMS cannot work
+// across microphones, gains and echo-cancellation residuals.
+const VAD_MIN_RMS = 0.008;
+const VAD_SNR = 3.0;
 const VAD_SILENCE_MS = 900;         // silence after speech => end of utterance
-const VAD_BARGE_THRESHOLD = 0.03;   // louder threshold to interrupt the assistant
-const VAD_BARGE_MS = 300;           // sustained speech needed to barge in
+const VAD_BARGE_MS = 260;           // voiced time (without a long dip) that barges in
+const VAD_BARGE_HOLD_MS = 260;      // dip tolerated between two syllables
+const VAD_DUCK_FROM_MS = 100;       // duck the assistant as soon as the user starts
+const VAD_DUCK_VOLUME = 0.35;
+
+// Is the assistant still audible? `chatBusy` covers the server side, but the client
+// plays from a jitter buffer: without this the tail of a reply counts as silence and
+// barge-in would not interrupt anything.
+function assistantSpeaking() {
+  if (chatBusy) return true;
+  return !!(chatPlayer && chatPlayer.remainingSeconds() > 0.05);
+}
+
+// Mic samples held back while the assistant speaks (~0.6 s), sent as soon as it stops.
+let dictatePending = [];
+const DICTATE_PENDING_MAX = 12;
+
+function flushDictatePending() {
+  if (!dictatePending.length) return;
+  const chunks = dictatePending;
+  dictatePending = [];
+  if (!dictateSocket || dictateSocket.readyState !== 1) return;
+  for (const chunk of chunks) {
+    try { dictateSocket.send(chunk.buffer); } catch (e) { /* socket gone */ }
+  }
+}
 
 // Endpoint sooner when the streaming transcript already looks like a complete
 // sentence (lower time-to-response without cutting the user off mid-phrase).
@@ -1784,10 +1832,10 @@ function takeUtteranceText() {
 
 function sendUtterance(text) {
   if (!text) return false;
-  if (chatBusy) {
-    if ($("#chat-status")) $("#chat-status").textContent = t("chat.vadBusy");
-    $("#chat-input").value = text;  // keep it available for a manual send
-    return false;
+  if (assistantSpeaking()) {
+    // The assistant is still talking (or its audio is still buffered): speaking over
+    // it means "stop", not "wait".
+    interruptChat(t("chat.vadBargeIn"));
   }
   $("#chat-input").value = text;
   chatSend();
@@ -1808,6 +1856,7 @@ function endUtterance() {
 // Interrupt the current assistant turn (Stop button, or barge-in).
 function interruptChat(message) {
   resetChatAudio();
+  flushDictatePending();  // the words spoken over the assistant belong to the next turn
   if (chatSocket && chatSocket.readyState === 1) {
     try { chatSocket.send(JSON.stringify({ type: "input.cancel" })); } catch (e) { /* ignore */ }
   }
@@ -1828,30 +1877,48 @@ function startVadLoop() {
     for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
     return Math.sqrt(sum / buf.length);
   };
+  // Envelope state: the ambient floor we measure, the voiced time accumulated and
+  // the dip we are currently tolerating.
+  let floor = 0.01, voiceMs = 0, silenceMs = 0, ducked = false;
   const tick = () => {
     if (!dictateActive || !dictateVadActive) return;
     const now = performance.now();
-    if (chatBusy) {
-      // Barge-in: the user speaking over the assistant interrupts it.
-      if (rmsOf() >= VAD_BARGE_THRESHOLD) {
-        if (!bargeStart) bargeStart = now;
-        else if (now - bargeStart >= VAD_BARGE_MS) {
-          bargeStart = 0;
-          vadSpeaking = false;
-          interruptChat(t("chat.vadBargeIn"));
-        }
-      } else {
-        bargeStart = 0;
+    const rms = rmsOf();
+    // Follow the quiet parts quickly, the loud ones slowly: that is the room's noise
+    // floor (fan, mic self-noise, echo-cancellation residual…), whatever the gain.
+    if (rms < floor) floor = floor * 0.7 + rms * 0.3;
+    else floor = Math.min(0.06, floor * 0.995 + rms * 0.005);
+    const speaking = rms >= Math.max(VAD_MIN_RMS, floor * VAD_SNR);
+    if (speaking) { voiceMs += 60; silenceMs = 0; } else {
+      silenceMs += 60;
+      if (silenceMs > VAD_BARGE_HOLD_MS) voiceMs = 0;
+    }
+
+    if (assistantSpeaking()) {
+      // Barge-in. The count accumulates across syllables (a single sub-threshold
+      // tick used to reset it, which is why it only worked when shouting) and the
+      // assistant is ducked as soon as the user starts, for immediate feedback.
+      if (voiceMs >= VAD_DUCK_FROM_MS && chatPlayer && !ducked) {
+        ducked = true;
+        chatPlayer.setVolume(VAD_DUCK_VOLUME);
+      }
+      if (voiceMs >= VAD_BARGE_MS) {
+        voiceMs = 0; silenceMs = 0;
+        vadSpeaking = false;
+        interruptChat(t("chat.vadBargeIn"));
       }
     } else {
-      bargeStart = 0;
-      if (rmsOf() >= VAD_THRESHOLD) {
+      if (ducked) { ducked = false; if (chatPlayer) chatPlayer.setVolume(1); }
+      // The assistant ended on its own: what was held is mostly our own tail (and
+      // room noise), so drop it. Only a real barge-in hands it over (see interruptChat).
+      if (dictatePending.length) dictatePending = [];
+      if (speaking) {
         if (!vadSpeaking) {
           vadSpeaking = true;
           if ($("#chat-status")) $("#chat-status").textContent = t("chat.vadListening");
         }
         vadLastVoice = now;
-      } else if (vadSpeaking && now - vadLastVoice > vadSilenceMs()) {
+      } else if (vadSpeaking && silenceMs > vadSilenceMs()) {
         vadSpeaking = false;
         endUtterance();
       }
@@ -1870,14 +1937,23 @@ async function startDictation(useVad = false) {
     }
     const cap = await startMicCapture((samples, sr) => {
       if (!dictateSocket || dictateSocket.readyState !== 1) return;
-      // In VAD mode, do not feed the assistant's own TTS back into the STT.
-      if (dictateVadActive && chatBusy) return;
-      dictateSocket.send(downsampleTo16k(samples, sr).buffer);
+      const pcm = downsampleTo16k(samples, sr);
+      if (dictateVadActive && assistantSpeaking()) {
+        // Never feed our own TTS back into the STT, but keep what the user says in
+        // the meantime: the mic is held for the ~0.3 s the barge-in takes to fire,
+        // and those samples are sent right after, so "stop, do this instead" is not
+        // clipped to "this instead".
+        dictatePending.push(pcm);
+        while (dictatePending.length > DICTATE_PENDING_MAX) dictatePending.shift();
+        return;
+      }
+      flushDictatePending();
+      dictateSocket.send(pcm.buffer);
     });
     dictateCtx = cap.ctx; dictateStream = cap.stream; dictateSource = cap.source; dictateNode = cap.node; dictateSink = cap.sink;
     dictateSocket = new WebSocket(wsURL("/ws/stt"));
     dictateSocket.binaryType = "arraybuffer";
-    dictateText = ""; dictatePartial = "";
+    dictateText = ""; dictatePartial = ""; dictatePending = [];
     dictateSocket.onopen = () => {
       dictateSocket.send(JSON.stringify({
         type: "session.update",
@@ -1903,7 +1979,6 @@ async function startDictation(useVad = false) {
       dictateAnalyser.fftSize = 1024;
       dictateSource.connect(dictateAnalyser);
       vadSpeaking = false;
-      bargeStart = 0;
       startVadLoop();
       if ($("#chat-status")) $("#chat-status").textContent = t("chat.vadListening");
     }
@@ -1934,7 +2009,7 @@ function finishDictation() {
   dictateActive = false;
   dictateVadActive = false;
   vadSpeaking = false;
-  bargeStart = 0;
+  dictatePending = [];
   $("#chat-mic").textContent = "🎤";
   updateVadButton();
   const text = takeUtteranceText();
