@@ -55,9 +55,11 @@ depth, and per-stage timings (`/api/metrics`).
   transcript already ends with sentence punctuation (faster turn-taking).
 - **Browser echo cancellation**: the mic is opened with `echoCancellation`,
   `noiseSuppression`, `autoGainControl`, so hands-free barge-in works without headphones.
-- **vLLM-Omni streaming backend** (experimental): with `vllm.enabled`, the family named
-  by `vllm.family` is served by vLLM-Omni (native codec-window PCM) via `app/vllm_backend.py`,
-  the other families keep using the local engine. Two families are supported:
+- **vLLM-Omni streaming backend** (experimental, **optional by decision**): with `vllm.enabled`,
+  the family named by `vllm.family` is served by vLLM-Omni (native codec-window PCM) via
+  `app/vllm_backend.py`, the other families keep using the local engine — the measurements, what
+  it costs and why it is not the default are in
+  [backends](backends.md#why-vllm-omni-stays-optional). Two families are supported:
   `custom_voice` (preset speakers) and `base` (voice cloning from a reference clip, sent
   inline as a `data:` URL), because **the service loads a single checkpoint**. Start it with
   a Base checkpoint and select `family: base` to route your cloned voices to it. Requests

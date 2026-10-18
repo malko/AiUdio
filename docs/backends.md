@@ -108,6 +108,46 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
   (`/v1/audio/transcriptions/realtime`, ~160 ms with Nemotron 3.5). Parakeet TDT v3 stays
   offline (no cache-aware streaming).
 
+### Why vLLM-Omni stays optional
+
+Measured on this project's own chat workload, one shared GPU, warm service:
+
+| | local engine (0.6B) | vLLM-Omni (1.7B, `--enforce-eager`) |
+|---|---|---|
+| first audio | 2–4.5 s (per sentence) | **0.04–0.06 s** (codec-window streaming) |
+| RTF | ≈0.5 | **≈0.22** (15 s of audio decoded in 3.2 s) |
+| cost per call | `0.6 s + 0.42 × audio_seconds` | ≈`0.2 × audio_seconds` |
+
+The second column is a real gain, and it is **architectural**: the talker generates codec frames
+and the `Code2Wav` decoder consumes them in overlapping windows (the 12 Hz decoder is causal),
+emitting a first tiny window (~80 ms) immediately — while our local path cannot emit a single
+byte before a whole sentence has been synthesized. It is not something we could tune: `qwen-tts`
+exposes **no streaming generation** (`non_streaming_mode` "only *simulates* streaming text input
+… rather than enabling true streaming input or streaming generation"), so matching it means
+re-implementing a serving engine inside the gateway — the AR loop, the windowed codec decode and
+the seam handling.
+
+What it brings beyond latency, and this deployment does not use: continuous batching across
+clients, per-stage placement/tensor parallelism, prefix caching, CUDA graphs/FlashInfer, a batch
+endpoint, uploaded voices and an OpenAI-compatible server. What it costs: a second container
+image (several GB on its own, on top of ours);
+**one checkpoint per service** (presets *or* clones, `voice_design` separately, each switch = a
+container restart); a VRAM reservation that must be sized per stage (see the table above) where
+the local engine simply allocates what it needs; and, to pilot it from the UI, a Docker socket —
+root-equivalent power over the host, see [security](security.md).
+
+**Decision**: vLLM-Omni stays an **opt-in profile** (`docker compose --profile vllm up -d
+tts-vllm`, then `vllm.enabled`), never a default and never required. The local engines are the
+reference path — Qwen3-TTS for the preset speakers, cloning and `voice_design`, Chatterbox when
+clone quality matters most. The gateway keeps the coexistence cheap (the engine switch
+starts/stops the service, drops our own copy of the family it serves, enforces the choice at
+boot), so trying it costs one setting and turning it off frees the VRAM again.
+
+**When to revisit**: if `qwen-tts` (or an equivalent) ever exposes incremental generation, the
+latency argument disappears and the local engine wins outright; conversely, on a large GPU or a
+multi-tenant deployment the serving features become the point, and vLLM-Omni should then be the
+default for the families it supports.
+
 ## Sizing (indicative)
 
 | Component | VRAM |
@@ -147,4 +187,4 @@ engine is perfectly happy. The levers follow from the table: `--max-model-len` (
 (`--stage-overrides '{"0": {...}, "1": {...}}'`, the keys are stage ids, not GPUs): the bundled
 Qwen3-TTS YAML reserves 0.3 for the talker *and* 0.3 for the vocoder, and a global
 `--gpu-memory-utilization` replaces both with the same value rather than lowering them. See
-[realtime](realtime.md#streaming-backends).
+the vLLM-Omni recipe in [realtime](realtime.md).
