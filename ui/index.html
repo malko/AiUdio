@@ -113,12 +113,33 @@
         </label>
         <details id="clone-box">
           <summary data-i18n="tts.cloneTitle">Voice cloning</summary>
+          <div id="tts-clone-hint" class="muted"></div>
           <label><span data-i18n="tts.refAudio">Reference audio</span> <input id="tts-ref-audio" type="file" accept="audio/*" /></label>
           <div id="tts-reftext-wrap">
             <label><span data-i18n="tts.refText">Reference transcript</span> <input id="tts-ref-text" type="text" /></label>
             <label class="inline"><input id="tts-xvec" type="checkbox" /> <span data-i18n="tts.xvec">x-vector only</span></label>
           </div>
-          <div id="tts-clone-hint" class="muted"></div>
+        </details>
+        <details id="tts-gen-box">
+          <summary data-i18n="tts.genTitle">Generation (this request)</summary>
+          <div class="muted" data-i18n="tts.genHint">Sent with this request; the defaults for every client live in Settings → Default TTS engine. Empty fields are omitted.</div>
+          <div class="row">
+            <label class="grow"><span data-i18n="settings.temperature">Temperature</span>
+              <input id="tts-gen-temp" type="number" step="0.05" /></label>
+            <label class="grow"><span data-i18n="settings.topP">Top-p</span>
+              <input id="tts-gen-topp" type="number" step="0.05" /></label>
+            <label class="grow"><span data-i18n="settings.repPenalty">Repetition penalty</span>
+              <input id="tts-gen-reppen" type="number" step="0.01" /></label>
+          </div>
+          <div class="row" id="tts-gen-cb-row">
+            <label class="grow"><span data-i18n="settings.exaggeration">Exaggeration</span>
+              <input id="tts-gen-exag" type="number" step="0.05" /></label>
+            <label class="grow"><span data-i18n="settings.cfgWeight">CFG weight</span>
+              <input id="tts-gen-cfg" type="number" step="0.05" /></label>
+            <label class="grow"><span data-i18n="settings.minP">Min-p</span>
+              <input id="tts-gen-minp" type="number" step="0.01" /></label>
+          </div>
+          <button type="button" id="tts-gen-reset" data-i18n="tts.genReset">Reset to the server defaults</button>
         </details>
         <div class="row">
           <label class="inline"><input id="tts-stream" type="checkbox" checked /> <span data-i18n="tts.stream">Streaming (PCM)</span></label>

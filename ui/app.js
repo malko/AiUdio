@@ -303,6 +303,9 @@ function applyGenerationFields(cfg) {
   set("#gen-emoji", text.emoji);
   set("#gen-codeblocks", text.code_blocks);
   set("#gen-format", (cfg.audio || {}).format);
+  // The Synthesis tab's per-request fields display the current defaults (what is
+  // shown is what the request will carry); "Reset" re-applies them after an edit.
+  fillTtsGenerationFields(g);
 }
 
 function applyCloneEngineFields(cfg) {
@@ -376,6 +379,8 @@ function cloneEnginePayload(value) {
 function toggleCloneEngineFields() {
   const cb = $("#set-clone-backend") && $("#set-clone-backend").value === "chatterbox";
   document.querySelectorAll(".cb-only").forEach((el) => { el.style.display = cb ? "" : "none"; });
+  // The Chatterbox-only knobs of the *defaults* card follow the default engine.
+  show($("#gen-cb-row"), cb);
 }
 
 
@@ -616,7 +621,7 @@ function updateTtsVoiceControls() {
   show($("#tts-reftext-wrap"), qwenClone);
   show($("#tts-language-wrap"), !englishOnly);
   // Chatterbox Multilingual exposes exaggeration/CFG/min-p (Turbo/Nano ignore them).
-  show($("#gen-cb-row"), family === "chatterbox");
+  show($("#tts-gen-cb-row"), family === "chatterbox");
 
   const hint = $("#tts-clone-hint");
   if (hint) hint.textContent = clone ? t(qwenClone ? "tts.cloneHintQwen" : "tts.cloneHintChatterbox") : "";
@@ -677,15 +682,39 @@ function genNum(id, parse, dflt) {
 
 function ttsGenerationParams() {
   const g = {
-    temperature: genNum("#gen-temp", parseFloat, undefined),
-    top_p: genNum("#gen-topp", parseFloat, undefined),
-    repetition_penalty: genNum("#gen-reppen", parseFloat, undefined),
-    exaggeration: genNum("#gen-exag", parseFloat, undefined),
-    cfg_weight: genNum("#gen-cfg", parseFloat, undefined),
-    min_p: genNum("#gen-minp", parseFloat, undefined),
+    temperature: genNum("#tts-gen-temp", parseFloat, undefined),
+    top_p: genNum("#tts-gen-topp", parseFloat, undefined),
+    repetition_penalty: genNum("#tts-gen-reppen", parseFloat, undefined),
+    exaggeration: genNum("#tts-gen-exag", parseFloat, undefined),
+    cfg_weight: genNum("#tts-gen-cfg", parseFloat, undefined),
+    min_p: genNum("#tts-gen-minp", parseFloat, undefined),
   };
   return Object.fromEntries(Object.entries(g).filter(([, v]) => v !== undefined));
 }
+
+// The Synthesis tab's generation fields start from the server defaults (Settings
+// → Default TTS engine) and are sent with the request, so a one-off tweak does
+// not change the defaults for every other client.
+const TTS_GEN_FIELDS = {
+  "tts-gen-temp": "temperature",
+  "tts-gen-topp": "top_p",
+  "tts-gen-reppen": "repetition_penalty",
+  "tts-gen-exag": "exaggeration",
+  "tts-gen-cfg": "cfg_weight",
+  "tts-gen-minp": "min_p",
+};
+
+function fillTtsGenerationFields(gen) {
+  const g = gen || {};
+  Object.entries(TTS_GEN_FIELDS).forEach(([id, key]) => {
+    const el = $(`#${id}`);
+    if (el) el.value = g[key] === undefined || g[key] === null ? "" : g[key];
+  });
+}
+
+$("#tts-gen-reset").addEventListener("click", () => {
+  fillTtsGenerationFields((CONFIG && CONFIG.generation) || {});
+});
 
 function fileToDataURL(file) {
   return new Promise((res) => {
