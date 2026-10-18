@@ -10,7 +10,6 @@ x-nvidia-gpu: &nvidia-gpu
       reservations:
         devices:
           - driver: nvidia
-            device_ids:
             count: all
             capabilities: [gpu]
 
