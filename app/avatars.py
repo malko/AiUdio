@@ -89,3 +89,60 @@ class AvatarStore:
     def delete(self, avatar_id: str) -> None:
         for path in (self._meta(avatar_id), self.wav_path(avatar_id), self.photo_path(avatar_id)):
             path.unlink(missing_ok=True)
+
+    def hygiene(self) -> dict:
+        """Audit the directory: what it holds, what is duplicated, what is stranded.
+
+        Every voice is one `.json` (+ `.wav`, + `.png` when it has a photo), and a
+        clip or photo whose `.json` is gone is invisible to the API but still on
+        disk — that is what "orphans" means here.
+        """
+        entries = self.list()
+        referenced = set()
+        for avatar in entries:
+            referenced.update(
+                {
+                    self._meta(avatar.id).name,
+                    self.wav_path(avatar.id).name,
+                    self.photo_path(avatar.id).name,
+                }
+            )
+        files = sorted(path for path in self.dir.iterdir() if path.is_file())
+        by_kind: dict = {}
+        orphans = []
+        total = 0
+        for path in files:
+            size = path.stat().st_size
+            total += size
+            kind = path.suffix.lstrip(".").lower() or "other"
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            if path.name not in referenced:
+                orphans.append({"name": path.name, "bytes": size})
+        by_name: dict = {}
+        for avatar in entries:
+            by_name.setdefault(avatar.name.strip().lower(), []).append(avatar.id)
+        return {
+            "avatars": len(entries),
+            "files": len(files),
+            "by_kind": by_kind,
+            "total_bytes": total,
+            "duplicates": [
+                {"name": name, "ids": ids, "files": len(ids) * 2}
+                for name, ids in by_name.items()
+                if len(ids) > 1
+            ],
+            "orphans": sorted(orphans, key=lambda item: item["name"]),
+            "orphan_bytes": sum(item["bytes"] for item in orphans),
+            "broken": [a.id for a in entries if not self.wav_path(a.id).is_file()],
+        }
+
+    def clean_orphans(self) -> list:
+        """Delete the files no voice entry references (stranded clips and photos)."""
+        removed = []
+        for orphan in self.hygiene()["orphans"]:
+            try:
+                (self.dir / orphan["name"]).unlink()
+                removed.append(orphan["name"])
+            except OSError:  # pragma: no cover - gone or not ours
+                continue
+        return removed

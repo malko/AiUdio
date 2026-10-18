@@ -427,6 +427,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | Very long first call | weights are downloading (check logs / `hf_cache`) |
 | Authenticated WS fails | use an API key (Basic does not work over browser WebSocket) |
 | STT unreachable | `docker compose logs stt`; the upstream build may need a path adjustment (`cmake --install`) |
+| Voice bank has files but few voices | tab **Voices** shows the audit (files, size, duplicates, orphans) with a *Remove orphan files* button; each voice is `<id>.json` + `<id>.wav` (+ `.png`), and saving a voice with an existing name creates a second entry |
 | Choppy TTS streaming | lower `chunking.max_chars` or use the `vllm` profile |
 | vLLM serves the wrong checkpoint | `/api/vllm/health` reports `served_family`; set `vllm.family` to match (`custom_voice` presets / `base` clones) — the service loads a single model |
 | vLLM `Stage-1 has no live replica` / stage-1 CUDA OOM | the two stages each reserve a fraction of the *same* GPU (Qwen3-TTS: 0.3 + 0.3 = 60 % of the card, whatever the model size): lower them with `--stage-overrides`; see [realtime](docs/realtime.md) |

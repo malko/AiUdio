@@ -1344,6 +1344,21 @@ def create_app(
         await asyncio.to_thread(engine.clear_clone_prompts)
         return {"deleted": avatar_id}
 
+    @app.get("/api/avatars/hygiene", tags=["Avatars"])
+    async def avatars_hygiene() -> Dict[str, Any]:
+        """Audit the voice bank: files per kind, duplicate names, orphan files."""
+        return await asyncio.to_thread(AvatarStore(_avatar_dir(app.state.settings)).hygiene)
+
+    @app.post("/api/avatars/hygiene/clean", tags=["Avatars"])
+    async def avatars_clean() -> Dict[str, Any]:
+        """Delete the files no voice entry references (a voice is never touched)."""
+        store = AvatarStore(_avatar_dir(app.state.settings))
+        removed = await asyncio.to_thread(store.clean_orphans)
+        if removed:
+            log.info("Voice bank: removed %d orphan file(s): %s",
+                     len(removed), ", ".join(removed[:10]))
+        return {"removed": removed, "hygiene": await asyncio.to_thread(store.hygiene)}
+
     @app.get("/api/avatars/{avatar_id}/audio", tags=["Avatars"])
     async def avatar_audio(avatar_id: str) -> FileResponse:
         path = AvatarStore(_avatar_dir(app.state.settings)).wav_path(avatar_id)

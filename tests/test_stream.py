@@ -14,7 +14,7 @@ def _collect(agen):
     return asyncio.run(run())
 
 
-def test_vllm_serving_custom_voice_unloads_the_local_copy(monkeypatch):
+def test_vllm_serving_custom_voice_unloads_the_local_copy(monkeypatch, tmp_path):
     from app import main as main_mod
 
     unloaded = []
@@ -37,6 +37,7 @@ def test_vllm_serving_custom_voice_unloads_the_local_copy(monkeypatch):
 
     monkeypatch.setattr(main_mod, "_stream_vllm", fake_vllm)
     settings = Settings()
+    settings.paths.voices = str(tmp_path / "voices")
     settings.vllm.enabled = True
     req = TTSRequest(text="Bonjour tout le monde.", family="custom_voice", stream=True)
 
@@ -46,7 +47,7 @@ def test_vllm_serving_custom_voice_unloads_the_local_copy(monkeypatch):
     assert unloaded == ["custom_voice"]  # the local duplicate was dropped
 
 
-def test_vllm_failure_falls_back_to_the_local_engine(monkeypatch):
+def test_vllm_failure_falls_back_to_the_local_engine(monkeypatch, tmp_path):
     from app import main as main_mod
 
     unloaded = []
@@ -72,6 +73,7 @@ def test_vllm_failure_falls_back_to_the_local_engine(monkeypatch):
 
     monkeypatch.setattr(main_mod, "_stream_vllm", empty_vllm)
     settings = Settings()
+    settings.paths.voices = str(tmp_path / "voices")
     settings.vllm.enabled = True
     req = TTSRequest(text="Bonjour tout le monde.", family="custom_voice", stream=True)
 

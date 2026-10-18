@@ -686,6 +686,34 @@ $("#tts-go").addEventListener("click", async () => {
 });
 
 // ------------------------------------------------------------------ avatars
+function humanSize(bytes) {
+  if (!bytes) return "0";
+  const units = ["B", "kB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
+}
+
+async function loadAvatarsHygiene() {
+  const box = $("#avatars-hygiene");
+  if (!box) return;
+  try {
+    const h = await getJSON("/api/avatars/hygiene");
+    const bits = [
+      `${h.avatars} ${t("avatars.hygVoices")}`,
+      `${h.files} ${t("avatars.hygFiles")} (${humanSize(h.total_bytes)})`,
+    ];
+    if (h.orphans.length) bits.push(`${h.orphans.length} ${t("avatars.hygOrphans")} (${humanSize(h.orphan_bytes)})`);
+    if (h.duplicates.length) bits.push(`${h.duplicates.length} ${t("avatars.hygDuplicates")}`);
+    if (h.broken.length) bits.push(`${h.broken.length} ${t("avatars.hygBroken")}`);
+    box.textContent = bits.join(" · ");
+    if ($("#av-clean")) $("#av-clean").disabled = h.orphans.length === 0;
+  } catch (e) {
+    box.textContent = "";
+  }
+}
+
 async function loadAvatars() {
   try {
     const data = await getJSON("/api/avatars");
@@ -695,7 +723,24 @@ async function loadAvatars() {
   }
   renderAvatars();
   buildTtsAvatarSelect();
+  loadAvatarsHygiene();
 }
+
+$("#av-clean") && $("#av-clean").addEventListener("click", async () => {
+  const box = $("#avatars-hygiene");
+  box.textContent = "…";
+  try {
+    const r = await apiFetch("/api/avatars/hygiene/clean", { method: "POST" });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.status);
+    await loadAvatars();
+    if (body.removed.length) {
+      box.textContent = `${body.removed.length} ${t("avatars.hygRemoved")} — ${box.textContent}`;
+    }
+  } catch (e) {
+    box.textContent = `${t("status.error")} ${e}`;
+  }
+});
 
 function renderAvatars() {
   const list = $("#avatars-list");

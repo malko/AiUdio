@@ -94,6 +94,8 @@ can be overridden per request with `clone_backend`/`engine`; an explicit clone-c
 
 | Method | Path | Description |
 |---|---|---|
+| GET | `/api/avatars/hygiene` | Audit of the voice bank: files per kind, total size, duplicate names, orphan files (a clip/photo whose entry is gone) and voices without a clip |
+| POST | `/api/avatars/hygiene/clean` | Delete the orphan files (never a voice) and return the refreshed audit |
 | GET | `/api/avatars` | List avatars |
 | POST | `/api/avatars` | Multipart: `name`, `prompt` (Voice Design description), `language`, `ref_text`, `personality`, `x_vector_only`, `ref_audio` (file), `image` (file). With `ref_audio` → clone from it; otherwise a fingerprint is rendered from `prompt` and stored. |
 | PUT | `/api/avatars/{id}` | Edit name/description/language/personality/transcript/reference audio/photo |

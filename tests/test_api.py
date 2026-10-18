@@ -432,3 +432,40 @@ def test_vllm_model_must_be_a_qwen3_tts_checkpoint(client):
     assert r.status_code == 400
     assert "CustomVoice" in r.json()["detail"]
     assert client.put("/api/vllm/service/model", json={}).status_code == 400
+
+
+def test_voice_bank_hygiene_reports_and_cleans_orphans(client, tmp_path):
+    import json
+    from pathlib import Path
+
+    root = Path(client.app.state.settings.paths.voices) / "avatars"
+    root.mkdir(parents=True, exist_ok=True)
+
+    # Two voices that share a name (a duplicate), each with its clip…
+    for avatar_id in ("bugatti", "bugatti-3f2a1c"):
+        (root / f"{avatar_id}.json").write_text(
+            json.dumps({"id": avatar_id, "name": "Bugatti", "kind": "clone"}), encoding="utf-8"
+        )
+        (root / f"{avatar_id}.wav").write_bytes(b"RIFF....WAVE")
+    # …one stranded clip and one stranded photo (their entry is gone)…
+    (root / "vieux-test.wav").write_bytes(b"RIFF....WAVE")
+    (root / "vieux-test.png").write_bytes(b"\x89PNG")
+    # …and an entry whose clip disappeared.
+    (root / "casse.json").write_text(json.dumps({"id": "casse", "name": "Cassé"}), encoding="utf-8")
+
+    hygiene = client.get("/api/avatars/hygiene").json()
+    assert hygiene["avatars"] == 3
+    assert hygiene["files"] == 7  # 3 .json, 3 .wav, 1 .png
+    assert hygiene["by_kind"] == {"json": 3, "wav": 3, "png": 1}
+    assert [d["name"] for d in hygiene["duplicates"]] == ["bugatti"]
+    assert sorted(o["name"] for o in hygiene["orphans"]) == ["vieux-test.png", "vieux-test.wav"]
+    assert hygiene["broken"] == ["casse"]  # no clip any more
+    assert hygiene["total_bytes"] > 0
+
+    cleaned = client.post("/api/avatars/hygiene/clean").json()
+    assert sorted(cleaned["removed"]) == ["vieux-test.png", "vieux-test.wav"]
+    # Voices are never touched, duplicates included.
+    after = cleaned["hygiene"]
+    assert after["avatars"] == 3 and after["files"] == 5
+    assert after["orphans"] == []
+    assert (root / "bugatti.wav").is_file() and (root / "bugatti-3f2a1c.json").is_file()

@@ -79,6 +79,12 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
     settings = Settings()
     settings.stt.enabled = False
     settings.llm.base_url = "http://127.0.0.1:9/v1"  # unreachable
+    # Never write into the repository: the voice bank, outputs, logs and reference
+    # clips go to the test's own tmp dir (Docker mounts the real ones).
+    settings.paths.voices = str(tmp_path / "voices")
+    settings.paths.output = str(tmp_path / "outputs")
+    settings.paths.logs = str(tmp_path / "logs")
+    settings.paths.reference_audio = str(tmp_path / "reference_audio")
     for section, values in overrides.items():
         target = getattr(settings, section)
         for key, value in values.items():
