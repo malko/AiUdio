@@ -107,10 +107,10 @@ List voices: `GET /v1/audio/voices`.
 Set `stream: true` (single text only). `format` is forced to `pcm`; chunks are emitted
 **sentence by sentence** as they are synthesized, so playback can start early. The sample
 rate is in the `X-Sample-Rate` response header — it describes **the samples in that response**,
-so always read it rather than assuming `audio.sample_rate` (the local engines emit 24 kHz; the
-setting only tells the vLLM-Omni service what to produce). The first chunk is produced before
-the response starts, so an engine failure is a real status code instead of an empty 200. A
-non-streaming `format: "pcm"` response carries the same header (WAV already embeds its rate).
+so always read it rather than assuming a rate (the local engines emit 24 kHz; there is no
+output-rate setting). The first chunk is produced before the response starts, so an engine
+failure is a real status code instead of an empty 200. A non-streaming `format: "pcm"` response
+carries the same header (WAV already embeds its rate).
 
 ```bash
 curl -N http://localhost:8004/api/tts -H 'Content-Type: application/json' \
@@ -261,8 +261,8 @@ and keep an eye on `/api/metrics`.
   variation between chunks; concatenate to an `AudioContext`/`AudioTrack` at the sample
   rate from `X-Sample-Rate`.
 - **Sample rate**: never hard-code it. Every PCM response (and every WS `audio.start`) carries
-  the rate of its own samples (`X-Sample-Rate`, 24 kHz for the local engines); `audio.sample_rate`
-  is only what is asked of the vLLM-Omni service. Resample client-side if you need another rate.
+  the rate of its own samples (`X-Sample-Rate`, 24 kHz for the local engines); there is no
+  output-rate setting (nothing is resampled). Resample client-side if you need another rate.
 - **Cancel** in-flight work with `input.cancel` (`/ws/chat`) when the user speaks/aborts.
 - **Transport**: PCM16 is fine on a LAN; for WAN/high-latency links, compress (Opus) on the
   client or terminate closer to the user (the roadmap is described in

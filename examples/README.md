@@ -33,6 +33,6 @@ node node/chat.mjs "Hello, how are you?"
 The streaming examples write raw **mono signed-16-bit little-endian** PCM at the sample
 rate announced in the `X-Sample-Rate` header of each response (24 kHz for the local engines;
 also sent on a non-streaming `format: "pcm"` response). Always take the rate from that header —
-`audio.sample_rate` is only what is asked of the vLLM-Omni service. In a real app, feed those
+the output rate is not configurable (nothing is resampled). In a real app, feed those
 bytes to a small **jitter buffer** (~150–300 ms) before playback — see
 [`../docs/integration.md`](../docs/integration.md).

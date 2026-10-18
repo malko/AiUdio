@@ -32,7 +32,10 @@ def test_config_endpoint(client):
     assert "families" in body["models"]
     # The UI needs the registry to show which variant each family is set to.
     assert body["models"]["registry"]["base"]
-    assert body["audio"]["sample_rate"] == 24000
+    # The output rate is per response (`X-Sample-Rate`), not a setting: the local
+    # engines are fixed at 24 kHz and nothing resamples.
+    assert "sample_rate" not in body["audio"]
+    assert body["audio"]["format"] == "wav"
 
 
 def test_models_and_load(client):
@@ -473,16 +476,18 @@ def test_pcm_samples_announce_the_rate(client):
     assert s.headers["x-sample-rate"] == "24000"
 
 
-def test_streaming_header_describes_the_pcm_not_the_config(tmp_path):
-    """`audio.sample_rate` is the rate *requested* from vLLM and a default for the
-    local engines: the header must report the rate of the samples actually sent."""
+def test_streaming_header_describes_the_pcm(tmp_path):
+    """`X-Sample-Rate` reports the samples actually sent: the local engines are
+    24 kHz, and a stale `audio.sample_rate` from an older config is ignored."""
     from conftest import DummyEngine, _settings
 
     from app.config import ConfigStore
     from app.main import create_app
 
-    store = ConfigStore(tmp_path / "config.yaml")
-    store.settings = _settings(tmp_path, audio={"sample_rate": 16000})
+    path = tmp_path / "config.yaml"
+    path.write_text("audio:\n  format: wav\n  sample_rate: 12000\n", encoding="utf-8")
+    store = ConfigStore(path)                       # starts: the key is ignored
+    store.settings = _settings(tmp_path)
     with TestClient(create_app(store, DummyEngine())) as c:   # engine: 24 kHz
         s = c.post("/api/tts", json={"text": "Bonjour. Salut.", "stream": True})
         assert s.status_code == 200, s.text
@@ -495,7 +500,7 @@ def test_streaming_header_describes_the_pcm_not_the_config(tmp_path):
         assert w.headers["X-Sample-Rate"] == "24000"
 
         cap = c.get("/api/capabilities").json()
-        assert cap["tts"]["sample_rate"] == 16000               # still the setting
+        assert cap["tts"]["sample_rate"] == 24000    # what the local engines emit
 
 
 def test_streaming_failure_is_a_real_status_code(client, monkeypatch):
@@ -563,11 +568,16 @@ def test_vllm_streaming_used(client, monkeypatch):
 
     monkeypatch.setattr(vllm_backend, "stream_pcm", fake_stream)
     client.app.state.settings.vllm.enabled = True
+    client.app.state.settings.vllm.sample_rate = 16000
     r = client.post("/api/tts", json={"text": "Hello there.", "stream": True, "format": "pcm"})
     assert r.status_code == 200
     assert r.content == b"VLLMPCM1VLLMPCM2"
     assert seen["payload"]["stream"] is True
     assert seen["payload"]["response_format"] == "pcm"
+    # The service is asked for the configured rate and that is what we announce:
+    # it is the only engine whose output rate we choose (it resamples).
+    assert seen["payload"]["sample_rate"] == 16000
+    assert r.headers["X-Sample-Rate"] == "16000"
 
 
 def test_vllm_unavailable_is_a_503(client, monkeypatch):

@@ -217,7 +217,6 @@ async function init() {
     }
   }
   $("#title").textContent = CONFIG.ui.title || t("app.title");
-  TTS_SESSION.sample_rate = CONFIG.audio.sample_rate;
   $("#health").className = "dot ok";
 
   buildTtsFamilySelect();
@@ -306,7 +305,6 @@ function applyGenerationFields(cfg) {
   set("#gen-emoji", text.emoji);
   set("#gen-codeblocks", text.code_blocks);
   set("#gen-format", (cfg.audio || {}).format);
-  set("#gen-samplerate", (cfg.audio || {}).sample_rate);
 }
 
 function applyCloneEngineFields(cfg) {
@@ -2292,7 +2290,6 @@ $("#gen-save").addEventListener("click", async () => {
     code_blocks: $("#gen-codeblocks").value,
   };
   if ($("#gen-format").value) payload.audio.format = $("#gen-format").value;
-  setIf(payload.audio, "sample_rate", num("gen-samplerate", (v) => parseInt(v, 10)));
   try {
     const r = await apiFetch("/api/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -2304,7 +2301,6 @@ $("#gen-save").addEventListener("click", async () => {
     }
     const cfg = JSON.parse(text);
     CONFIG = Object.assign({}, CONFIG, { generation: cfg.generation, chunking: cfg.chunking, text: cfg.text || {}, audio: cfg.audio });
-    TTS_SESSION.sample_rate = CONFIG.audio.sample_rate;
     applyGenerationFields(cfg);
     status.textContent = t("status.saved");
   } catch (e) {

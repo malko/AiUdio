@@ -96,6 +96,11 @@ depth, and per-stage timings (`/api/metrics`).
        -d '{"vllm":{"enabled":true,"family":"base","ref_root":"/svc/voices"}}'
   ```
 
+  `vllm.sample_rate` (default 24000, also `VLLM_SAMPLE_RATE`; no UI field) is the rate asked
+  of the service in the speech payload — it resamples, unlike the local engines, which are
+  fixed at 24 kHz. Whatever the engine, each response announces the rate of its own samples
+  (`X-Sample-Rate`), so clients read it rather than assuming one.
+
   **Sharing the files** is the cheapest option: with `--allowed-local-media-path` on the
   service side and `vllm.ref_root` (the path *as the service sees it*) on ours, clips from
   the voice bank are sent as `file:///svc/voices/avatars/<id>.wav`. The service reads the very

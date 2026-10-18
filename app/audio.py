@@ -7,6 +7,12 @@ import wave
 
 import numpy as np
 
+#: What the local engines produce (Qwen3-TTS and Chatterbox both output 24 kHz).
+#: Nothing resamples here: this is what `X-Sample-Rate` reports, and the rate the
+#: API falls back to when it has no samples to measure (a WS session that emitted
+#: no audio, `/api/capabilities`).
+NATIVE_SAMPLE_RATE = 24000
+
 
 def to_float32(audio: np.ndarray) -> np.ndarray:
     arr = np.asarray(audio, dtype=np.float32)

@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, apikeys, docker_ctl, vllm_backend
-from .audio import to_pcm16, wav_bytes
+from .audio import NATIVE_SAMPLE_RATE, to_pcm16, wav_bytes
 from .avatars import Avatar, AvatarStore
 from .chatterbox_backend import is_available as is_chatterbox_available
 from .chunking import chunk_text, concat_audio
@@ -768,7 +768,7 @@ def _vllm_payload(
     return vllm_backend.speech_payload(
         req,
         text,
-        sample_rate=settings.audio.sample_rate,
+        sample_rate=settings.vllm.sample_rate,
         family=family,
         ref_audio=ref_audio,
         ref_text=ref_text,
@@ -972,11 +972,11 @@ async def _stream_vllm(
     metrics.observe_ttfa(time.perf_counter() - started)
     metrics.incr("tts_vllm_sessions")
     try:
-        # The service was asked for `audio.sample_rate` (`_vllm_payload`): report
+        # The service was asked for `vllm.sample_rate` (`_vllm_payload`): report
         # that. The local branch reports each chunk's real rate instead.
-        yield "", first, settings.audio.sample_rate
+        yield "", first, settings.vllm.sample_rate
         async for chunk in stream:
-            yield "", chunk, settings.audio.sample_rate
+            yield "", chunk, settings.vllm.sample_rate
     finally:
         await stream.aclose()
 
@@ -1214,7 +1214,9 @@ def create_app(
                 "families": families,
                 "clone_backend": s.models.clone_backend,
                 "formats": ["wav", "pcm"],
-                "sample_rate": s.audio.sample_rate,
+                # What the local engines emit; every response still announces the
+                # rate of its own samples (X-Sample-Rate / WS `audio.start`).
+                "sample_rate": NATIVE_SAMPLE_RATE,
                 "streaming": "sentence-level PCM",
                 "http": "/api/tts",
                 "openai": "/v1/audio/speech",
@@ -1907,10 +1909,9 @@ def create_app(
             stream = _stream_pcm(settings, scheduler, req, texts[0], text_cfg=policy)
             # Produce the first chunk *before* the response starts (once a
             # StreamingResponse begins, the headers are already sent):
-            #   - `X-Sample-Rate` must describe the PCM actually emitted. The
-            #     configured `audio.sample_rate` is only the rate *requested* from
-            #     the vLLM-Omni service (and a default for the rest): the local
-            #     engines have their own (24 kHz), and nothing resamples here.
+            #   - `X-Sample-Rate` must describe the PCM actually emitted. Nothing
+            #     resamples here: the local engines output 24 kHz, and only the
+            #     vLLM-Omni service is asked for a rate (`vllm.sample_rate`).
             #   - a failure becomes a real status code instead of a 200 followed by
             #     an empty/truncated body. The vLLM-Omni engine is not a silent
             #     fallback either — see `vllm.fallback_to_local`.
@@ -1939,7 +1940,7 @@ def create_app(
             return StreamingResponse(
                 body(),
                 media_type="audio/pcm",
-                headers={"X-Sample-Rate": str(first[2] or settings.audio.sample_rate)},
+                headers={"X-Sample-Rate": str(first[2] or NATIVE_SAMPLE_RATE)},
             )
 
         # Chunking is a per-request policy for every engine, streaming or not: a
@@ -1972,7 +1973,7 @@ def create_app(
             raise HTTPException(503, f"Generation failed: {exc}") from exc
 
         # One audio track per input `text`: its chunks are already joined.
-        sample_rate = groups[0][0][1] if groups and groups[0] else settings.audio.sample_rate
+        sample_rate = groups[0][0][1] if groups and groups[0] else NATIVE_SAMPLE_RATE
         tracks = [
             concat_audio([wav for wav, _sr in group], sample_rate, silence_ms)
             if len(group) > 1 else group[0][0]
@@ -2532,7 +2533,7 @@ async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text
     req = TTSRequest(**{k: v for k, v in config.items() if k in TTSRequest.model_fields})
     req.text = text
     index = 0
-    sample_rate = settings.audio.sample_rate
+    sample_rate = NATIVE_SAMPLE_RATE
     async for sentence, pcm, sr in _stream_pcm(
         settings, scheduler, req, text, text_cfg=_ws_policy(websocket, settings),
     ):

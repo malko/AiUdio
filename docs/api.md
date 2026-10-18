@@ -14,7 +14,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI, `text`) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `text`, `audio`, `stt` (`enabled`/`base_url`/`language`/`languages`/…), `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`/`model`/`max_model_len`/`enforce_eager`/`stage_memory`/`sleep_after`/`sleep_level`/`fallback_to_local`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `text`, `audio` (`format`), `stt` (`enabled`/`base_url`/`language`/`languages`/…), `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`/`sample_rate`/`model`/`max_model_len`/`enforce_eager`/`stage_memory`/`sleep_after`/`sleep_level`/`fallback_to_local`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
 
 > **Admin-only writes.** When `auth.enabled` is true, `PUT /api/settings`, model/voice management
 > (`POST /api/models/select|load|unload`, `POST /api/voices/load`), avatar writes
@@ -110,10 +110,10 @@ engine can ingest — the engine itself splits further rather than truncating, e
 
 Response: `audio/wav` or `audio/pcm` (mono signed-16-bit little-endian). For `pcm` the sample
 rate is announced in the `X-Sample-Rate` header, streaming and non-streaming alike: it is the
-rate of **the samples in that response**. `audio.sample_rate` (the setting) is what is *asked* of
-the vLLM-Omni service and the default shown to clients — the local engines output **24 kHz** and
-nothing is resampled here, so a client that assumes the setting instead of reading the header
-plays the audio at the wrong speed. On error: JSON `{"detail": "..."}`.
+rate of **the samples in that response**. There is no output-rate setting: the local engines
+emit **24 kHz** and nothing is resampled, so always read the header rather than assuming a rate
+(`vllm.sample_rate` is only what the gateway asks the vLLM-Omni service to produce). On error:
+JSON `{"detail": "..."}`.
 
 With `stream: true` the first chunk is produced **before** the response headers are sent (the
 header must describe the data, and a failure then becomes a real status code). A failure *after*

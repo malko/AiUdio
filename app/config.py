@@ -181,12 +181,10 @@ class TextConfig(Policy):
 
 
 class AudioConfig(BaseModel):
+    # Output encoding default (also overridable per request). There is no sample
+    # rate here: the local engines output 24 kHz and nothing is resampled, so
+    # every response announces the rate of its own samples (`X-Sample-Rate`).
     format: str = "wav"
-    # Rate *requested* from the vLLM-Omni service (if any): the local engines have
-    # their own (24 kHz) and nothing resamples here. Every response announces the
-    # rate of the samples it really sends (`X-Sample-Rate` for raw PCM), so this is
-    # only the rate asked of that service and the default advertised to clients.
-    sample_rate: int = 24000
     # Reference-audio security. Defaults are restrictive to avoid SSRF (remote
     # URLs) and local file disclosure (path traversal) from API clients.
     allow_remote_media: bool = False
@@ -236,6 +234,12 @@ class VLLMConfig(BaseModel):
     # streaming endpoint (`/v1/audio/speech/stream`) — use it if the standard one
     # buffers the whole audio before answering.
     path: str = "/v1/audio/speech"
+    # Rate asked of the service in the speech payload (`sample_rate`). The service
+    # resamples, so it is the only engine here whose output rate we choose; the
+    # local engines are fixed at 24 kHz and every response still announces the rate
+    # of its own samples (`X-Sample-Rate`). Not in the UI on purpose (a service
+    # detail): set `vllm.sample_rate` in config.yaml or VLLM_SAMPLE_RATE.
+    sample_rate: int = 24000
     # Which family the *service* serves (it loads a single checkpoint):
     # `custom_voice` for the preset speakers ("-CustomVoice" repos) or `base` for
     # voice cloning from a reference clip ("-Base" repos, `task_type=Base`).
@@ -435,6 +439,11 @@ def _apply_env(settings: Settings) -> Settings:
         settings.docker.socket = v.strip()
     if v := os.environ.get("VLLM_REF_ROOT"):
         settings.vllm.ref_root = v.strip()
+    if v := os.environ.get("VLLM_SAMPLE_RATE"):
+        try:
+            settings.vllm.sample_rate = int(v)
+        except ValueError:
+            log.warning("Ignoring VLLM_SAMPLE_RATE=%r (expected an integer)", v)
     # Input-text cleanup (an unknown value is ignored — the previous one stays).
     for env, field in (("TEXT_CLEANUP", "cleanup"), ("TEXT_EMOJI", "emoji"),
                        ("TEXT_CODE_BLOCKS", "code_blocks")):
