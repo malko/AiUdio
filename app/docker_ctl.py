@@ -60,6 +60,54 @@ def served_model(cmd: Optional[List[str]]) -> Optional[str]:
         return None
 
 
+def flag_value(cmd: Optional[List[str]], flag: str) -> Optional[str]:
+    """Value of ``--flag value`` in a command line (None when absent)."""
+    args = list(cmd or [])
+    if flag not in args:
+        return None
+    index = args.index(flag) + 1
+    if index >= len(args) or args[index].startswith("--"):
+        return ""  # present but it is a switch
+    return args[index]
+
+
+def has_flag(cmd: Optional[List[str]], flag: str) -> bool:
+    return flag in list(cmd or [])
+
+
+def with_flags(
+    cmd: Optional[List[str]],
+    *,
+    values: Optional[Dict[str, Optional[str]]] = None,
+    switches: Optional[Dict[str, bool]] = None,
+) -> List[str]:
+    """Set/replace/remove ``--flag value`` and switch arguments in place.
+
+    Only the named flags move: everything else (the checkpoint, the deployment
+    flags, their order) is preserved. A value of ``None`` in ``values`` removes the
+    flag *and* its value; a switch set to False removes it.
+    """
+    args = list(cmd or [])
+    for flag, value in (values or {}).items():
+        if flag in args:
+            index = args.index(flag)
+            has_value = index + 1 < len(args) and not args[index + 1].startswith("--")
+            if value is None:
+                del args[index : index + (2 if has_value else 1)]
+            elif has_value:
+                args[index + 1] = value
+            else:
+                args.insert(index + 1, value)
+        elif value is not None:
+            args += [flag, value]
+    for flag, enabled in (switches or {}).items():
+        if enabled and flag not in args:
+            args.append(flag)
+        elif not enabled and flag in args:
+            del args[args.index(flag)]
+    return args
+
+
 def with_model(cmd: Optional[List[str]], model: str) -> List[str]:
     """Same command line with the ``vllm serve`` argument replaced.
 
@@ -151,27 +199,39 @@ async def restart(socket: str, name: str, timeout: float = 60.0) -> Dict[str, An
 
 
 async def set_model(
-    socket: str, name: str, model: str, timeout: float = 300.0, *, start: bool = True
+    socket: str,
+    name: str,
+    model: Optional[str] = None,
+    timeout: float = 300.0,
+    *,
+    values: Optional[Dict[str, Optional[str]]] = None,
+    switches: Optional[Dict[str, bool]] = None,
+    start: bool = True,
 ) -> Dict[str, Any]:
-    """Recreate the container serving ``model``, keeping its configuration.
+    """Recreate the container on another checkpoint and/or launch flags.
 
-    Docker cannot change a container's command in place, so the current
-    container is renamed out of the way, a new one is created from its inspected
+    Docker cannot change a container's command in place, so the current container
+    is renamed out of the way, a new one is created from its inspected
     configuration (image, env, mounts, GPU reservations, network…) with the new
-    checkpoint, started (unless ``start`` is false: the engine is local, the
-    service is only prepared), and only then is the old one removed — a failure
-    leaves the previous container available under ``<name>-previous``.
+    ``vllm serve <model>`` and the given flags, started (unless ``start`` is false:
+    the engine is local, the service is only prepared), and only then is the old one
+    removed — a failure leaves the previous container available under
+    ``<name>-previous``.
     """
     info = await find(socket, name)
     if info is None:
         raise DockerError(f"container {name!r} not found")
     config = dict(info.get("Config") or {})
-    cmd = with_model(config.get("Cmd"), model)
-    if served_model(config.get("Cmd")) == model:
-        # Already that checkpoint: just make sure it is in the wanted state.
+    current = list(config.get("Cmd") or [])
+    wanted = with_flags(
+        with_model(current, model) if model else current, values=values, switches=switches
+    )
+    if wanted == current:
+        # Nothing to change: just make sure it is in the wanted state.
         if not (info.get("State") or {}).get("Running"):
             return await start(socket, name) if start else describe(info)
         return await stop(socket, name) if not start else describe(info)
+    cmd = wanted
 
     host_config = dict(info.get("HostConfig") or {})
     for key in ("Name", "Created", "State", "NetworkSettings", "Mounts"):

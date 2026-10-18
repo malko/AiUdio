@@ -303,6 +303,16 @@
         </label>
         <label><span data-i18n="settings.vllmUrl">Base URL</span> <input id="set-vllm-url" type="text" /></label>
         <label><span data-i18n="settings.vllmPath">Route</span> <input id="set-vllm-path" type="text" /></label>
+        <label><span data-i18n="settings.vllmBudget">VRAM budget per stage (0 = computed)</span>
+          <input id="set-vllm-stage0" type="number" min="0" max="1" step="0.01" placeholder="auto" />
+          <input id="set-vllm-stage1" type="number" min="0" max="1" step="0.01" placeholder="auto" />
+        </label>
+        <label><span data-i18n="settings.vllmContext">Max context (tokens)</span>
+          <input id="set-vllm-maxlen" type="number" min="256" step="256" />
+        </label>
+        <label class="inline"><input id="set-vllm-eager" type="checkbox" />
+          <span data-i18n="settings.vllmEager">No CUDA graphs (--enforce-eager: less VRAM, slower decode)</span></label>
+        <div class="muted" data-i18n="settings.vllmApplyHint">Saving applies the whole profile: the gateway recreates the container with this checkpoint and these flags (needs the Docker socket + docker.control), then starts or stops it according to the engine toggle.</div>
         <label><span data-i18n="settings.vllmSleep">Sleep after (seconds idle, 0 = never)</span>
           <input id="set-vllm-sleep" type="number" min="0" step="10" />
           <select id="set-vllm-sleep-level">

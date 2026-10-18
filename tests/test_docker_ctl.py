@@ -151,3 +151,54 @@ def test_set_model_stops_when_the_same_checkpoint_should_not_run(monkeypatch):
                              "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", start=False)
     )
     assert ("POST", "/containers/abcdef1234567890/stop") in calls
+
+
+def test_with_flags_replaces_adds_and_removes_arguments():
+    assert docker_ctl.flag_value(CMD, "--max-model-len") is None
+    assert not docker_ctl.has_flag(CMD, "--enforce-eager")
+
+    cmd = docker_ctl.with_flags(
+        CMD,
+        values={"--max-model-len": "2048", "--stage-overrides": '{"0": {"gpu_memory_utilization": 0.13}}'},
+        switches={"--enforce-eager": True},
+    )
+    assert docker_ctl.flag_value(cmd, "--max-model-len") == "2048"
+    assert docker_ctl.flag_value(cmd, "--stage-overrides") == '{"0": {"gpu_memory_utilization": 0.13}}'
+    assert docker_ctl.has_flag(cmd, "--enforce-eager")
+    assert cmd[:3] == CMD[:3]  # the checkpoint and the deployment flags are intact
+
+    # Replacing keeps a single copy; removing drops the flag *and* its value.
+    again = docker_ctl.with_flags(cmd, values={"--max-model-len": "4096"})
+    assert again.count("--max-model-len") == 1
+    assert docker_ctl.flag_value(again, "--max-model-len") == "4096"
+    stripped = docker_ctl.with_flags(again, values={"--max-model-len": None}, switches={"--enforce-eager": False})
+    assert not docker_ctl.has_flag(stripped, "--max-model-len")
+    assert "4096" not in stripped
+    assert not docker_ctl.has_flag(stripped, "--enforce-eager")
+
+
+def test_set_model_can_change_only_the_flags(monkeypatch):
+    calls = []
+    _daemon(monkeypatch, [{"Id": "abcdef1234567890", "Names": ["/tts-vllm"],
+                           "_inspect": _inspect(CMD)}], calls)
+    asyncio.run(
+        docker_ctl.set_model(
+            "/var/run/docker.sock", "tts-vllm", None,
+            values={"--stage-overrides": '{"0": {"gpu_memory_utilization": 0.3}}'},
+            switches={"--enforce-eager": True},
+        )
+    )
+    created = [c for c in calls if c[0] == "CREATE"][0][1]
+    assert created[2] == "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"  # same checkpoint
+    assert "--stage-overrides" in created and "--enforce-eager" in created
+
+
+def test_set_model_does_nothing_when_the_profile_already_matches(monkeypatch):
+    calls = []
+    _daemon(monkeypatch, [{"Id": "abcdef1234567890", "Names": ["/tts-vllm"],
+                           "_inspect": _inspect(CMD)}], calls)
+    asyncio.run(
+        docker_ctl.set_model("/var/run/docker.sock", "tts-vllm", None,
+                             values={"--max-model-len": None})  # already absent
+    )
+    assert "/containers/create" not in [p for _, p in calls]

@@ -509,3 +509,115 @@ def test_budget_says_so_when_it_cannot_guess(monkeypatch):
     assert main_mod._params_from_repo("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice") == 1.7
     assert main_mod._params_from_repo("Qwen/Qwen3-TTS-12Hz-0.6B-Base") == 0.6
     assert main_mod._params_from_repo("Qwen/Qwen3-TTS-12Hz-Base") is None
+
+
+def test_manual_budget_overrides_the_computation(monkeypatch):
+    from app import main as main_mod
+
+    monkeypatch.setattr(
+        main_mod, "_gpu_memory",
+        lambda: {"total_bytes": int(15.48 * 1024 ** 3), "free_bytes": int(9 * 1024 ** 3), "name": "x"},
+    )
+    settings = Settings()
+    model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+
+    auto = main_mod._effective_budget(settings, model)
+    assert auto["source"] == "computed" and auto["stages"] == {"0": 0.13, "1": 0.11}
+
+    # Explicit values always win: our numbers are a suggestion, not a verdict.
+    settings.vllm.stage_memory = {"0": 0.40, "1": 0.20}
+    manual = main_mod._effective_budget(settings, model)
+    assert manual["source"] == "manual"
+    assert manual["stages"] == {"0": 0.4, "1": 0.2}
+
+    # A single stage can be pinned, the other keeps being computed.
+    settings.vllm.stage_memory = {"1": 0.25}
+    mixed = main_mod._effective_budget(settings, model)
+    assert mixed["stages"] == {"0": 0.13, "1": 0.25}
+
+    # Without CUDA nothing is computed, but an explicit budget still applies.
+    monkeypatch.setattr(main_mod, "_gpu_memory", lambda: None)
+    settings.vllm.stage_memory = {}
+    assert main_mod._effective_budget(settings, model)["stages"] == {}
+    settings.vllm.stage_memory = {"0": 0.3}
+    assert main_mod._effective_budget(settings, model)["stages"] == {"0": 0.3}
+
+
+def test_launch_profile_becomes_the_container_flags(monkeypatch):
+    from app import main as main_mod
+
+    monkeypatch.setattr(
+        main_mod, "_gpu_memory",
+        lambda: {"total_bytes": int(15.48 * 1024 ** 3), "free_bytes": int(9 * 1024 ** 3), "name": "x"},
+    )
+    settings = Settings()
+    settings.vllm.stage_memory = {"0": 0.30, "1": 0.12}
+    settings.vllm.max_model_len = 4096
+    settings.vllm.enforce_eager = False
+
+    values, switches = main_mod._vllm_flag_plan(settings, "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+    assert values["--max-model-len"] == "4096"
+    assert values["--stage-overrides"] == (
+        '{"0": {"gpu_memory_utilization": 0.3}, "1": {"gpu_memory_utilization": 0.12}}'
+    )
+    assert switches == {"--enforce-eager": False}
+
+
+def test_reconcile_recreates_only_what_differs(monkeypatch):
+    from app import main as main_mod
+
+    calls = []
+
+    async def fake_status(socket, name):
+        return {
+            "exists": True, "running": True, "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+            "command": ["vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
+                        "--max-model-len", "2048"],
+        }
+
+    async def fake_set_model(socket, name, model=None, **kw):
+        calls.append({"model": model, **kw})
+        return {"running": True}
+
+    async def fake_status_start(*a, **kw):
+        return {"exists": True, "running": True}
+
+    monkeypatch.setattr(main_mod, "_gpu_memory", lambda: None)
+    monkeypatch.setattr(main_mod.docker_ctl, "status", fake_status)
+    monkeypatch.setattr(main_mod.docker_ctl, "set_model", fake_set_model)
+    monkeypatch.setattr(main_mod.docker_ctl, "start", fake_status_start)
+    monkeypatch.setattr(main_mod, "_warm_vllm", lambda *a, **kw: _noop())
+
+    settings = Settings()
+    settings.docker.control = True
+    settings.vllm.enabled = True
+    settings.vllm.stage_memory = {"0": 0.30, "1": 0.12}
+    settings.vllm.enforce_eager = False
+    settings.vllm.max_model_len = 2048
+
+    # The flags differ (no --stage-overrides, a stray --enforce-eager default), the
+    # checkpoint does not: one recreate, same model.
+    asyncio.run(main_mod._vllm_reconcile(settings))
+    assert len(calls) == 1
+    assert calls[0]["model"] is None
+    assert calls[0]["switches"] == {"--enforce-eager": False}
+    assert calls[0]["values"]["--stage-overrides"].startswith('{"0"')
+
+    # Now the container matches: nothing is recreated.
+    calls.clear()
+
+    async def matching_status(socket, name):
+        return {
+            "exists": True, "running": True, "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+            "command": ["vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
+                        "--max-model-len", "2048",
+                        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.3}, "1": {"gpu_memory_utilization": 0.12}}'],
+        }
+
+    monkeypatch.setattr(main_mod.docker_ctl, "status", matching_status)
+    asyncio.run(main_mod._vllm_reconcile(settings))
+    assert calls == []
+
+
+async def _noop():
+    return None

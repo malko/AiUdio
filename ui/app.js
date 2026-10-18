@@ -241,6 +241,10 @@ function applyVllmFields(cfg) {
   if ($("#set-vllm-url")) $("#set-vllm-url").value = v.base_url || "";
   if ($("#set-vllm-path")) $("#set-vllm-path").value = v.path || "/v1/audio/speech";
   if ($("#set-vllm-sleep")) $("#set-vllm-sleep").value = v.sleep_after || 0;
+  if ($("#set-vllm-stage0")) $("#set-vllm-stage0").value = (v.stage_memory || {})["0"] || "";
+  if ($("#set-vllm-stage1")) $("#set-vllm-stage1").value = (v.stage_memory || {})["1"] || "";
+  if ($("#set-vllm-maxlen")) $("#set-vllm-maxlen").value = v.max_model_len || 2048;
+  if ($("#set-vllm-eager")) $("#set-vllm-eager").checked = v.enforce_eager !== false;
   if ($("#set-vllm-sleep-level")) $("#set-vllm-sleep-level").value = String(v.sleep_level || 1);
 }
 
@@ -2090,6 +2094,15 @@ function setVllmEngine(enabled) {
   if (radio) radio.checked = true;
 }
 
+function vllmStageMemory() {
+  const out = {};
+  for (const stage of ["0", "1"]) {
+    const value = Number(($(`#set-vllm-stage${stage}`) || {}).value || 0);
+    if (value > 0) out[stage] = value;
+  }
+  return out;
+}
+
 function vllmFamilyForRepo(repo) {
   return /-Base$/i.test(repo || "") ? "base" : "custom_voice";
 }
@@ -2114,23 +2127,21 @@ function fillVllmModels() {
   if (wanted) select.value = wanted;
 }
 
-function wantToSwitchModel(wanted, running) {
-  return !!(CONFIG.docker && CONFIG.docker.control && wanted && wanted !== running);
-}
-
 async function refreshVllmBudget() {
   const box = $("#set-vllm-budget");
   const select = $("#set-vllm-model");
   if (!box || !select || !select.value) return;
   try {
     const r = await getJSON(`/api/vllm/budget?model=${encodeURIComponent(select.value)}`);
-    if (r.error) { box.textContent = ""; return; }
-    const s = r.suggested || {};
-    box.textContent =
-      `${t("vllm.card")} ${r.total_gib} GiB (${r.free_gib} GiB ${t("vllm.free")}) · ` +
-      `${t("vllm.weights")}: ${r.weights_gib.talker} + ${r.weights_gib.codec} GiB · ` +
-      `${t("vllm.suggested")} --stage-overrides '${s.stage_overrides}' ` +
-      `(--max-model-len ${s.max_model_len}) ≈ ${s.reserved_gib} GiB`;
+    if (r.error && !Object.keys(r.stages || {}).length) { box.textContent = r.error; return; }
+    const stages = r.stages || {};
+    const mine = Object.keys(vllmStageMemory() || {}).length > 0;
+    const budget = Object.entries(stages).map(([k, v]) => `${k}=${v}`).join(" + ");
+    const parts = [];
+    if (r.total_gib) parts.push(`${t("vllm.card")} ${r.total_gib} GiB (${r.free_gib} GiB ${t("vllm.free")})`);
+    if (r.weights_gib) parts.push(`${t("vllm.weights")} ${r.weights_gib.talker} + ${r.weights_gib.codec} GiB`);
+    parts.push(`${t(mine ? "vllm.manual" : "vllm.suggested")} ${budget}`);
+    box.textContent = parts.join(" · ");
   } catch (e) {
     box.textContent = "";
   }
@@ -2172,6 +2183,14 @@ $("#set-vllm-save").addEventListener("click", async () => {
     path: $("#set-vllm-path").value.trim() || "/v1/audio/speech",
     sleep_after: Number($("#set-vllm-sleep") ? $("#set-vllm-sleep").value : 0) || 0,
     sleep_level: Number($("#set-vllm-sleep-level") ? $("#set-vllm-sleep-level").value : 1) || 1,
+    max_model_len: Number($("#set-vllm-maxlen") ? $("#set-vllm-maxlen").value : 2048) || 2048,
+    enforce_eager: $("#set-vllm-eager") ? $("#set-vllm-eager").checked : true,
+    // 0/empty = let the gateway compute the stage's share from the card.
+    stage_memory: {
+      "0": Number($("#set-vllm-stage0") ? $("#set-vllm-stage0").value : 0) || 0,
+      "1": Number($("#set-vllm-stage1") ? $("#set-vllm-stage1").value : 0) || 0,
+    },
+    model: $("#set-vllm-model") ? $("#set-vllm-model").value : "",
   };
   try {
     const r = await apiFetch("/api/settings", {
@@ -2186,18 +2205,22 @@ $("#set-vllm-save").addEventListener("click", async () => {
     CONFIG = Object.assign({}, CONFIG, { vllm: cfg.vllm });
     applyVllmFields(cfg);
     status.textContent = t("status.saved");
-    // The container can only load one checkpoint: if the admin picked another
-    // one, recreate it with it (needs docker.control).
-    const wanted = $("#set-vllm-model") ? $("#set-vllm-model").value : "";
-    const running = VLLM_SERVICE && VLLM_SERVICE.state ? VLLM_SERVICE.state.model : null;
-    if (wantToSwitchModel(wanted, running)) await switchVllmModel(wanted);
-    // Starting/stopping happens in the background on the gateway: refresh the
-    // state once it has had time to act.
-    if (CONFIG.docker && CONFIG.docker.control) setTimeout(refreshVllmService, 5000);
+    // The gateway applies the profile itself (checkpoint, flags, start/stop): the
+    // container recreation takes a moment, so refresh the state afterwards.
+    if (CONFIG.docker && CONFIG.docker.control) {
+      status.textContent = `${t("status.saved")} — ${t("vllm.applying")}`;
+      setTimeout(refreshVllmService, 5000);
+      setTimeout(refreshVllmService, 20000);
+    }
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }
 });
+
+for (const id of ["#set-vllm-stage0", "#set-vllm-stage1"]) {
+  const input = $(id);
+  if (input) input.addEventListener("change", refreshVllmBudget);
+}
 
 $("#set-vllm-model") && $("#set-vllm-model").addEventListener("change", () => {
   // The checkpoint implies the family the gateway has to route to it.
@@ -2224,18 +2247,6 @@ for (const [id, action] of [["#set-vllm-start", "start"], ["#set-vllm-stop", "st
   });
 }
 
-async function switchVllmModel(model) {
-  const status = $("#set-vllm-status");
-  status.textContent = `${t("vllm.switching")} ${model}…`;
-  const r = await apiFetch("/api/vllm/service/model", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),
-  });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.detail || r.status);
-  if (body.vllm) CONFIG = Object.assign({}, CONFIG, { vllm: body.vllm });
-  await refreshVllmService();
-  status.textContent = `${t("vllm.loading")} ${model}…`;
-}
 
 $("#set-vllm-test").addEventListener("click", async () => {
   const status = $("#set-vllm-status");

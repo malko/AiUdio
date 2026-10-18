@@ -399,6 +399,118 @@ def _vllm_budget(settings: Settings, model: str) -> Dict[str, Any]:
     return out
 
 
+def _effective_budget(settings: Settings, model: str) -> Dict[str, Any]:
+    """Per-stage VRAM budget actually applied: explicit values, computed elsewhere.
+
+    The operator can always overrule the computation (``vllm.stage_memory``): an
+    explicit stage wins, a missing one falls back to the computed value, and when
+    nothing can be computed the flags are left untouched on the container.
+    """
+    manual = {
+        str(key): float(value)
+        for key, value in (settings.vllm.stage_memory or {}).items()
+        if str(key) in ("0", "1") and float(value or 0) > 0
+    }
+    computed = _vllm_budget(settings, model)
+    suggested = computed.get("suggested") or {}
+    resolved: Dict[str, Any] = {
+        "model": model,
+        "stages": {},
+        "source": "manual" if manual else ("computed" if suggested else None),
+        "gpu": computed.get("gpu"),
+        "weights_gib": computed.get("weights_gib"),
+        "total_gib": computed.get("total_gib"),
+        "free_gib": computed.get("free_gib"),
+        "error": computed.get("error"),
+    }
+    for stage in ("0", "1"):
+        value = manual.get(stage, suggested.get(stage))
+        if value:
+            resolved["stages"][stage] = round(float(value), 2)
+    if not resolved["stages"] and resolved["error"]:
+        resolved["note"] = "no budget computed: the container keeps the flags it was started with"
+    return resolved
+
+
+def _vllm_flag_plan(settings: Settings, model: str) -> Tuple[Dict[str, Optional[str]], Dict[str, bool]]:
+    """`--flag value` / switch changes that make the container match the settings."""
+    budget = _effective_budget(settings, model)
+    stages = budget.get("stages") or {}
+    overrides = (
+        json.dumps(
+            {stage: {"gpu_memory_utilization": value} for stage, value in sorted(stages.items())},
+            separators=(", ", ": "),
+        )
+        if stages else None
+    )
+    values: Dict[str, Optional[str]] = {
+        "--stage-overrides": overrides,
+        "--max-model-len": str(int(settings.vllm.max_model_len)),
+    }
+    return values, {"--enforce-eager": bool(settings.vllm.enforce_eager)}
+
+
+def _vllm_container_flags(cmd: Optional[List[str]]) -> Dict[str, Any]:
+    """The launch flags we manage, as read from a container's command line."""
+    return {
+        "stage_overrides": docker_ctl.flag_value(cmd, "--stage-overrides"),
+        "max_model_len": docker_ctl.flag_value(cmd, "--max-model-len"),
+        "enforce_eager": docker_ctl.has_flag(cmd, "--enforce-eager"),
+        "command": cmd,
+    }
+
+
+async def _vllm_reconcile(settings: Settings) -> None:
+    """Make the container match the settings (checkpoint + launch flags).
+
+    `PUT /api/settings` is the single source of truth once `docker.control` is on:
+    the compose only says how the service is *created* for the first time. Only what
+    actually differs is recreated, and the engine switch still decides whether the
+    service ends up running.
+    """
+    cfg = settings.docker
+    if cfg.control:
+        wanted_model = str(settings.vllm.model or "").strip()
+        try:
+            state = await docker_ctl.status(cfg.socket, cfg.container)
+            if not state.get("exists"):
+                log.warning(
+                    "vLLM-Omni container %r does not exist: create it once from the "
+                    "compose (or start it by hand) — the gateway cannot create it from "
+                    "scratch", cfg.container,
+                )
+                return
+            model = wanted_model or state.get("model") or str(
+                (settings.models.registry or {}).get(_vllm_family(settings), "")
+            )
+            values, switches = _vllm_flag_plan(settings, model)
+            applied = _vllm_container_flags(state.get("command"))
+            unchanged = (
+                (not wanted_model or wanted_model == state.get("model"))
+                and str(applied.get("stage_overrides") or "") == str(values["--stage-overrides"] or "")
+                and str(applied.get("max_model_len") or "") == values["--max-model-len"]
+                and bool(applied.get("enforce_eager")) == switches["--enforce-eager"]
+            )
+            if not unchanged:
+                log.info(
+                    "Applying the vLLM-Omni launch profile to %s: %s --stage-overrides %s "
+                    "--max-model-len %s%s",
+                    cfg.container, wanted_model or "(same checkpoint)",
+                    values["--stage-overrides"], values["--max-model-len"],
+                    " --enforce-eager" if switches["--enforce-eager"] else "",
+                )
+                await docker_ctl.set_model(
+                    cfg.socket, cfg.container, wanted_model or None,
+                    values=values, switches=switches, start=bool(settings.vllm.enabled),
+                )
+                _forget_vllm_sleep()
+        except docker_ctl.DockerError as exc:
+            log.warning("Could not apply the vLLM-Omni launch profile: %s", exc)
+    # Whatever happened (and without `docker.control`), honour the engine switch:
+    # start the service and prime it, or stop it to free the VRAM.
+    await _vllm_lifecycle(settings, start=bool(settings.vllm.enabled))
+
+
 def _preload_is_served_by_vllm(settings: Settings, voice: str) -> bool:
     """Is this startup voice a family the vLLM-Omni service will serve?"""
     served = _vllm_family(settings)
@@ -1214,10 +1326,11 @@ def create_app(
             _forget_vllm_sleep()
             if updated.vllm.enabled:
                 # Give the service's two stages the room they need *now* (the local
-                # copy of the family it serves is redundant), then start it (or
-                # prime it) in the background: the first turn must not pay for it.
+                # copy of the family it serves is redundant), then bring the
+                # container in line (checkpoint, launch flags) in the background:
+                # the first turn must not pay for it.
                 await _release_vllm_family(engine, _vllm_family(updated), "enabled in Settings")
-                asyncio.create_task(_vllm_lifecycle(updated, start=True))
+                asyncio.create_task(_vllm_reconcile(updated))
             else:
                 # Back on the local engine: the service is stopped so its VRAM
                 # returns to our models (no-op without `docker.control`).
@@ -1275,11 +1388,13 @@ def create_app(
         """
         _admin_ok(request)
         settings = app.state.settings
-        wanted = (model or "").strip()
+        wanted = (model or "").strip() or str(settings.vllm.model or "").strip()
         if not wanted:
             registry = settings.models.registry or {}
             wanted = str(registry.get(_vllm_family(settings), "") or "")
-        return _vllm_budget(settings, wanted)
+        out = _effective_budget(settings, wanted)
+        out["suggested"] = (_vllm_budget(settings, wanted).get("suggested") or {})
+        return out
 
     @app.get("/api/vllm/service", tags=["Settings"])
     async def api_vllm_service(request: Request) -> Dict[str, Any]:
@@ -1353,13 +1468,15 @@ def create_app(
         # preparing another checkpoint while the engine is local leaves it stopped.
         updated_enabled = bool(app.state.settings.vllm.enabled)
         try:
+            values, switches = _vllm_flag_plan(app.state.settings, model)
             state = await docker_ctl.set_model(
-                cfg.socket, cfg.container, model, start=updated_enabled
+                cfg.socket, cfg.container, model, values=values, switches=switches,
+                start=updated_enabled,
             )
         except docker_ctl.DockerError as exc:
             raise HTTPException(502, str(exc)) from exc
-        # The gateway must route the family this checkpoint serves.
-        updated = store.update(vllm={"family": family})
+        # The gateway must route the family this checkpoint serves, and remember it.
+        updated = store.update(vllm={"family": family, "model": model})
         app.state.settings = updated
         engine.settings = updated
         await _release_vllm_family(engine, family, "switched to another checkpoint")

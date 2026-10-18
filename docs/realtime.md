@@ -132,9 +132,16 @@ depth, and per-stage timings (`/api/metrics`).
   bf16 plus ~30 % of buffers; the vocoder ≈0.6 GiB), that gives **0.30 + 0.11** for a 1.7B on
   a 15.5 GiB card and **0.13 + 0.11** for a 0.6B — the numbers we had tuned by hand. Ready to
   paste: `--stage-overrides '{"0": {"gpu_memory_utilization": 0.3}, "1": {"gpu_memory_utilization": 0.11}}'`.
-  The endpoint is read-only: your compose (or the container the gateway pilots) stays
-  authoritative, and the sum must leave room for everything else on the card (our own models,
-  STT, the LLM).
+  The endpoint is read-only: it *suggests*. To actually apply it — and to overrule the
+  computation — the gateway pilots the container: `PUT /api/settings` with a `vllm` section
+  holds the whole launch profile (`model`, `stage_memory` `{"0": 0.30, "1": 0.12}`, an empty
+  mapping meaning "computed"; `max_model_len`, `enforce_eager`), and with `docker.control` on,
+  the gateway **recreates the container to match** — same image, env, mounts and GPU
+  reservation, only the `vllm serve` argument and those flags change — then starts or stops it
+  according to the engine toggle. So the compose is only the state the service is *created*
+  with; from then on the UI is the source of truth. Every stage can be pinned individually
+  (a stage left at 0 keeps being computed), which is the escape hatch when our numbers do not
+  fit a given card.
 
   **Managing the service from the UI** (optional): with the Docker socket mounted and
   `docker.control` enabled, **Settings → vLLM-Omni** becomes a plain engine toggle —

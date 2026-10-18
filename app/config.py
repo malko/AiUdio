@@ -225,6 +225,17 @@ class VLLMConfig(BaseModel):
     # (needs `--enable-sleep-mode` on the service); the next request wakes it first.
     sleep_after: float = 0.0
     sleep_level: int = 1  # 1 = weights offloaded to host RAM (fast wake), 2 = freed
+    # Launch profile applied when the gateway (re)creates the container itself:
+    # `--max-model-len`, `--enforce-eager` and the per-stage VRAM budget. An empty
+    # {stage: fraction} mapping lets the gateway compute it from the checkpoint and
+    # the card (`GET /api/vllm/budget`); explicit values always win, and leaving a
+    # stage out mixes both ("auto" only where it is not set).
+    max_model_len: int = 2048
+    enforce_eager: bool = True
+    stage_memory: Dict[str, float] = Field(default_factory=dict)
+    # Checkpoint the gateway keeps the service on ("" = what the compose started
+    # it with). Setting it makes the UI's model picker the source of truth.
+    model: str = ""
 
     @field_validator("family")
     @classmethod

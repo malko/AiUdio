@@ -156,6 +156,14 @@ vllm:
   # the next request wakes it up first. Level 1 = weights in host RAM (fast wake).
   sleep_after: 0.0
   sleep_level: 1
+  # Launch profile the gateway applies when it recreates the container itself
+  # (needs docker.control): the checkpoint to serve ('' = whatever the compose
+  # started it with) and the flags. `stage_memory` empty = computed from the
+  # checkpoint and the card (GET /api/vllm/budget); pin a stage to overrule it.
+  model: ''
+  max_model_len: 2048
+  enforce_eager: true
+  stage_memory: {}
 docker:
   # Pilot the vLLM-Omni container (start/stop/switch its checkpoint) from the UI.
   # Off by default: it requires the Docker socket, i.e. root-equivalent power over
