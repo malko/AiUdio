@@ -433,6 +433,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | Choppy TTS streaming | lower `chunking.max_chars` or use the `vllm` profile |
 | vLLM serves the wrong checkpoint | `/api/vllm/health` reports `served_family`; set `vllm.family` to match (`custom_voice` presets / `base` clones) — the service loads a single model |
 | vLLM `Stage-1 has no live replica` / stage-1 CUDA OOM | the two stages each reserve a fraction of the *same* GPU (Qwen3-TTS: 0.3 + 0.3 = 60 % of the card, whatever the model size): lower them with `--stage-overrides`; see [realtime](docs/realtime.md) |
+| vLLM `Available KV cache memory: 0.0 GiB` / `No available memory for the cache blocks` | stage 0's `gpu_memory_utilization` is too small (it must cover the weights **plus** CUDA contexts/activation and a KV pool) or a local model still holds VRAM: raise stage 0 (`GET /api/vllm/budget?model=…`) and select the vLLM engine so the gateway unloads the local models |
 | `Warning: flash-attn is not installed` | expected — attention falls back to PyTorch `sdpa` (no FlashAttention build in the image) |
 | `Chatterbox is not installed` | build the image with `INSTALL_CHATTERBOX=1`, or point `models.chatterbox.python` at a venv with `chatterbox-tts` |
 | Chatterbox slow with many callers | it has no batch API; requests are serialized (use Qwen for concurrent throughput) |

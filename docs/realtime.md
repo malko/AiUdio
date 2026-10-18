@@ -126,27 +126,34 @@ depth, and per-stage timings (`/api/metrics`).
   fits each stage:
 
   ```
-  stage 0 (talker)  ≈ (weights + KV & activations) / total VRAM   → 0.01 ≈ 160 MiB on 16 GiB
+  stage 0 (talker)   ≈ (weights + CUDA contexts/activation peak + KV pool) / total VRAM
   stage 1 (Code2Wav) ≈ (vocoder weights + its 64k-token buffers) / total VRAM
   ```
 
+  The contexts/activation term is not optional: vLLM derives
+  `available_kv = gpu_memory_utilization × total_vram − peak_usage`, so a stage-0 budget
+  computed from the weights alone dies at startup with
+  `Available KV cache memory: 0.0 GiB` / *No available memory for the cache blocks*.
+  The gateway budgets ≈1.2 GiB of contexts/activation plus ≈0.11 GiB of KV per 1024 tokens
+  of `--max-model-len`.
+
   Calibrated on the measured footprints (1.7B → ≈4.1 GiB of weights, 0.6B → ≈1.4 GiB, i.e.
-  bf16 plus ~30 % of buffers; the vocoder ≈0.6 GiB), that gives **0.30 + 0.11** for a 1.7B on
-  a 15.5 GiB card and **0.13 + 0.11** for a 0.6B — the numbers we had tuned by hand. Ready to
-  paste: `--stage-overrides '{"0": {"gpu_memory_utilization": 0.3}, "1": {"gpu_memory_utilization": 0.11}}'`.
+  bf16 plus ~30 % of buffers; the vocoder ≈0.6 GiB), that gives **0.36 + 0.11** for a 1.7B on
+  a 15.5 GiB card and **0.19 + 0.11** for a 0.6B. Ready to paste:
+  `--stage-overrides '{"0": {"gpu_memory_utilization": 0.36}, "1": {"gpu_memory_utilization": 0.11}}'`.
   The endpoint is read-only: it *suggests*. To actually apply it — and to overrule the
   computation — the gateway pilots the container: `PUT /api/settings` with a `vllm` section
-  holds the whole launch profile (`model`, `stage_memory` `{"0": 0.30, "1": 0.12}`, an empty
+  holds the whole launch profile (`model`, `stage_memory` `{"0": 0.36, "1": 0.11}`, an empty
   mapping meaning "computed"; `max_model_len`, `enforce_eager`), and with `docker.control` on,
   the gateway **recreates the container to match** — same image, env, mounts and GPU
   reservation, only the `vllm serve` argument and those flags change — then starts or stops it
   according to the engine toggle. So the compose is only the state the service is *created*
   with; from then on the UI is the source of truth. Every stage can be pinned individually
   (a stage left at 0 keeps being computed), which is the escape hatch when our numbers do not
-  fit a given card.
+  fit a given card (raise stage 0 first: it is the one that needs room for the KV pool).
 
   The card also shows what the *container* really runs with, read from its command line
-  (`Qwen/…-0.6B-Base · 0=0.13 + 1=0.11 · ctx 2048 · eager`), so a divergence from the saved
+  (`Qwen/…-0.6B-Base · 0=0.19 + 1=0.11 · ctx 2048 · eager`), so a divergence from the saved
   profile is visible at a glance (`GET /api/vllm/service` → `profile.matches`) with the
   *Save* that fixes it: no state to keep in sync, the command line is the truth.
 
@@ -267,24 +274,25 @@ depth, and per-stage timings (`/api/metrics`).
       --omni --host 0.0.0.0 --port 8091
       --max-model-len 2048        # talker *and* codec stream; the YAML's 65536 for stage 1 is huge
       --enforce-eager             # no CUDA-graph capture (~1-2 GiB) and no 13 s compile
-      --stage-overrides '{"0": {"gpu_memory_utilization": 0.30}, "1": {"gpu_memory_utilization": 0.12}}'
+      --stage-overrides '{"0": {"gpu_memory_utilization": 0.40}, "1": {"gpu_memory_utilization": 0.12}}'
   ```
 
   The keys are **stage ids, not GPU ids** — with one visible GPU both stages land on `cuda:0`
   (the YAML's `devices: "0"`). `--stage-overrides` beats the global flag and the YAML (see its
   precedence); the per-stage defaults live in the image's
   `vllm_omni/deploy/qwen3_tts.yaml`, worth reading when sizing. Keep stage 0 large enough for
-  the talker's weights (`fraction × total VRAM` ≥ ~4.1 GiB for the 1.7B, ~1.3 GiB for the
-  0.6B) and let stage 1 — a vocoder of well under 1 GiB — sit far below its 0.3 default.
-  Lowering `1` from 0.3 to ~0.12 returns ~2.8 GiB to the rest of the card. The flag name has
-  moved between releases (`--stage-configs-path` → `--deploy-config`), so confirm it with
+  the talker's weights **plus** its CUDA contexts/activation peak and KV pool (`fraction × total
+  VRAM` ≥ ~4.1 + 1.4 GiB for the 1.7B, ~1.3 + 1.4 GiB for the 0.6B) and let stage 1 — a vocoder
+  of well under 1 GiB — sit far below its 0.3 default. Lowering `1` from 0.3 to ~0.12 returns
+  ~2.8 GiB to the rest of the card. The flag name has moved between releases
+  (`--stage-configs-path` → `--deploy-config`), so confirm it with
   `vllm serve --help | grep -i stage`.
 
-  Anything else holding VRAM on that GPU (typically the gateway's own copy of the family, if it
-  is loaded) eats into the same budget: when `vllm.enabled` the gateway now **skips the
-  `custom_voice` preload** (log: *not preloading 'custom_voice' — vLLM-Omni serves it*) and
-  **unloads** its local copy as soon as vLLM is switched on, so start the container while the
-  gateway is idle and it sizes its pools from free memory.
+  Anything else holding VRAM on that GPU (typically the gateway's own models, if any is
+  loaded) eats into the same budget: when `vllm.enabled` the gateway **skips every local
+  preload** at boot and **unloads all local models** as soon as vLLM is switched on (so a
+  stray Base/VoiceDesign voice cannot starve stage 0), then starts the container, which sizes
+  its pools from free memory.
 
   `counters.tts_vllm_sessions` confirms the route is used (0 ⇒ the local engine, e.g. the
   service is unreachable and the call fell back). When vLLM does serve a family, the

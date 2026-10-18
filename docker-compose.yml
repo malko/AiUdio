@@ -127,7 +127,9 @@ services:
     # the card's *total* VRAM (the bundled deploy YAML asks 0.3 + 0.3 = 60 %,
     # whatever the variant); `--stage-overrides` gives them different budgets, and
     # `GET /api/vllm/budget` computes them for the checkpoint and the card in use
-    # (raise them, or drop the overrides, on a bigger GPU).
+    # (raise them, or drop the overrides, on a bigger GPU). Stage 0 must cover the
+    # talker's weights **plus** the CUDA contexts/activation peak and a KV pool: too
+    # small and the engine dies with "Available KV cache memory: 0.0 GiB".
     command: >
       vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
       --omni --host 0.0.0.0 --port 8091
@@ -135,7 +137,7 @@ services:
       --enable-sleep-mode
       --max-model-len 2048
       --enforce-eager
-      --stage-overrides '{"0": {"gpu_memory_utilization": 0.30}, "1": {"gpu_memory_utilization": 0.12}}'
+      --stage-overrides '{"0": {"gpu_memory_utilization": 0.40}, "1": {"gpu_memory_utilization": 0.12}}'
     # vLLM needs a large shared-memory segment (Docker's default is 64 MB).
     shm_size: "8gb"
     ports:

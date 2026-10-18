@@ -498,15 +498,15 @@ def test_budget_scales_the_stage_reservation_with_the_checkpoint(monkeypatch):
     assert big["weights_gib"]["talker"] > small["weights_gib"]["talker"]
     assert big["suggested"]["0"] > small["suggested"]["0"]
     assert big["suggested"]["1"] == small["suggested"]["1"]
-    assert small["suggested"]["0"] == 0.13  # (1.4 + 0.5) / 15.48
+    assert small["suggested"]["0"] == 0.19  # (1.45 + 1.2 ctx + 0.22 kv) / 15.48
     assert small["suggested"]["1"] == 0.11  # (0.6 + 1.0) / 15.48
-    assert big["suggested"]["0"] == 0.30  # (4.1 + 0.5) / 15.48
+    assert big["suggested"]["0"] == 0.36  # (4.12 + 1.2 ctx + 0.22 kv) / 15.48
     assert big["suggested"]["reserved_gib"] == round(
         (big["suggested"]["0"] + big["suggested"]["1"]) * 15.48, 2
     )
     # The ready-to-paste flag is what the compose/command needs.
     assert big["suggested"]["stage_overrides"] == (
-        '{"0": {"gpu_memory_utilization": 0.3}, "1": {"gpu_memory_utilization": 0.11}}'
+        '{"0": {"gpu_memory_utilization": 0.36}, "1": {"gpu_memory_utilization": 0.11}}'
     )
     assert big["total_gib"] == 15.48 and big["free_gib"] == 9.0
 
@@ -540,7 +540,7 @@ def test_manual_budget_overrides_the_computation(monkeypatch):
     model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 
     auto = main_mod._effective_budget(settings, model)
-    assert auto["source"] == "computed" and auto["stages"] == {"0": 0.13, "1": 0.11}
+    assert auto["source"] == "computed" and auto["stages"] == {"0": 0.19, "1": 0.11}
 
     # Explicit values always win: our numbers are a suggestion, not a verdict.
     settings.vllm.stage_memory = {"0": 0.40, "1": 0.20}
@@ -551,7 +551,7 @@ def test_manual_budget_overrides_the_computation(monkeypatch):
     # A single stage can be pinned, the other keeps being computed.
     settings.vllm.stage_memory = {"1": 0.25}
     mixed = main_mod._effective_budget(settings, model)
-    assert mixed["stages"] == {"0": 0.13, "1": 0.25}
+    assert mixed["stages"] == {"0": 0.19, "1": 0.25}
 
     # Without CUDA nothing is computed, but an explicit budget still applies.
     monkeypatch.setattr(main_mod, "_gpu_memory", lambda: None)
@@ -647,11 +647,11 @@ def test_container_profile_is_read_from_its_command():
     cmd = [
         "vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
         "--max-model-len", "2048", "--enforce-eager",
-        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.13}, "1": {"gpu_memory_utilization": 0.11}}',
+        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.19}, "1": {"gpu_memory_utilization": 0.11}}',
     ]
     profile = _vllm_container_flags(cmd)
     assert profile["model"] == "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-    assert profile["stage_memory"] == {"0": 0.13, "1": 0.11}
+    assert profile["stage_memory"] == {"0": 0.19, "1": 0.11}
     assert profile["max_model_len"] == 2048
     assert profile["enforce_eager"] is True
 
@@ -679,7 +679,7 @@ def test_service_profile_reports_divergence(monkeypatch):
     matching = main_mod._vllm_container_flags([
         "vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
         "--max-model-len", "2048", "--enforce-eager",
-        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.13}, "1": {"gpu_memory_utilization": 0.11}}',
+        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.19}, "1": {"gpu_memory_utilization": 0.11}}',
     ])
     assert main_mod._vllm_profile_status(settings, matching)["matches"] is True
 
@@ -696,7 +696,7 @@ def test_service_profile_reports_divergence(monkeypatch):
     # …but a context/eager difference still is one.
     loose = main_mod._vllm_container_flags([
         "vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
-        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.13}, "1": {"gpu_memory_utilization": 0.11}}',
+        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.19}, "1": {"gpu_memory_utilization": 0.11}}',
     ])
     assert main_mod._vllm_profile_status(settings, loose)["matches"] is False
 
@@ -765,3 +765,33 @@ def test_nothing_is_logged_when_the_service_is_already_stopped(monkeypatch, capl
     with caplog.at_level("INFO"):
         assert asyncio.run(main_mod._vllm_enforce_engine(settings)) is False
     assert caplog.text == ""
+
+
+def test_startup_does_not_preload_local_models_when_vllm_is_selected(monkeypatch):
+    """With the vLLM engine selected, no local model may be loaded at boot.
+
+    The service's two stages profile against free VRAM: preloading a local family
+    (even one it does not serve) leaves stage 0 with no KV cache.
+    """
+    from types import SimpleNamespace
+
+    from app import main as main_mod
+
+    loaded: list[str] = []
+
+    class Engine:
+        def ensure(self, family):
+            loaded.append(family)
+
+    settings = Settings()
+    settings.vllm.enabled = True
+    settings.startup.voice = "base"
+    settings.startup.tts_family = "custom_voice"
+    app = SimpleNamespace(state=SimpleNamespace(settings=settings, engine=Engine()))
+
+    async def noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(main_mod, "_vllm_lifecycle", noop)
+    asyncio.run(main_mod._apply_startup(app))
+    assert loaded == []

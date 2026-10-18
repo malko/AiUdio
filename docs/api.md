@@ -45,7 +45,7 @@ admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/vllm/health` | Probe the configured vLLM-Omni service: `ok`, `models`, `served_family` and a `warning` when the served checkpoint is not the one `vllm.family` routes (admin) |
-| GET | `/api/vllm/budget` | Effective per-stage VRAM budget for a checkpoint on the gateway's card (`?model=…`, defaults to the routed family): `stages` (`{"0": 0.30, "1": 0.12}`), `source` (`computed`/`manual`), the weights and the card (admin) |
+| GET | `/api/vllm/budget` | Effective per-stage VRAM budget for a checkpoint on the gateway's card (`?model=…`, defaults to the routed family): `stages` (`{"0": 0.36, "1": 0.11}`), `source` (`computed`/`manual`), the weights, the headroom (CUDA contexts + KV) and the card (admin) |
 | GET | `/api/vllm/service` | State of the vLLM-Omni container: `state` (running, image, served checkpoint) and `profile` — what it really runs with (`actual`), what the settings ask for (`desired`) and whether they `matches`; reports `control: false` until `docker.control` is enabled (admin) |
 | POST | `/api/vllm/service/{action}` | `start` / `stop` / `restart` the vLLM-Omni container, then warm it up (admin, needs `docker.control`) |
 | PUT | `/api/vllm/service/model` | `{"model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"}` — recreate the container serving another checkpoint, keeping its configuration (started only if the vLLM-Omni engine is selected); `vllm.family` follows the checkpoint (admin, needs `docker.control`) |

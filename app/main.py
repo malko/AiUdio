@@ -123,13 +123,13 @@ async def _apply_startup(app: FastAPI) -> None:
             log.exception("Startup STT activation failed")
 
     voice = settings.startup.voice
-    if voice and settings.vllm.enabled and _preload_is_served_by_vllm(settings, voice):
-        # Both vLLM-Omni stages live on the same GPU and reserve their share at
-        # startup: preloading the same family here is what makes its second stage
-        # fail with CUDA OOM on a tight card.
+    if voice and settings.vllm.enabled:
+        # Both vLLM-Omni stages live on the same GPU and profile against the *free*
+        # memory at startup: loading any local model here (even another family) is
+        # what leaves stage 0 with "Available KV cache memory: 0.0 GiB".
         log.info(
-            "Startup: not preloading '%s' — vLLM-Omni serves that family (keeping "
-            "the VRAM for the service's two stages)",
+            "Startup: not preloading '%s' — the vLLM-Omni engine is selected "
+            "(keeping the VRAM for the service's two stages)",
             voice,
         )
     elif voice:
@@ -163,10 +163,10 @@ async def _apply_startup(app: FastAPI) -> None:
             log.debug("vLLM-Omni warm-up skipped", exc_info=True)
 
     family = settings.startup.tts_family
-    if family and settings.vllm.enabled and family == _vllm_family(settings):
+    if family and settings.vllm.enabled:
         log.info(
-            "Startup: not preloading '%s' — vLLM-Omni serves it (keeping the VRAM "
-            "for the service's two stages)",
+            "Startup: not preloading '%s' — the vLLM-Omni engine is selected "
+            "(keeping the VRAM for the service's two stages)",
             family,
         )
         family = ""
@@ -340,10 +340,18 @@ def _vllm_family(settings: Settings) -> str:
 #: (1.7B → ~4.1 GiB of weights, 0.6B → ~1.4 GiB, i.e. bf16 plus ~30 % of buffers).
 _VLLM_BYTES_PER_PARAM = 2
 _VLLM_WEIGHT_FACTOR = 1.3
-#: Per-stage headroom on top of the weights, in GiB: the talker's KV pool (0.22 GiB
-#: at `--max-model-len 2048`) plus activations and CUDA contexts; the Code2Wav
-#: decoder is small but sizes its buffers for `max_num_batched_tokens` (65536).
-_VLLM_STAGE_HEADROOM = {0: 0.5, 1: 1.0}
+#: Headroom on top of the weights, in GiB. The talker (stage 0) is the tricky one:
+#: its budget must cover **everything that is not KV** — the weights, the CUDA
+#: contexts of the API server and the engine core, and the activation peak — *plus*
+#: a usable KV pool. vLLM derives
+#:     available_kv = gpu_memory_utilization × total_vram − peak_usage
+#: so a budget that only fits the weights ends with
+#:     "Available KV cache memory: 0.0 GiB"  (stage 0 fails to start).
+#: The KV pool grows with `--max-model-len`; the Code2Wav stage (1) is small but
+#: sizes its buffers for a huge `max_num_batched_tokens` (65536).
+_VLLM_CONTEXT_GIB = 1.2             # CUDA contexts + activation peak (stage 0)
+_VLLM_KV_GIB_PER_1K_TOKENS = 0.11   # talker KV pool, per 1024 tokens of context
+_VLLM_STAGE1_HEADROOM = 1.0         # Code2Wav: small weights, large token buffers
 _VLLM_CODEC_WEIGHTS = 0.6
 
 
@@ -376,13 +384,15 @@ def _vllm_budget(settings: Settings, model: str) -> Dict[str, Any]:
     `gpu_memory_utilization` is a fraction of the GPU's **total** VRAM — vLLM says
     so itself when it refuses: *desired GPU memory utilization (0.3, 23.78 GiB)* on
     a 79.25 GiB card — and **every stage reserves its own share**, so the two
-    fractions add up. The smallest budget that fits a stage is
+    fractions add up. The smallest budget that actually starts a stage is
 
-        (weights + activation/KV headroom) / total VRAM
+        (weights + CUDA contexts/activation peak + KV pool) / total VRAM
 
-    rounded up to the hundredth (on a 16 GiB card, 0.01 ≈ 160 MiB). The rest of the
-    card has to hold everything else (our own models, STT, the LLM…), which is why
-    the sum should stay well below 1.
+    rounded up to the hundredth (on a 16 GiB card, 0.01 ≈ 160 MiB). Omitting the
+    CUDA contexts/activation term is what produces *"Available KV cache memory:
+    0.0 GiB"* and a stage that never comes up. The rest of the card still has to
+    hold everything else (our own models, STT, the LLM…), which is why the sum
+    should stay well below 1.
     """
     name = (model or "").strip()
     gpu = _gpu_memory()
@@ -400,11 +410,14 @@ def _vllm_budget(settings: Settings, model: str) -> Dict[str, Any]:
 
     total = gpu["total_bytes"] / 1024 ** 3
     talker = params * 1e9 * _VLLM_BYTES_PER_PARAM * _VLLM_WEIGHT_FACTOR / 1024 ** 3
+    context = max(1024, int(settings.vllm.max_model_len or 2048))
+    kv = _VLLM_KV_GIB_PER_1K_TOKENS * context / 1024.0
     fraction = lambda gib: math.ceil((gib / total) * 100) / 100  # noqa: E731
-    stage0 = fraction(talker + _VLLM_STAGE_HEADROOM[0])
-    stage1 = fraction(_VLLM_CODEC_WEIGHTS + _VLLM_STAGE_HEADROOM[1])
+    stage0 = fraction(talker + _VLLM_CONTEXT_GIB + kv)
+    stage1 = fraction(_VLLM_CODEC_WEIGHTS + _VLLM_STAGE1_HEADROOM)
     reserved = (stage0 + stage1) * total
     out["weights_gib"] = {"talker": round(talker, 2), "codec": _VLLM_CODEC_WEIGHTS}
+    out["headroom_gib"] = {"stage0_context": _VLLM_CONTEXT_GIB, "stage0_kv": round(kv, 2)}
     out["total_gib"] = round(total, 2)
     out["free_gib"] = round(gpu["free_bytes"] / 1024 ** 3, 2)
     out["suggested"] = {
@@ -416,7 +429,7 @@ def _vllm_budget(settings: Settings, model: str) -> Dict[str, Any]:
              "1": {"gpu_memory_utilization": stage1}},
             separators=(", ", ": "),
         ),
-        "max_model_len": 2048,
+        "max_model_len": context,
     }
     out["note"] = (
         "each stage reserves its fraction of the card's total VRAM; keep room for the "
@@ -596,14 +609,6 @@ async def _vllm_reconcile(settings: Settings) -> None:
     # Whatever happened (and without `docker.control`), honour the engine switch:
     # start the service and prime it, or stop it to free the VRAM.
     await _vllm_lifecycle(settings, start=bool(settings.vllm.enabled))
-
-
-def _preload_is_served_by_vllm(settings: Settings, voice: str) -> bool:
-    """Is this startup voice a family the vLLM-Omni service will serve?"""
-    served = _vllm_family(settings)
-    if voice.startswith("avatar:"):
-        return served == "base" and _clone_family(settings) == "base"
-    return voice.strip().lower() == served
 
 
 def _resolve_avatar(settings: Settings, req: TTSRequest) -> Optional[Avatar]:
@@ -1526,6 +1531,13 @@ def create_app(
                 # container in line (checkpoint, launch flags) in the background:
                 # the first turn must not pay for it.
                 await _release_vllm_family(engine, _vllm_family(updated), "enabled in Settings")
+                # vLLM profiles the KV pool against the memory that is *free*: any
+                # other local family still resident (a Base avatar, VoiceDesign…)
+                # would leave stage 0 with 0 GiB of KV. Drop them all; they reload
+                # on demand if the local engine is used again.
+                if engine.loaded_families():
+                    await asyncio.to_thread(engine.unload)
+                    log.info("Released the local models to make room for vLLM-Omni")
                 asyncio.create_task(_vllm_reconcile(updated))
             else:
                 # Back on the local engine: the service is stopped so its VRAM

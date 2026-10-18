@@ -528,3 +528,14 @@ def test_cors_preflight_is_not_blocked_by_auth(auth_client):
     )
     assert r.status_code < 400, r.text
     assert "access-control-allow-origin" in {k.lower() for k in r.headers}
+
+
+def test_enabling_vllm_frees_every_local_model(client):
+    # The vLLM stages profile their KV pool against the *free* memory: selecting the
+    # service must not leave a local family (e.g. a Base avatar) holding VRAM.
+    client.post("/api/models/load", json={"family": "custom_voice"})
+    client.post("/api/models/load", json={"family": "base"})
+    assert set(client.app.state.engine.loaded_families()) == {"custom_voice", "base"}
+    r = client.put("/api/settings", json={"vllm": {"enabled": True}})
+    assert r.status_code == 200, r.text
+    assert client.app.state.engine.loaded_families() == []
