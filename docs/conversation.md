@@ -73,6 +73,12 @@ Then `LLM_BASE_URL=http://host.docker.internal:8080/v1`.
   what keeps playback gap-free, since the client only plays what it has received — and
   sentences are only grouped (up to ~200 chars) while the engine still has work queued, to
   limit the number of synthesis calls (`_pop_chat_chunks`).
+- **Text cleanup.** An LLM writes Markdown and emojis: with `text.cleanup: llm` the gateway
+  strips the formatting (`**bold**`, headings, bullets, links, inline code) and drops fenced
+  code blocks (or announces them, `text.code_blocks: announce`); `text.emoji` decides what
+  happens to emojis. An open fence is remembered across chunks, so a streamed block stays
+  silent instead of being read aloud. A chunk left empty by the cleanup produces no audio
+  event at all.
 
 ## Endpoints
 

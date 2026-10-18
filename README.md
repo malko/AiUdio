@@ -54,6 +54,10 @@ served by a single `docker compose` stack, reachable on the LAN or on the Docker
   the STT → LLM → TTS cascade in streaming mode, without serving the LLM. Push-to-talk or
   hands-free **VAD** (auto-send on pause), barge-in interruption, and per-reply replay.
 - **Multilingual UI**: English and French out of the box, easily extensible.
+- **Text cleanup**: optionally strip what cannot be spoken — Markdown from an LLM
+  (`**bold**`, code fences), emojis (removed or spoken), invisible characters — globally or
+  **per API key**, so a chat client and a batch client can get different behaviour from the
+  same endpoint.
 - **Security**: HTTP Basic for the UI, API keys (Bearer / `X-API-Key`) for machines.
 - **Single CUDA stack**: TTS gateway on the official PyTorch image + STT on the official NVIDIA NGC NeMo-Speech.cpp image (base images overridable via `.env`).
 

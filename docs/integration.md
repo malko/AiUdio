@@ -82,6 +82,10 @@ boundaries (never inside a word). `max_chars` is bounded to **40–600**: above 
 would generate more audio than an engine can, and the tail would be lost silently.
 `chunking: false` sends it in one piece.
 
+The operator may also let the gateway **clean** the text it receives (Markdown, emojis,
+invisible characters) — globally or per API key. It is not a request field: see
+[Text cleanup](api.md#text-cleanup) for the levels and the defaults (both `off`).
+
 ### 3.2 OpenAI-compatible — `POST /v1/audio/speech`
 
 Same engine, OpenAI request shape (`input`, `voice`, `response_format`), so existing OpenAI

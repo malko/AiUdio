@@ -30,6 +30,11 @@ works for WebSocket too (where browsers cannot send `Authorization`). The sessio
 **deleted** (revoked immediately) from the same panel. They are not configurable via
 environment variables.
 
+A key may also carry a **per-client `text` cleanup policy** (input text cleanup: Markdown,
+emojis, invisible characters — see [api](api.md#text-cleanup)). It only affects what the
+gateway is allowed to remove from the text that client sends; `PATCH /api/api-keys/{id}`
+changes it without rotating the secret.
+
 - `/health` (and `/ready`) stay public (`auth.exempt_paths`).
 - Comparisons use `secrets.compare_digest` (constant time).
 - Managing keys requires an admin (HTTP Basic or an admin session key); a plain client

@@ -13,8 +13,8 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/api/metrics` | Latency/throughput metrics (admin when auth is enabled) |
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
-| GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt` (`enabled`/`base_url`/`language`/`languages`/…), `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`/`model`/`max_model_len`/`enforce_eager`/`stage_memory`/`sleep_after`/`sleep_level`/`fallback_to_local`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
+| GET | `/api/config` | Public configuration (models, languages, LLM, UI, `text`) |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `text`, `audio`, `stt` (`enabled`/`base_url`/`language`/`languages`/…), `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`/`model`/`max_model_len`/`enforce_eager`/`stage_memory`/`sleep_after`/`sleep_level`/`fallback_to_local`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
 
 > **Admin-only writes.** When `auth.enabled` is true, `PUT /api/settings`, model/voice management
 > (`POST /api/models/select|load|unload`, `POST /api/voices/load`), avatar writes
@@ -32,9 +32,16 @@ admin UI uses **HTTP Basic**. Keys are stored **hashed** and shown only once at 
 |---|---|---|---|
 | POST | `/api/session` | Basic | Mint a short-lived admin key (`{key, id, expires_at, admin}`) |
 | POST | `/api/session/logout` | session key | Revoke the presented session key |
-| GET | `/api/api-keys` | admin | List client keys (never the secret: `id, name, prefix, created_at, expires_at, expired, last_used_at`) |
-| POST | `/api/api-keys` | admin | `{"name", "expires_in_days"?}` → `{key, …}` (secret shown once) |
+| GET | `/api/api-keys` | admin | List client keys (never the secret: `id, name, prefix, created_at, expires_at, expired, last_used_at`, `text`) |
+| POST | `/api/api-keys` | admin | `{"name", "expires_in_days"?, "text"?}` → `{key, …}` (secret shown once) |
+| PATCH | `/api/api-keys/{id}` | admin | `{"name"?, "text"?}` — rename and/or change the client's `text` policy **without** rotating the secret (`"text": null` clears the override) |
 | DELETE | `/api/api-keys/{id}` | admin | Delete (revoke) a client key |
+
+**Per-key text policy.** The optional `text` block (`{"cleanup": …, "emoji": …, "code_blocks": …}`)
+overrides the global `text` setting **for that client only**: only the fields you send are
+overridden, the others keep following the global setting (see
+[Text cleanup](#text-cleanup)). It is how behaviour is attached to a credential instead of to
+the request body, so `/api/tts` and `/v1/audio/speech` stay standard.
 
 - "admin" = HTTP Basic admin credentials or an admin-scoped session key; a plain client key
   gets `403`.
@@ -107,6 +114,24 @@ JSON `{"detail": "..."}`.
 
 ### `POST /v1/audio/speech`
 Same body (OpenAI: `input`, `voice`, `response_format`, `speed`). `speed` is not applied.
+
+### Text cleanup
+
+The gateway can clean the text before it is split and spoken — Markdown and emojis are the
+usual noise of an LLM answer, and some characters cannot be pronounced. It is a **setting**
+(`text` in `PUT /api/settings`, and optionally **per API key**, see
+[Access](#access-admin)); there is deliberately no request field, so `/api/tts` keeps its
+standard shape.
+
+| Field | Values | Default | What it does |
+|---|---|---|---|
+| `text.cleanup` | `off`, `light`, `llm` | `off` | `light`: remove characters that carry no sound (control codes, zero-width joiners/BOM, soft hyphens), normalize spacing and fold typographic punctuation. `llm`: also strip Markdown (`**bold**`, `#`, `>` quotes, bullets, `[text](url)`, inline code) |
+| `text.emoji` | `keep`, `strip`, `name` | `keep` | `strip`: remove emojis (as a space, so neighbouring words are not glued). `name`: speak the ~20 most frequent ones in the request language (`😂` → "rires"/"laughing") and strip the rest. Families, flags, skin tones and keycaps count as one emoji |
+| `text.code_blocks` | `drop`, `announce` | `drop` | With `cleanup: llm`: drop a fenced ``` block, or replace it with "bloc de code"/"code block" |
+
+Sentence punctuation is **never** touched (the prosody depends on it), numbers are not spelled
+out, and the reference transcript (`ref_text`) is left alone. In the chat WebSocket an open code
+fence is remembered across chunks, so a streamed block stays silent.
 
 ### `WS /ws/tts`
 Client events: `{"type":"session.config", ...}` then `{"type":"input.text","text":"..."}`
