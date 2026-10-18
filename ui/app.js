@@ -2697,11 +2697,16 @@ function applyPolicyToDialog(text) {
 function openKeyDialog(id) {
   const dlg = $("#key-dialog");
   dlg.dataset.id = id || "";
-  dlg.dataset.created = "";
   $("#kd-status").textContent = "";
   $("#kd-name").value = "";
   $("#kd-days").value = "";
   applyPolicyToDialog(null);
+  // Reset the dialog: the form, not the (one-shot) secret block.
+  $("#kd-form").hidden = false;
+  $("#kd-secret").hidden = true;
+  $("#kd-secret-value").textContent = "";
+  $("#kd-copy").textContent = t("settings.copy");
+  $("#kd-save").hidden = false;
   $("#kd-delete").hidden = !id;
   $("#kd-title").textContent = id ? t("settings.keyEdit") : t("settings.keyNew");
   if (!id) {
@@ -2748,9 +2753,13 @@ async function saveKeyDialog() {
     const raw = await r.text();
     if (!r.ok) throw new Error(errorFromBody(raw));
     const data = JSON.parse(raw);
-    if (data.key) showNewKey(data.key);
-    dlg.close();
     await loadApiKeys();
+    if (data.key) {
+      // Creating a key keeps the dialog open to show (and copy) the secret once.
+      showSecretInDialog(data.key);
+    } else {
+      dlg.close();
+    }
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
   }
@@ -2772,25 +2781,24 @@ async function deleteKeyFromDialog() {
   }
 }
 
-function showNewKey(secret) {
-  const box = $("#set-key-new");
-  box.textContent = "";
-  const label = document.createElement("span");
-  label.textContent = `${t("settings.newKey")} `;
-  const code = document.createElement("code");
-  code.textContent = secret;
-  const copy = document.createElement("button");
-  copy.textContent = t("settings.copy");
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(secret);
-      copy.textContent = t("settings.copied");
-    } catch (e) {
-      copy.textContent = t("status.error");
-    }
-  });
-  box.appendChild(label); box.appendChild(code); box.appendChild(copy);
+function showSecretInDialog(secret) {
+  $("#kd-secret-value").textContent = secret;
+  $("#kd-form").hidden = true;
+  $("#kd-secret").hidden = false;
+  $("#kd-save").hidden = true;
+  $("#kd-delete").hidden = true;
+  $("#kd-copy").textContent = t("settings.copy");
 }
+
+$("#kd-copy").addEventListener("click", async () => {
+  const value = $("#kd-secret-value").textContent;
+  try {
+    await navigator.clipboard.writeText(value);
+    $("#kd-copy").textContent = t("settings.copied");
+  } catch (e) {
+    $("#kd-copy").textContent = t("status.error");
+  }
+});
 
 async function loadApiKeys() {
   const wrap = $("#set-keys-wrap");

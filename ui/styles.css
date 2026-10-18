@@ -256,12 +256,12 @@ button.danger:hover { background: var(--err); border-color: var(--err); color: #
 .keys-table tr:last-child td { border-bottom: none; }
 .keys-table .key-policy { color: var(--muted); font-size: .78rem; }
 .keys-table button { min-width: 0; min-height: 30px; padding: 4px 10px; }
-#set-key-new { margin: 8px 0; }
-#set-key-new code {
-  background: var(--bg); padding: 2px 6px; border-radius: 4px;
-  border: 1px solid var(--border); word-break: break-all;
+.secret-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.secret-row code {
+  background: var(--bg); padding: 4px 8px; border-radius: 4px;
+  border: 1px solid var(--border); word-break: break-all; flex: 1; min-width: 200px;
 }
-#set-key-new button { margin-left: 8px; }
+.secret-row button { min-width: 0; }
 
 .chat-clone-engine { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
 

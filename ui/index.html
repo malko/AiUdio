@@ -183,11 +183,11 @@
       <label><span data-i18n="avatars.prompt">Voice description (Voice Design)</span>
         <textarea id="ad-prompt" rows="2" data-i18n-ph="avatars.promptPlaceholder" placeholder="e.g. warm, calm female voice, slight British accent"></textarea>
       </label>
+      <div class="muted" data-i18n="avatars.fingerprintHint">Renders ~10s from the description. Saving with the description (or empty reference) stores it as a clone.</div>
       <div class="row">
         <button type="button" id="ad-fingerprint" data-i18n="avatars.fingerprint">Generate fingerprint</button>
         <audio id="ad-fingerprint-audio" controls hidden></audio>
       </div>
-      <div class="muted" data-i18n="avatars.fingerprintHint">Renders ~10s from the description. Saving with the description (or empty reference) stores it as a clone.</div>
     </div>
     <div id="ad-clone-box">
       <label><span data-i18n="avatars.refAudio">Reference audio</span> <input id="ad-ref" type="file" accept="audio/*" /></label>
@@ -214,13 +214,13 @@
       </div>
       <div class="card">
         <h2 data-i18n="stt.micTitle">Microphone (real time)</h2>
+        <div class="muted" id="stt-lang-hint" data-i18n="stt.langHint">Optional language hint. "auto" lets the model decide.</div>
         <div class="row">
           <button id="stt-record" class="primary" data-i18n="stt.start">Start</button>
           <label class="grow"><span data-i18n="stt.language">Language</span>
             <select id="stt-lang"></select>
           </label>
         </div>
-        <div class="muted" id="stt-lang-hint" data-i18n="stt.langHint">Optional language hint. "auto" lets the model decide.</div>
         <label><span data-i18n="stt.micDevice">Microphone</span>
           <select id="stt-mic-device"></select>
         </label>
@@ -245,11 +245,10 @@
       <details class="card" id="sec-access">
         <summary><span class="card-title" data-i18n="settings.accessTitle">Access &amp; API keys</span></summary>
         <div id="set-keys-wrap" hidden>
+          <div class="muted" data-i18n="settings.keysHint">A key is a client: it can carry its own text cleanup, and is shown only once.</div>
           <div class="row">
-            <button id="set-key-create" class="primary" data-i18n="settings.createKey">Create key</button>
-            <span class="muted grow" data-i18n="settings.keysHint">A key is a client: it can carry its own text cleanup, and is shown only once.</span>
+            <button id="set-key-create" class="primary" data-i18n="settings.createKey">Create a key</button>
           </div>
-          <div id="set-key-new" class="muted"></div>
           <table class="keys-table"><tbody id="set-keys-body"></tbody></table>
           <div id="set-keys-status" class="muted"></div>
         </div>
@@ -258,14 +257,15 @@
 
       <details class="card" id="sec-stt">
         <summary><span class="card-title" data-i18n="settings.sttDefaultTitle">Default STT engine</span></summary>
-        <div id="set-startup-stt-picker"></div>
         <div class="muted" data-i18n="settings.sttDefaultHint">Activated when the server starts. The Transcription tab can switch model at any time; "do not preload" loads on first use instead.</div>
+        <div id="set-startup-stt-picker"></div>
         <button id="set-startup-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="set-startup-status" class="muted"></div>
       </details>
 
       <details class="card" id="sec-tts">
         <summary><span class="card-title" data-i18n="settings.ttsDefaultTitle">Default TTS engine</span></summary>
+        <div class="muted" data-i18n="chat.cloneEngineHint">Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.</div>
         <label><span data-i18n="chat.cloneBackend">Engine used to synthesize cloned voices</span>
           <select id="set-clone-backend">
             <option value="qwen3" data-i18n="chat.backendQwen">Qwen3-TTS (Base)</option>
@@ -273,8 +273,8 @@
           </select>
         </label>
         <label class="inline cb-only"><input id="set-cb-watermark" type="checkbox" /> <span data-i18n="chat.watermark">Watermark output (PerTh)</span></label>
-        <div class="muted" data-i18n="chat.cloneEngineHint">Cloned voices are synthesized with the chosen engine. Voice Design (fingerprint) always uses Qwen3-TTS.</div>
         <h3 data-i18n="settings.genTitle">Generation / audio</h3>
+        <div class="muted" data-i18n="settings.genHint">Defaults for every request that does not override them. The sample rate is not a setting: each PCM response announces its own in X-Sample-Rate (24 kHz for the local engines).</div>
         <div class="row">
           <label class="grow"><span data-i18n="settings.temperature">Temperature</span>
             <input id="gen-temp" type="number" step="0.05" /></label>
@@ -302,13 +302,14 @@
               <option value="pcm">pcm</option>
             </select></label>
         </div>
-        <div class="muted" data-i18n="settings.genHint">Defaults for every request that does not override them. The sample rate is not a setting: each PCM response announces its own in X-Sample-Rate (24 kHz for the local engines).</div>
         <button id="tts-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="tts-status" class="muted"></div>
       </details>
 
       <details class="card" id="sec-text">
         <summary><span class="card-title" data-i18n="settings.textTitle">Text cleanup</span></summary>
+        <div class="muted" data-i18n="settings.textHint">Applied before the text is split (streaming and non-streaming). "off" sends the client's text as-is; "llm" also strips markdown and code fences; emojis have their own setting.</div>
+        <div class="muted" data-i18n="settings.keyTextHint">A client API key can override these for itself (Access &amp; API keys).</div>
         <div class="row">
           <label class="grow"><span data-i18n="settings.textCleanup">Input text cleanup</span>
             <select id="gen-cleanup">
@@ -328,8 +329,6 @@
               <option value="announce" data-i18n="settings.codeAnnounce">announce</option>
             </select></label>
         </div>
-        <div class="muted" data-i18n="settings.textHint">Applied before the text is split (streaming and non-streaming). "off" sends the client's text as-is; "llm" also strips markdown and code fences; emojis have their own setting.</div>
-        <div class="muted" data-i18n="settings.keyTextHint">A client API key can override these for itself (Access &amp; API keys).</div>
         <button id="text-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="text-status" class="muted"></div>
       </details>
@@ -338,6 +337,7 @@
         <summary><span class="card-title" data-i18n="settings.vllmTitle">vLLM-Omni (streaming)</span></summary>
         <label class="switch"><input type="checkbox" id="set-vllm-enabled" />
           <span data-i18n="settings.vllmEnable">Serve this family with the vLLM-Omni service (starts it; off returns to the local models and stops it)</span></label>
+        <div class="muted" data-i18n="settings.vllmHint">The engine toggle is the whole lifecycle: picking vLLM-Omni starts the container (and stops nothing else), going back to the local engine stops it so its VRAM is free again. The service loads a single checkpoint, so pick the model it serves; the gateway routes only that family to it.</div>
         <label><span data-i18n="settings.vllmModel">Model served by the service</span>
           <select id="set-vllm-model"></select>
         </label>
@@ -358,7 +358,6 @@
         </label>
         <label class="inline"><input id="set-vllm-eager" type="checkbox" />
           <span data-i18n="settings.vllmEager">No CUDA graphs (--enforce-eager: less VRAM, slower decode)</span></label>
-        <div class="muted" data-i18n="settings.vllmApplyHint">Saving applies the whole profile: the gateway recreates the container with this checkpoint and these flags (needs the Docker socket + docker.control), then starts or stops it according to the engine toggle.</div>
         <label><span data-i18n="settings.vllmSleep">Sleep after (seconds idle, 0 = never)</span>
           <input id="set-vllm-sleep" type="number" min="0" step="10" />
           <select id="set-vllm-sleep-level">
@@ -367,7 +366,7 @@
           </select>
         </label>
         <div class="muted" id="set-vllm-budget"></div>
-        <div class="muted" data-i18n="settings.vllmHint">The engine toggle is the whole lifecycle: picking vLLM-Omni starts the container (and stops nothing else), going back to the local engine stops it so its VRAM is free again. The service loads a single checkpoint, so pick the model it serves; the gateway routes only that family to it.</div>
+        <div class="muted" data-i18n="settings.vllmApplyHint">Saving applies the whole profile: the gateway recreates the container with this checkpoint and these flags (needs the Docker socket + docker.control), then starts or stops it according to the engine toggle.</div>
         <div class="row">
           <button id="set-vllm-save" class="primary" data-i18n="settings.save">Save</button>
           <button id="set-vllm-test" data-i18n="settings.test">Test connection</button>
@@ -390,6 +389,7 @@
 
       <details class="card" id="sec-logs">
         <summary><span class="card-title" data-i18n="settings.logsTitle">Logs</span></summary>
+        <div class="muted" data-i18n="settings.logLevelHint">Info logs the per-call engine timings and the chat timeline (useful to diagnose latency); Warning silences them.</div>
         <label><span data-i18n="settings.logLevel">Log level</span>
           <select id="set-log-level">
             <option value="debug">Debug</option>
@@ -398,7 +398,6 @@
             <option value="error">Error</option>
           </select>
         </label>
-        <div class="muted" data-i18n="settings.logLevelHint">Info logs the per-call engine timings and the chat timeline (useful to diagnose latency); Warning silences them.</div>
         <button id="set-log-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="set-log-status" class="muted"></div>
       </details>
@@ -409,32 +408,39 @@
   <!-- ------------------------------------------------------- KEY DIALOG -->
   <dialog id="key-dialog" class="modal" aria-labelledby="kd-title">
     <div class="modal-head"><h2 id="kd-title">Key</h2></div>
-    <label><span data-i18n="settings.keyName">Name</span> <input id="kd-name" type="text" data-i18n-ph="settings.keyNamePlaceholder" placeholder="Client name" /></label>
-    <label><span data-i18n="settings.keyExpiry">Expires in days (0 = never)</span> <input id="kd-days" type="number" min="0" step="1" /></label>
-    <h3 data-i18n="settings.keyPolicy">Text cleanup for this client</h3>
-    <div class="row">
-      <label class="grow"><span data-i18n="settings.textCleanup">Input text cleanup</span>
+    <div id="kd-form">
+      <div class="muted" data-i18n="settings.keyTextHint">Optional, for this client only: what the gateway may remove from the text it receives.</div>
+      <label><span data-i18n="settings.keyName">Name</span> <input id="kd-name" type="text" data-i18n-ph="settings.keyNamePlaceholder" placeholder="Client name" /></label>
+      <label><span data-i18n="settings.keyExpiry">Expires in days (0 = never)</span> <input id="kd-days" type="number" min="0" step="1" /></label>
+      <h3 data-i18n="settings.keyPolicy">Text cleanup for this client</h3>
+      <label><span data-i18n="settings.textCleanup">Input text cleanup</span>
         <select id="kd-cleanup">
           <option value="" data-i18n="settings.inherit">inherit the global setting</option>
           <option value="off" data-i18n="settings.cleanupOff">off</option>
           <option value="light" data-i18n="settings.cleanupLight">light (invisible characters, spacing)</option>
           <option value="llm" data-i18n="settings.cleanupLlm">llm (markdown from an LLM)</option>
         </select></label>
-      <label class="grow"><span data-i18n="settings.textEmoji">Emojis</span>
+      <label><span data-i18n="settings.textEmoji">Emojis</span>
         <select id="kd-emoji">
           <option value="" data-i18n="settings.inherit">inherit the global setting</option>
           <option value="keep" data-i18n="settings.emojiKeep">keep</option>
           <option value="strip" data-i18n="settings.emojiStrip">remove</option>
           <option value="name" data-i18n="settings.emojiName">spoken name</option>
         </select></label>
-      <label class="grow"><span data-i18n="settings.textCode">Code blocks (llm)</span>
+      <label><span data-i18n="settings.textCode">Code blocks (llm)</span>
         <select id="kd-codeblocks">
           <option value="" data-i18n="settings.inherit">inherit the global setting</option>
           <option value="drop" data-i18n="settings.codeDrop">drop</option>
           <option value="announce" data-i18n="settings.codeAnnounce">announce</option>
         </select></label>
     </div>
-    <div class="muted" data-i18n="settings.keyTextHint">Optional, for this client only: what the gateway may remove from the text it receives.</div>
+    <div id="kd-secret" hidden>
+      <div class="muted" data-i18n="settings.newKeyOnce">Copy it now: the key is stored hashed and will not be shown again.</div>
+      <div class="secret-row">
+        <code id="kd-secret-value"></code>
+        <button type="button" id="kd-copy" data-i18n="settings.copy">Copy</button>
+      </div>
+    </div>
     <div class="row modal-actions">
       <button type="button" id="kd-save" class="primary" data-i18n="settings.save">Save</button>
       <button type="button" id="kd-delete" class="danger" hidden data-i18n="settings.delete">Delete</button>
