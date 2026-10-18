@@ -1862,6 +1862,8 @@ def create_app(
                     raise HTTPException(503, "The engine produced no audio") from None
                 except HTTPException:
                     raise
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
                 except Exception as exc:
                     raise HTTPException(503, f"Generation failed: {exc}") from exc
 
@@ -1882,36 +1884,58 @@ def create_app(
                 headers={"X-Sample-Rate": str(settings.audio.sample_rate)},
             )
 
+        # Chunking is a per-request policy for every engine, streaming or not: a
+        # text bigger than what the model can ingest (a Chatterbox positional
+        # table, a Qwen max_new_tokens budget...) is split by sentence and the
+        # audio is joined back, so a long `text` neither truncates nor crashes a
+        # backend. The engines keep their own hard limit as a safety net.
+        settings = app.state.settings
+        use_chunking = req.chunking if req.chunking is not None else settings.chunking.enabled
+        max_chars = req.max_chars or settings.chunking.max_chars
+        silence_ms = settings.chunking.silence_ms
+
         try:
-            items = [_item_from_request(app.state.settings, req, t) for t in texts]
-            results = [await scheduler.submit(item["family"], item) for item in items]
+            groups = []  # one list of (wav, sr) per input `text`
+            for text in texts:
+                # `chunk_text` returns [] for an empty/blank text: keep it as-is.
+                chunks = (chunk_text(text, max_chars) or [text]) if use_chunking else [text]
+                group = []
+                for chunk in chunks:
+                    item = _item_from_request(settings, req, chunk)
+                    group.append(await scheduler.submit(item["family"], item))
+                groups.append(group)
         except HTTPException:
             raise
+        except ValueError as exc:
+            # Bad request content (degenerate generation params, unusable
+            # reference clip, unknown language...): not a service failure.
+            raise HTTPException(400, str(exc)) from exc
         except Exception as exc:
             raise HTTPException(503, f"Generation failed: {exc}") from exc
-        fmt = req.resolve_format(app.state.settings.audio.format)
+
+        # One audio track per input `text`: its chunks are already joined.
+        sample_rate = groups[0][0][1] if groups and groups[0] else settings.audio.sample_rate
+        tracks = [
+            concat_audio([wav for wav, _sr in group], sample_rate, silence_ms)
+            if len(group) > 1 else group[0][0]
+            for group in groups
+        ]
+        fmt = req.resolve_format(settings.audio.format)
         headers: Dict[str, str] = {}
         if fmt == "pcm":
-            sample_rate = results[0][1] if results else app.state.settings.audio.sample_rate
-            body = b"".join(to_pcm16(wav) for wav, _sr in results)
+            body = b"".join(to_pcm16(wav) for wav in tracks)
             media = "audio/pcm"
             # Raw PCM has no header of its own: always announce the rate (streaming
             # and non-streaming alike), so a client can decode it.
             headers["X-Sample-Rate"] = str(sample_rate)
-        elif len(results) == 1:
-            body = wav_bytes(results[0][0], results[0][1])
+        elif len(tracks) == 1:
+            body = wav_bytes(tracks[0], sample_rate)
             media = "audio/wav"
         else:
             # Several texts: concatenate the *audio* and emit a single WAV file.
             # Joining the per-text WAV blobs would stack RIFF headers and only the
             # first text would play.
-            sample_rate = results[0][1]
-            combined = concat_audio(
-                [wav for wav, _sr in results],
-                sample_rate,
-                app.state.settings.chunking.silence_ms,
-            )
-            body = wav_bytes(combined, sample_rate)
+            body = wav_bytes(concat_audio(tracks, sample_rate, silence_ms), sample_rate)
             media = "audio/wav"
         return Response(content=body, media_type=media, headers=headers)
 

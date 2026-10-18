@@ -110,6 +110,8 @@ generation:
   min_p: 0.05
 chunking:
   enabled: true
+  # Chunk size, 40..600: one chunk must fit in a single generation (beyond ~600
+  # chars the engine would drop the tail). Cuts land on punctuation/word breaks.
   max_chars: 240
   silence_ms: 120
 audio:

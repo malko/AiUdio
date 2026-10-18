@@ -76,16 +76,30 @@ Body (`TTSRequest`, aliases accepted):
 | `language` | str | `Auto` | e.g. `French`, `English`, `Auto` (Chatterbox maps to ISO codes; `Auto` uses `models.chatterbox.default_language`) |
 | `speaker` / `voice` | str | — | Speaker (`custom_voice` family) |
 | `instruct` / `instructions` | str | — | Style/emotion (`custom_voice`, `voice_design`) |
-| `ref_audio` | str | — | Path / URL / data-URL (`base`, `chatterbox*`) |
+| `ref_audio` | str | — | Path / URL / data-URL (`base`, `chatterbox*`). Chatterbox additionally needs ≥ 0.5 s, non-silent, finite samples (`400`; with `stream: true` the stream is cut instead) |
 | `ref_text` | str | — | Reference transcript (ICL mode; Qwen only) |
 | `avatar` | str | — | Voice-bank id (see Avatars). `voice`/`speaker` also accepts a voice-bank id. |
 | `clone_backend` / `engine` | str | `models.clone_backend` | Clone engine for this request: `qwen3` or `chatterbox` |
 | `x_vector_only_mode` | bool | false | Speaker embedding only (Qwen only) |
 | `stream` | bool | false | Progressive PCM streaming (single text only) |
 | `format` / `response_format` | str | `audio.format` | `wav` or `pcm` (forced to `pcm` when `stream`) |
-| `chunking` | bool | `chunking.enabled` | Split by sentence |
-| `max_chars` | int | `chunking.max_chars` | Chunk size |
-| `generation` | object | — | `temperature`, `top_k`, `top_p`, `repetition_penalty`, `max_new_tokens` (Qwen); `exaggeration`, `cfg_weight`, `min_p` (Chatterbox) |
+| `chunking` | bool | `chunking.enabled` | Split by sentence and join the audio back. Applies to `stream: true` *and* to a non-streaming `text`. |
+| `max_chars` | int | `chunking.max_chars` | Chunk size, **40–600** (`422` outside): above 600 one call would generate more audio than an engine can, and the tail would be lost silently |
+| `generation` | object | — | Sampling knobs, see below |
+
+Generation knobs are range-checked (out-of-range or `nan`/`inf` → `422`): `temperature`
+∈ (0, 5], `top_p` ∈ (0, 1], `top_k` ∈ [0, 1000], `repetition_penalty` ∈ (0, 5],
+`max_new_tokens` ∈ [1, 32768] and the subtalker variants (Qwen); `exaggeration` ∈ [0, 2],
+`cfg_weight` ∈ [0, 1], `min_p` ∈ [0, 1] (Chatterbox). Values set in `config.yaml`
+(`generation.*`) are clamped at use instead, since that file is not validated on load.
+
+A `text` is split according to `chunking`/`max_chars` (all engines, streaming or not) and the
+pieces are joined with `chunking.silence_ms`; the response still contains one file per input
+`text`. Cuts land on a **sentence** end, else a clause end, else a line break, else between
+words — a chunk never ends inside a word (only a *single* token longer than `max_chars`, e.g. a
+very long URL, has to be cut). As a last resort — `chunking: false`, or a chunk above what the
+engine can ingest — the engine itself splits further rather than truncating, e.g. on the
+**2048**-token positional table of Chatterbox (multilingual).
 
 Response: `audio/wav` or `audio/pcm` (mono signed-16-bit little-endian). For `pcm` the sample
 rate is announced in the `X-Sample-Rate` header, streaming and non-streaming alike. On error:

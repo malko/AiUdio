@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from .apikeys import ApiKey, from_legacy
+from .chunking import MAX_CHUNK_CHARS, MIN_CHUNK_CHARS
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +163,12 @@ class ChunkingConfig(BaseModel):
     enabled: bool = True
     max_chars: int = 240
     silence_ms: int = 120
+
+    @field_validator("max_chars")
+    @classmethod
+    def _clamp_max_chars(cls, value: int) -> int:
+        """Keep the stored chunk size in range (see `chunking.MAX_CHUNK_CHARS`)."""
+        return min(MAX_CHUNK_CHARS, max(MIN_CHUNK_CHARS, int(value)))
 
 
 class AudioConfig(BaseModel):

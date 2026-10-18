@@ -214,6 +214,39 @@ def test_tts_requires_text(client):
     assert client.post("/api/tts", json={}).status_code == 400
 
 
+def test_tts_rejects_out_of_range_generation(client):
+    """Degenerate sampling values would assert in the sampler CUDA kernel.
+
+    (`NaN` is covered at the schema level: JSON has no NaN literal, and echoing it
+    back in a FastAPI 422 body would itself raise.)
+    """
+    for bad in ({"temperature": 0}, {"top_p": 0}, {"min_p": 2},
+                {"cfg_weight": -1}, {"exaggeration": 5}):
+        r = client.post("/api/tts", json={"text": "Hello", "generation": bad})
+        assert r.status_code == 422, (bad, r.text)
+    assert client.post(
+        "/api/tts", json={"text": "Hello", "generation": {"temperature": 0.7}}
+    ).status_code == 200
+
+
+def test_tts_rejects_out_of_range_max_chars(client):
+    """Beyond 600 chars one generation would truncate the audio silently."""
+    assert client.post("/api/tts", json={"text": "Hello", "max_chars": 601}).status_code == 422
+    assert client.post("/api/tts", json={"text": "Hello", "max_chars": 39}).status_code == 422
+    assert client.post("/api/tts", json={"text": "Hello", "max_chars": 600}).status_code == 200
+
+
+def test_tts_engine_value_error_is_a_400(client, monkeypatch):
+    """Bad request content (unusable reference clip...) is not a 503."""
+    def boom(family, items):  # noqa: ARG001
+        raise ValueError("Reference audio is silent")
+
+    monkeypatch.setattr(client.app.state.engine, "synthesize_batch", boom)
+    r = client.post("/api/tts", json={"text": "Hello"})
+    assert r.status_code == 400, r.text
+    assert "silent" in r.json()["detail"]
+
+
 def test_auth_blocks_and_allows(auth_client):
     assert auth_client.get("/api/config").status_code == 401
     assert auth_client.get("/health").status_code == 200
@@ -236,6 +269,18 @@ def test_settings_update_partial_and_validation(client):
     assert client.put(
         "/api/settings", json={"generation": {"temperature": "abc"}}
     ).status_code == 400
+
+
+def test_settings_clamp_max_chars(client):
+    """The settings API cannot store a chunk size one generation cannot produce."""
+    store = client.app.state.store
+    r = client.put("/api/settings", json={"chunking": {"max_chars": 5000}})
+    assert r.status_code == 200, r.text
+    assert r.json()["chunking"]["max_chars"] == 600
+    assert store.settings.chunking.max_chars == 600
+    assert client.put(
+        "/api/settings", json={"chunking": {"max_chars": 10}}
+    ).json()["chunking"]["max_chars"] == 40
 
 
 def _clone_body(ref_audio):
@@ -515,6 +560,49 @@ def test_multi_text_wav_has_a_single_header(client):
     assert r.content[:4] == b"RIFF"
     # One WAV file, not several concatenated blobs (which only play the first).
     assert r.content.count(b"RIFF") == 1
+
+
+def _spy_synth(monkeypatch, client):
+    """Count the texts that reach the engine for one request."""
+    calls: list = []
+    engine = client.app.state.engine
+    real = engine.synthesize_batch
+
+    def spy(family, items):
+        calls.extend(items)
+        return real(family, items)
+
+    monkeypatch.setattr(engine, "synthesize_batch", spy)
+    return calls
+
+
+def test_non_streaming_chunks_long_text(client, monkeypatch):
+    """`chunking` is honoured outside streaming too (one engine call per chunk)."""
+    calls = _spy_synth(monkeypatch, client)
+    text = ("a" * 30) + ". " + ("b" * 30) + "."
+
+    r = client.post("/api/tts", json={"text": text, "max_chars": 40, "format": "wav"})
+    assert r.status_code == 200, r.text
+    assert r.content[:4] == b"RIFF" and r.content.count(b"RIFF") == 1
+    assert len(calls) == 2                      # two sentences, split by max_chars
+    audio, sr = sf.read(io.BytesIO(r.content))
+    # DummyEngine returns 100 ms per chunk; the chunks are joined with a silence.
+    assert len(audio) == 2 * int(0.1 * sr) + int(0.12 * sr)
+
+    calls.clear()
+    r2 = client.post(
+        "/api/tts", json={"text": text, "max_chars": 40, "chunking": False, "format": "wav"}
+    )
+    assert r2.status_code == 200 and len(calls) == 1   # opt out keeps it in one piece
+
+
+def test_non_streaming_chunking_keeps_pcm_header(client, monkeypatch):
+    _spy_synth(monkeypatch, client)
+    text = ("a" * 30) + ". " + ("b" * 30) + "."
+    r = client.post("/api/tts", json={"text": text, "max_chars": 40, "format": "pcm"})
+    assert r.status_code == 200, r.text
+    assert r.headers["X-Sample-Rate"] == "24000"
+    assert len(r.content) > 0
 
 
 def test_non_admin_key_cannot_change_settings(auth_client):

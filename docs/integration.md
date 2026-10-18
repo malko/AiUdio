@@ -75,6 +75,13 @@ Key fields (`TTSRequest`): `text` (or `input`, or a list), `family`, `language`,
 `speaker`/`voice`, `instruct`, `ref_audio`/`ref_text`, `format` (`wav`|`pcm`),
 `chunking`, `max_chars`, `generation`.
 
+`chunking` (default: `chunking.enabled`) splits the text and joins the audio back, for streaming
+**and** non-streaming requests alike — useful for long inputs, where a model can otherwise
+truncate or refuse the text. Cuts land on sentence/clause punctuation, line breaks, then word
+boundaries (never inside a word). `max_chars` is bounded to **40–600**: above that one call
+would generate more audio than an engine can, and the tail would be lost silently.
+`chunking: false` sends it in one piece.
+
 ### 3.2 OpenAI-compatible — `POST /v1/audio/speech`
 
 Same engine, OpenAI request shape (`input`, `voice`, `response_format`), so existing OpenAI
@@ -222,7 +229,7 @@ Errors are JSON `{"detail": "..."}` with a 4xx/5xx status:
 
 | Route | Limit / behaviour |
 |---|---|
-| `POST /api/tts` (REST) | Micro-batched; inference is **serialized** by the engine. Throughput scales with `generation.batch_size`; there is no server-side queue cap (pressure shows up as latency and `GET /api/metrics` queue depth). |
+| `POST /api/tts` (REST) | Micro-batched; inference is **serialized** by the engine. A `text` is split per `chunking`/`max_chars` and the pieces are joined back (one file per text). Throughput scales with `generation.batch_size`; there is no server-side queue cap (pressure shows up as latency and `GET /api/metrics` queue depth). |
 | `POST /api/tts` `stream:true` | Per sentence, one text at most. A mid-stream failure **ends the stream without an error frame** (HTTP headers are already sent): treat a short/abrupt end as an error and retry the request. |
 | vLLM-routed family (`vllm.enabled`) | The service is authoritative for the family `vllm.family` names: if it is unreachable or not ready the request fails — `503` (`/api/tts`, `/ws/tts`) or an `error` event (`/ws/chat`) — instead of silently using the local engine. Set `vllm.fallback_to_local: true` to allow that switch. |
 | `/v1/audio/speech` | Same engine and limits as `/api/tts`. |

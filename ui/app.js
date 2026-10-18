@@ -2278,7 +2278,10 @@ $("#gen-save").addEventListener("click", async () => {
   setIf(payload.generation, "cfg_weight", num("gen-cfg", parseFloat));
   setIf(payload.generation, "min_p", num("gen-minp", parseFloat));
   setIf(payload.generation, "batch_size", num("gen-batch", (v) => parseInt(v, 10)));
-  setIf(payload.chunking, "max_chars", num("gen-maxchars", (v) => parseInt(v, 10)));
+  const maxChars = num("gen-maxchars", (v) => parseInt(v, 10));
+  // One chunk must fit in a single generation: the server clamps this too (40..600).
+  setIf(payload.chunking, "max_chars",
+    maxChars === undefined ? undefined : Math.min(600, Math.max(40, maxChars)));
   if ($("#gen-format").value) payload.audio.format = $("#gen-format").value;
   setIf(payload.audio, "sample_rate", num("gen-samplerate", (v) => parseInt(v, 10)));
   try {
