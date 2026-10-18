@@ -22,6 +22,7 @@ def _daemon(monkeypatch, containers, calls):
             body = json.loads(request.content)
             assert body["Cmd"] and body["Image"]
             calls.append(("CREATE", tuple(body["Cmd"])))
+            calls.append(("CREATE_BODY", body))
             # The daemon now reports the recreated container, as Docker does.
             containers[0]["_inspect"]["Config"]["Cmd"] = body["Cmd"]
             containers[0]["_inspect"]["State"] = {"Running": False, "Status": "created"}
@@ -130,6 +131,27 @@ def test_set_model_recreates_with_the_new_checkpoint(monkeypatch):
     assert ("DELETE", "/containers/abcdef1234567890") in calls
     created = [c for c in calls if c[0] == "CREATE"][0][1]
     assert created[2] == "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+
+
+def test_set_model_preserves_the_network_aliases(monkeypatch):
+    calls = []
+    inspect = _inspect(CMD)
+    # Compose attaches the service under its own name too (`tts-vllm`).
+    inspect["NetworkSettings"]["Networks"] = {
+        "aiudio-net": {"Aliases": ["aiudio-tts-vllm-1", "tts-vllm"]}
+    }
+    _daemon(monkeypatch, [{"Id": "abcdef1234567890", "Names": ["/tts-vllm"],
+                           "_inspect": inspect}], calls)
+    asyncio.run(
+        docker_ctl.set_model(
+            "/var/run/docker.sock", "tts-vllm", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+        )
+    )
+    body = [c[1] for c in calls if c[0] == "CREATE_BODY"][0]
+    # Without the aliases the gateway can no longer resolve `tts-vllm`.
+    assert body["NetworkingConfig"]["EndpointsConfig"] == {
+        "aiudio-net": {"Aliases": ["aiudio-tts-vllm-1", "tts-vllm"]}
+    }
 
 
 def test_set_model_is_a_noop_when_it_already_serves_it(monkeypatch):

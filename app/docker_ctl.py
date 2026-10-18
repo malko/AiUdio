@@ -279,7 +279,20 @@ async def set_model(
     host_config = dict(info.get("HostConfig") or {})
     for key in ("Name", "Created", "State", "NetworkSettings", "Mounts"):
         host_config.pop(key, None)
-    networks = list(((info.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+    # Attach the new container to the same networks **with the same aliases**:
+    # compose publishes the service name (`tts-vllm`) as an alias, and dropping it
+    # makes `http://tts-vllm:8091` unresolvable from the gateway ([Errno -3]
+    # Temporary failure in name resolution) even though the service is running.
+    network_settings = (info.get("NetworkSettings") or {}).get("Networks") or {}
+    endpoints: Dict[str, Any] = {}
+    for net, spec in network_settings.items():
+        endpoint: Dict[str, Any] = {}
+        aliases = [a for a in ((spec or {}).get("Aliases") or []) if a]
+        if aliases:
+            endpoint["Aliases"] = aliases
+        if (spec or {}).get("IPAMConfig"):
+            endpoint["IPAMConfig"] = spec["IPAMConfig"]
+        endpoints[net] = endpoint
     body: Dict[str, Any] = {
         "Image": config.get("Image"),
         "Cmd": cmd,
@@ -290,8 +303,8 @@ async def set_model(
         "User": config.get("User"),
         "HostConfig": host_config,
     }
-    if networks:
-        body["NetworkingConfig"] = {"EndpointsConfig": {net: {} for net in networks}}
+    if endpoints:
+        body["NetworkingConfig"] = {"EndpointsConfig": endpoints}
 
     # Compose names containers <project>-<service>-<index>: keep that identity, or
     # the next `docker compose up` would create a second one next to ours.

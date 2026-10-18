@@ -145,9 +145,9 @@ depth, and per-stage timings (`/api/metrics`).
   computation — the gateway pilots the container: `PUT /api/settings` with a `vllm` section
   holds the whole launch profile (`model`, `stage_memory` `{"0": 0.36, "1": 0.11}`, an empty
   mapping meaning "computed"; `max_model_len`, `enforce_eager`), and with `docker.control` on,
-  the gateway **recreates the container to match** — same image, env, mounts and GPU
-  reservation, only the `vllm serve` argument and those flags change — then starts or stops it
-  according to the engine toggle. So the compose is only the state the service is *created*
+  the gateway **recreates the container to match** — same image, env, mounts,
+  network aliases and GPU reservation, only the `vllm serve` argument and those flags change —
+  then starts or stops it according to the engine toggle. So the compose is only the state the service is *created*
   with; from then on the UI is the source of truth. Every stage can be pinned individually
   (a stage left at 0 keeps being computed), which is the escape hatch when our numbers do not
   fit a given card (raise stage 0 first: it is the one that needs room for the KV pool).
