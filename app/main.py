@@ -33,6 +33,7 @@ from .chatterbox_backend import is_available as is_chatterbox_available
 from .chunking import chunk_text, concat_audio
 from .config import ConfigStore, Settings, get_store
 from .engine import TTSEngine, design_ref_text
+from .languages import to_iso
 from .llm import LLMClient, build_messages, trim_history
 from .metrics import metrics
 from .scheduler import BatchScheduler
@@ -212,6 +213,8 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
         "stt": {
             "enabled": settings.stt.enabled,
             "realtime_path": settings.stt.realtime_path,
+            "language": _stt_language_code(settings.stt.language),
+            "languages": list(settings.stt.languages or []),
         },
         "llm": {
             "base_url": settings.llm.base_url,
@@ -1218,6 +1221,8 @@ def create_app(
                 "diarization": "/api/stt/diarize",
                 "websocket": "/ws/stt",
                 "models": "/api/stt/models",
+                "language": _stt_language_code(s.stt.language),
+                "languages": list(s.stt.languages or []),
                 "download_requires": "admin" if s.auth.enabled else "none",
                 "realtime": {
                     "encoding": "pcm16le",
@@ -2033,8 +2038,12 @@ def create_app(
             "automatic_punctuation": str(automatic_punctuation).lower(),
             "diarization": str(diarization).lower(),
         }
-        if language:
-            data["language"] = language
+        # Effective language: the client's, else the configured default; both are
+        # normalized to the code the service expects (`French` → `fr`). Empty means
+        # the model's own default ("auto": detection for the multilingual models).
+        code = _stt_language_code(language or cfg.language)
+        if code:
+            data["language"] = code
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
                 resp = await client.post(
@@ -2088,7 +2097,7 @@ def create_app(
             metrics.incr("stt_ws_opened")
             try:
                 async with upstream:
-                    await _relay(websocket, upstream)
+                    await _relay(websocket, upstream, _stt_session_defaults(app.state.settings))
             finally:
                 metrics.incr("stt_ws_closed")
         except Exception as exc:  # pragma: no cover - depends on the STT service
@@ -2229,6 +2238,42 @@ def _stt_headers(cfg) -> Dict[str, str]:
     return {"Authorization": f"Bearer {cfg.api_key}"} if cfg.api_key else {}
 
 
+def _stt_language_code(value: Optional[str]) -> str:
+    """Normalize a language name or code to what NeMo-Speech expects (`French`→`fr`)."""
+    if not value or not str(value).strip():
+        return ""
+    raw = str(value).strip()
+    return to_iso(raw) or raw
+
+
+def _stt_session_defaults(settings: Settings) -> Dict[str, Any]:
+    """Fields to fill into a client's `session.update` when it omits them."""
+    defaults: Dict[str, Any] = {}
+    code = _stt_language_code(settings.stt.language)
+    if code:
+        defaults["language"] = code
+    return defaults
+
+
+def _merge_stt_session(event: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+    """`session.update` with our defaults filled in and the language normalized.
+
+    The client's explicit value always wins; it is only normalized to the code the
+    service expects (`French` → `fr`). The event is returned untouched when there is
+    nothing to change.
+    """
+    session = dict(event.get("session") or {})
+    before = dict(session)
+    language = session.get("language")
+    if language:
+        session["language"] = _stt_language_code(language)
+    for key, value in defaults.items():
+        session.setdefault(key, value)
+    if session == before:
+        return event
+    return {**event, "session": session}
+
+
 def _ws_url(base_url: str, path: str, api_key: str = "") -> str:
     url = base_url.rstrip("/")
     url = "wss://" + url[len("https://"):] if url.startswith("https://") else url.replace("http://", "ws://", 1)
@@ -2319,15 +2364,43 @@ async def _open_stt_upstream(url: str):
     raise last_exc if last_exc is not None else RuntimeError("STT upstream unavailable")
 
 
-async def _relay(client: WebSocket, upstream) -> None:
+async def _relay(
+    client: WebSocket, upstream, session_defaults: Optional[Dict[str, Any]] = None
+) -> None:
+    """Relay the STT socket, filling the configured `session` defaults once.
+
+    The upstream is a passthrough, except that a client's `session.update` gets the
+    configured language filled in when it is silent about it; a client that never
+    sends one gets ours just before its first audio frame (the service rejects a
+    `session.update` once audio has started, so it has to be injected first).
+    """
+    defaults = session_defaults or {}
+    sent_session = False
+
+    async def send_session_update() -> None:
+        nonlocal sent_session
+        if defaults and not sent_session:
+            await upstream.send(json.dumps({"type": "session.update", "session": defaults}))
+            sent_session = True
+
     async def client_to_upstream() -> None:
+        nonlocal sent_session
         while True:
             message = await client.receive()
             if message.get("type") == "websocket.disconnect":
                 break
             if (text := message.get("text")) is not None:
+                if not sent_session:
+                    try:
+                        event = json.loads(text)
+                    except json.JSONDecodeError:
+                        event = None
+                    if isinstance(event, dict) and event.get("type") == "session.update":
+                        sent_session = True
+                        text = json.dumps(_merge_stt_session(event, defaults))
                 await upstream.send(text)
             elif (binary := message.get("bytes")) is not None:
+                await send_session_update()
                 await upstream.send(binary)
 
     async def upstream_to_client() -> None:

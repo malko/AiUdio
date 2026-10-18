@@ -160,6 +160,13 @@ Use `ws://<host>:8004/ws/tts?api_key=<key>` when auth is enabled.
   per client socket** — close it when done. Runnable client: `examples/python/stt_ws.py`
   (see [api.md](api.md#ws-wsstt) for the exact frames).
 
+`language` is an optional hint on both routes: a name (`French`) or an ISO code (`fr`) — the
+gateway normalizes it. It defaults to the `stt.language` setting, then to the model's own
+default, so leaving everything empty is **"auto"**: the multilingual models detect the language
+themselves. The hint only changes the decoding of *prompt-conditioned* models (the streaming
+Nemotron ASR); `parakeet-tdt-0.6b-v3` accepts the field but ignores it (language-agnostic), and
+the English-only models are fixed. It is a hint, not a filter.
+
 Model management (download/select) is done from the admin; `GET /api/stt/models` lists
 availability and cache status.
 

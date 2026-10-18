@@ -180,6 +180,15 @@ class STTConfig(BaseModel):
     realtime_path: str = "/v1/audio/transcriptions/realtime"
     diarize_path: str = "/v1/audio/diarizations"
     api_key: str = ""
+    # Input language hint. Empty = "auto" (the model's default: detection for the
+    # multilingual models, fixed for the language-specific ones). It only changes
+    # the decoding of *prompt-conditioned* models (the streaming Nemotron ones);
+    # Parakeet TDT v3 accepts it but ignores it. A language *name* is accepted and
+    # normalized to its ISO-639-1 code (`French` → `fr`).
+    language: str = ""
+    # Codes offered in the UI selector (e.g. ["fr", "en"]); empty keeps the free
+    # text field. Purely a client convenience: the gateway accepts any code.
+    languages: List[str] = Field(default_factory=list)
     # On-demand model management (shared volume with the STT service).
     # The model index is vendored with the app (see app/data/).
     model_index: str = str(Path(__file__).resolve().parent / "data" / "nemo-speech-model-index.json")
@@ -366,6 +375,10 @@ def _apply_env(settings: Settings) -> Settings:
         settings.stt.api_key = v
     if v := os.environ.get("STT_MODEL_INDEX"):
         settings.stt.model_index = v
+    if v := os.environ.get("STT_LANGUAGE"):
+        settings.stt.language = v.strip()
+    if v := os.environ.get("STT_LANGUAGES"):
+        settings.stt.languages = [item.strip() for item in v.split(",") if item.strip()]
     if v := os.environ.get("AUTH_ENABLED"):
         settings.auth.enabled = v.lower() in {"1", "true", "yes", "on"}
     if v := os.environ.get("AUTH_USERNAME"):

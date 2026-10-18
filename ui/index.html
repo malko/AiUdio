@@ -222,8 +222,12 @@
         <h2 data-i18n="stt.micTitle">Microphone (real time)</h2>
         <div class="row">
           <button id="stt-record" class="primary" data-i18n="stt.start">Start</button>
-          <label class="grow"><span data-i18n="stt.language">Language</span> <input id="stt-lang" type="text" placeholder="auto" /></label>
+          <label class="grow"><span data-i18n="stt.language">Language</span>
+            <input id="stt-lang" list="stt-lang-list" type="text" placeholder="auto" />
+            <datalist id="stt-lang-list"></datalist>
+          </label>
         </div>
+        <div class="muted" id="stt-lang-hint" data-i18n="stt.langHint">Optional language hint. "auto" lets the model decide.</div>
         <label><span data-i18n="stt.micDevice">Microphone</span>
           <select id="stt-mic-device"></select>
         </label>

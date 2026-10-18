@@ -14,7 +14,7 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/` | Web UI |
 | GET | `/docs` | OpenAPI (Swagger) |
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
-| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`/`model`/`max_model_len`/`enforce_eager`/`stage_memory`/`sleep_after`/`sleep_level`/`fallback_to_local`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
+| PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt` (`enabled`/`base_url`/`language`/`languages`/…), `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`/`model`/`max_model_len`/`enforce_eager`/`stage_memory`/`sleep_after`/`sleep_level`/`fallback_to_local`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
 
 > **Admin-only writes.** When `auth.enabled` is true, `PUT /api/settings`, model/voice management
 > (`POST /api/models/select|load|unload`, `POST /api/voices/load`), avatar writes
@@ -124,6 +124,17 @@ can be overridden per request with `clone_backend`/`engine`; an explicit clone-c
 Multipart: `file` (WAV), `response_format` (`json`/`verbose_json`/`text`/`srt`/`vtt`),
 `language`, `diarization` (bool, requires `verbose_json`), `automatic_punctuation`.
 
+`language` is an optional hint; a **name** (`French`) or an ISO-639-1 code (`fr`) is accepted
+(the gateway normalizes it to a code). It defaults to the `stt.language` setting, then to the
+model's own default: leave both empty for **"auto"** (the multilingual models detect the
+language themselves).
+
+> **When it matters.** The hint only changes the decoding of *prompt-conditioned* models — the
+> streaming Nemotron ones (`nemotron-3.5-asr-streaming-0.6b`), which pick a language prompt from
+> it. Models such as `parakeet-tdt-0.6b-v3` accept the field but ignore it (language-agnostic),
+> and the English-only models are fixed. It never *prevents* another language from being
+> transcribed; it is a hint, not a filter.
+
 ### `POST /api/stt/diarize`
 Multipart `file` → segments `{start, end, speaker}`.
 
@@ -145,7 +156,7 @@ Passthrough to NeMo-Speech.cpp's realtime endpoint. Requires a **streaming** mod
 Connect with `ws://<host>:8004/ws/stt?api_key=<key>` when auth is enabled.
 
 ```
--> {"type":"session.update","session":{"sample_rate":16000,"language":"English","automatic_punctuation":true}}
+-> {"type":"session.update","session":{"sample_rate":16000,"language":"fr","automatic_punctuation":true}}
 -> <binary PCM16 mono 16 kHz frames>        # e.g. 3200-byte (100 ms) frames
 -> {"type":"input_audio_buffer.commit"}     # end of utterance
 <- {"type":"session.created", ...}
@@ -153,6 +164,11 @@ Connect with `ws://<host>:8004/ws/stt?api_key=<key>` when auth is enabled.
 <- {"type":"conversation.item.input_audio_transcription.completed","transcript":"..."}
 <- {"type":"error","message":"..."}
 ```
+
+`language` in `session.update` follows the same rules as the file endpoint above (code or name,
+optional; only prompt-conditioned models use it). If the client's `session.update` omits it, the
+gateway fills in the configured `stt.language` (and sends its own `session.update` for a client
+that sends none) — so a configured default applies to every client, code or name alike.
 
 Audio frames are **raw binary** (not base64) at 16 kHz mono. `language` is optional;
 `automatic_punctuation` defaults to `true`. The gateway retries a slow upstream handshake

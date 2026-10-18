@@ -1147,6 +1147,14 @@ function chatLang() {
   return s && s.value ? s.value : "Auto";
 }
 
+// The Conversation tab reuses its own language selector for the STT input too
+// (the microphone/VAD): "Auto" lets the model decide, anything else becomes the
+// STT language hint — the gateway normalizes the name to a code.
+function chatSttLanguage() {
+  const lang = chatLang();
+  return lang && lang !== "Auto" ? lang : "";
+}
+
 function chatCloneEngine() {
   const sel = $("#chat-clone-engine");
   return (sel && sel.value) || (CONFIG && CONFIG.models && CONFIG.models.clone_backend) || "qwen3";
@@ -1347,7 +1355,39 @@ function mountSttPickers() {
   }
 }
 
-function renderSttPickers() { sttPickers.forEach((p) => p.populate()); updateVadAvailability(); }
+function renderSttPickers() { sttPickers.forEach((p) => p.populate()); updateVadAvailability(); renderSttLanguage(); }
+
+// Input language for the STT requests: free-form so any code can be typed, with the
+// configured `stt.languages` offered as suggestions. Empty = "auto" (model default).
+function sttLanguage() {
+  const el = $("#stt-lang");
+  const typed = el && el.value.trim();
+  return typed || localStorage.getItem("sttLanguage") || "";
+}
+function setSttLanguage(value) {
+  const el = $("#stt-lang");
+  if (el) el.value = value || "";
+  if (value) localStorage.setItem("sttLanguage", value);
+  else localStorage.removeItem("sttLanguage");
+}
+function renderSttLanguage() {
+  const input = $("#stt-lang");
+  const list = $("#stt-lang-list");
+  if (!input || !list) return;
+  const codes = (CONFIG && CONFIG.stt && CONFIG.stt.languages) || [];
+  list.innerHTML = "";
+  codes.forEach((code) => {
+    const option = document.createElement("option");
+    option.value = code;
+    list.appendChild(option);
+  });
+  if (!input.value) {
+    input.value = localStorage.getItem("sttLanguage")
+      || (CONFIG && CONFIG.stt && CONFIG.stt.language)
+      || "";
+  }
+}
+$("#stt-lang") && $("#stt-lang").addEventListener("change", () => setSttLanguage($("#stt-lang").value.trim()));
 
 // The chat VAD needs a streaming-capable STT model (and a reachable service).
 function chatSttModel() {
@@ -1545,7 +1585,7 @@ $("#stt-record").addEventListener("click", async () => {
       if (sttSocket !== sock) { try { sock.close(); } catch (e) { /* aborted */ } return; }
       sock.send(JSON.stringify({
         type: "session.update",
-        session: { sample_rate: 16000, language: $("#stt-lang").value || undefined, automatic_punctuation: true },
+        session: { sample_rate: 16000, language: sttLanguage() || undefined, automatic_punctuation: true },
       }));
       $("#stt-status").textContent = t("stt.recording");
       btn.textContent = t("stt.stop");
@@ -1605,6 +1645,7 @@ $("#stt-upload").addEventListener("click", async () => {
   fd.append("file", file);
   fd.append("response_format", $("#stt-diar").checked ? "verbose_json" : "json");
   if ($("#stt-diar").checked) fd.append("diarization", "true");
+  { const lang = sttLanguage(); if (lang) fd.append("language", lang); }
   try {
     const r = await apiFetch("/v1/audio/transcriptions", { method: "POST", body: fd });
     const text = await r.text();
@@ -2055,7 +2096,7 @@ async function startDictation(useVad = false) {
     dictateSocket.onopen = () => {
       dictateSocket.send(JSON.stringify({
         type: "session.update",
-        session: { sample_rate: 16000, language: $("#stt-lang").value || undefined, automatic_punctuation: true },
+        session: { sample_rate: 16000, language: chatSttLanguage() || undefined, automatic_punctuation: true },
       }));
     };
     dictateSocket.onmessage = (ev) => {

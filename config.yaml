@@ -124,6 +124,14 @@ stt:
   realtime_path: /v1/audio/transcriptions/realtime
   diarize_path: /v1/audio/diarizations
   api_key: ''
+  # Input language hint: '' = auto (the model decides; the multilingual ones detect
+  # the language). A name or an ISO code is accepted and normalized (French → fr).
+  # It only changes the decoding of prompt-conditioned models (the streaming
+  # Nemotron ASR); Parakeet TDT v3 accepts it but ignores it. Applies to the file
+  # endpoint and to the realtime socket when the client does not send its own.
+  language: ''
+  # Codes offered as suggestions in the UI (e.g. [fr, en]); empty keeps a free field.
+  languages: []
   model_index: /app/app/data/nemo-speech-model-index.json
   models_dir: /app/hf_cache/nemo-speech/models
   hf_base_url: https://huggingface.co

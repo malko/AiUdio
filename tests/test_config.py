@@ -158,3 +158,11 @@ def test_vllm_family_selects_the_served_checkpoint():
     assert Settings(vllm={"family": "clone"}).vllm.family == "base"
     # Anything else falls back to the preset (CustomVoice) family.
     assert Settings(vllm={"family": "bogus"}).vllm.family == "custom_voice"
+
+
+def test_stt_language_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("STT_LANGUAGE", "French")
+    monkeypatch.setenv("STT_LANGUAGES", "fr, en ,")
+    store = ConfigStore(tmp_path / "config.yaml")
+    assert store.settings.stt.language == "French"
+    assert store.settings.stt.languages == ["fr", "en"]

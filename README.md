@@ -338,6 +338,13 @@ wait-for-model entrypoint — **no compilation**. Models are provided by the gat
 - **Nemotron 3.5 ASR Streaming 0.6B**: realtime streaming (~160 ms) — default.
 - **Sortformer**: diarization (who speaks).
 
+**Input language** is optional and **auto** by default. `stt.language` (`STT_LANGUAGE`) hints the
+decoder — a name or an ISO code (`French` / `fr`) — and `stt.languages` (`STT_LANGUAGES`) lists
+the codes suggested in the UI. The hint only changes the decoding of *prompt-conditioned* models
+(the streaming Nemotron ASR); `parakeet-tdt-0.6b-v3` accepts it but ignores it (it is
+language-agnostic) and the English-only models are fixed. In the **Conversation** tab, the
+microphone/VAD instead reuses the language selected for the conversation.
+
 Endpoints (proxied through the gateway):
 
 ```bash
