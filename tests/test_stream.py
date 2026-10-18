@@ -49,7 +49,10 @@ def test_vllm_serving_custom_voice_unloads_the_local_copy(monkeypatch, tmp_path)
     assert unloaded == ["custom_voice"]  # the local duplicate was dropped
 
 
-def test_vllm_failure_falls_back_to_the_local_engine(monkeypatch, tmp_path):
+def test_vllm_failure_raises_instead_of_falling_back(monkeypatch, tmp_path):
+    """The selected engine must not be swapped silently for the local one."""
+    from fastapi import HTTPException
+
     from app import main as main_mod
 
     unloaded = []
@@ -69,21 +72,52 @@ def test_vllm_failure_falls_back_to_the_local_engine(monkeypatch, tmp_path):
             used.append(item["text"])
             return [0.0] * 240, 24000
 
-    async def empty_vllm(settings, req, text):
-        return
-        yield  # pragma: no cover - an async generator that yields nothing
+    async def failing_vllm(settings, req, text):
+        raise main_mod._vllm_unavailable(settings, "the service is unreachable")
+        yield  # pragma: no cover - never reached
 
-    monkeypatch.setattr(main_mod, "_stream_vllm", empty_vllm)
+    monkeypatch.setattr(main_mod, "_stream_vllm", failing_vllm)
     settings = Settings()
     settings.paths.voices = str(tmp_path / "voices")
     settings.vllm.enabled = True
     req = TTSRequest(text="Bonjour tout le monde.", family="custom_voice", stream=True)
 
+    try:
+        _collect(_stream_pcm(settings, Scheduler(), req, req.text))
+        raise AssertionError("a 503 was expected")
+    except HTTPException as exc:
+        assert exc.status_code == 503
+        assert "vLLM-Omni" in exc.detail
+
+    assert used == []  # the local engine was *not* used
+    assert unloaded == []
+
+
+def test_vllm_failure_falls_back_when_explicitly_enabled(monkeypatch, tmp_path):
+    from app import main as main_mod
+
+    used = []
+
+    class Scheduler:
+        async def submit_streaming(self, family, item):
+            used.append(item["text"])
+            return [0.0] * 240, 24000
+
+    async def failing_vllm(settings, req, text):
+        raise main_mod._vllm_unavailable(settings, "the service is unreachable")
+        yield  # pragma: no cover - never reached
+
+    monkeypatch.setattr(main_mod, "_stream_vllm", failing_vllm)
+    settings = Settings()
+    settings.paths.voices = str(tmp_path / "voices")
+    settings.vllm.enabled = True
+    settings.vllm.fallback_to_local = True  # the documented escape hatch
+    req = TTSRequest(text="Bonjour tout le monde.", family="custom_voice", stream=True)
+
     out = _collect(_stream_pcm(settings, Scheduler(), req, req.text))
 
-    assert used == ["Bonjour tout le monde."]  # local engine produced the audio
+    assert used == ["Bonjour tout le monde."]
     assert out
-    assert unloaded == []  # nothing was dropped: vLLM never delivered
 
 
 def test_note_cuda_oom_counts_and_logs(caplog):
@@ -462,7 +496,7 @@ def test_sleep_mode_is_reported_once_when_the_service_does_not_support_it(
     assert "--enable-sleep-mode" in caplog.text
 
 
-def test_wake_failure_falls_back_to_the_local_engine(monkeypatch):
+def test_wake_failure_is_reported(monkeypatch):
     from app import main as main_mod
 
     async def boom(base_url, stage_ids=(0, 1)):

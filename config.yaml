@@ -162,6 +162,11 @@ vllm:
   max_model_len: 2048
   enforce_eager: true
   stage_memory: {}
+  # What to do when the engine is selected for a family but the service is
+  # unreachable/not ready: false fails the request with an explicit 503 (so a
+  # silent switch to the local models cannot hide a broken service); true keeps
+  # serving from the local engine as a fallback.
+  fallback_to_local: false
 docker:
   # Pilot the vLLM-Omni container (start/stop/switch its checkpoint) from the UI.
   # Off by default: it requires the Docker socket, i.e. root-equivalent power over

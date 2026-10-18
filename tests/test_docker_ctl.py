@@ -339,3 +339,44 @@ def test_set_model_recreates_when_start_fails_on_a_missing_network(monkeypatch):
     assert body["NetworkingConfig"]["EndpointsConfig"]["aiudio-net"]["Aliases"] == ["tts-vllm"]
     assert ("POST", "/containers/new/start") in calls
     assert state["running"] is True
+
+
+def test_start_or_recreate_recovers_from_a_missing_network(monkeypatch):
+    """The UI's Start button and the engine toggle use this path."""
+    calls = []
+    stale = "50ce6248282c5d22f952a54d0af6574709198a4ad6c4c20e7014d86a698a128a"
+    inspect = _inspect(CMD, running=False)
+    inspect["HostConfig"]["NetworkMode"] = stale
+    inspect["NetworkSettings"]["Networks"] = {"aiudio-net": {"Aliases": ["tts-vllm"]}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append((request.method, path))
+        if path == "/containers/json":
+            return httpx.Response(200, json=[{"Id": "abcdef1234567890", "Names": ["/tts-vllm"]}])
+        if path.endswith("/json"):
+            return httpx.Response(200, json=inspect)
+        if path == "/containers/abcdef1234567890/start":
+            return httpx.Response(
+                404, json={"message": f"failed to set up container networking: network {stale} not found"}
+            )
+        if path == "/containers/create":
+            calls.append(("CREATE_BODY", json.loads(request.content)))
+            return httpx.Response(201, json={"Id": "new"})
+        if path == "/containers/new/start":
+            inspect["State"] = {"Running": True, "Status": "running"}
+            return httpx.Response(204)
+        return httpx.Response(204)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        docker_ctl, "client",
+        lambda socket, timeout=30.0: httpx.AsyncClient(transport=transport, base_url="http://docker"),
+    )
+
+    state = asyncio.run(docker_ctl.start_or_recreate("/var/run/docker.sock", "tts-vllm"))
+
+    assert state["running"] is True
+    body = [c[1] for c in calls if c[0] == "CREATE_BODY"][0]
+    assert body["HostConfig"]["NetworkMode"] == "aiudio-net"
+    assert body["NetworkingConfig"]["EndpointsConfig"]["aiudio-net"]["Aliases"] == ["tts-vllm"]

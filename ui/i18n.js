@@ -255,6 +255,7 @@ const MESSAGES = {
     "status.done": "Done.",
     "status.error": "Error.",
     "status.saved": "Saved.",
+    "engine.vllmDown": "vLLM-Omni is selected but not reachable:",
     "vllm.running": "running",
     "vllm.asleep": "asleep, VRAM released",
     "vllm.card": "GPU",
@@ -527,6 +528,7 @@ const MESSAGES = {
     "status.remembered": "Clé mémorisée.",
     "status.micUnavailable": "Micro indisponible",
 
+    "engine.vllmDown": "vLLM-Omni est sélectionné mais injoignable :",
     "vllm.running": "en cours",
     "vllm.asleep": "en veille, VRAM libérée",
     "vllm.card": "GPU",

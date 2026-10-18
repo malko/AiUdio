@@ -234,6 +234,11 @@ class VLLMConfig(BaseModel):
     # Checkpoint the gateway keeps the service on ("" = what the compose started
     # it with). Setting it makes the UI's model picker the source of truth.
     model: str = ""
+    # What to do when the service is selected for a family but unreachable/not
+    # ready: `false` (default) fails the request with an explicit 503, so a silent
+    # switch to the local models cannot hide a broken service; set it to `true` to
+    # keep serving from the local engine as a fallback.
+    fallback_to_local: bool = False
 
     @field_validator("family")
     @classmethod

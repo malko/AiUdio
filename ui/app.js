@@ -279,6 +279,7 @@ function applyVllmFields(cfg) {
   fillVllmModels();
   refreshVllmBudget();
   refreshVllmService();
+  refreshEngineWarning();
   if ($("#set-vllm-url")) $("#set-vllm-url").value = v.base_url || "";
   if ($("#set-vllm-path")) $("#set-vllm-path").value = v.path || "/v1/audio/speech";
   if ($("#set-vllm-sleep")) $("#set-vllm-sleep").value = v.sleep_after || 0;
@@ -530,8 +531,27 @@ async function loadVoices() {
   } catch (e) { /* ignore */ }
 }
 
+async function refreshEngineWarning() {
+  const box = $("#engine-warning");
+  if (!box) return;
+  // Only relevant when the vLLM-Omni engine is selected: a request routed there
+  // now fails loudly instead of silently falling back to the local models.
+  if (!(CONFIG && CONFIG.vllm && CONFIG.vllm.enabled)) { box.hidden = true; return; }
+  try {
+    const r = await apiFetch("/api/vllm/health");
+    if (r.status === 403) { box.hidden = true; return; }  // not an admin: no probe
+    const body = await r.json().catch(() => ({}));
+    if (body.ok) { box.hidden = true; return; }
+    box.hidden = false;
+    box.textContent = `${t("engine.vllmDown")} ${body.error || `HTTP ${body.status || r.status}`}`;
+  } catch (e) {
+    box.hidden = true;
+  }
+}
+
 async function refreshStatus() {
   if (!CONFIG) return;  // config never loaded: leave the error state alone
+  refreshEngineWarning();
   try {
     const h = await getJSON("/health");
     $("#health").className = "dot ok";

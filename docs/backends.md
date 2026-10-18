@@ -102,7 +102,8 @@ STT_IMAGE=nvcr.io/nvidia/nemo-speech.cpp:0.2.0   # pin a tag or digest
   `response_format=pcm`, `stream_format=audio`) on the family named by `vllm.family`
   (`custom_voice` for the preset speakers, `base` for voice cloning — the service serves one
   checkpoint, so both need their own deployment); the local per-sentence engine handles the
-  other families and is the fallback when the service is unreachable. Experimental,
+  other families and is never a silent substitute: a request routed to a selected-but-down
+  service fails (503 / `error` event) unless `vllm.fallback_to_local` is enabled. Experimental,
   NVIDIA. See `app/vllm_backend.py`.
 - **STT**: NeMo-Speech.cpp exposes a realtime WebSocket
   (`/v1/audio/transcriptions/realtime`, ~160 ms with Nemotron 3.5). Parakeet TDT v3 stays

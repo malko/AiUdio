@@ -906,7 +906,7 @@ async def _vllm_lifecycle(settings: Settings, *, start: bool) -> None:
                 )
                 return
             if not state.get("running"):
-                await docker_ctl.start(cfg.socket, cfg.container, timeout=cfg.start_timeout)
+                await docker_ctl.start_or_recreate(cfg.socket, cfg.container, timeout=cfg.start_timeout)
                 log.info("vLLM-Omni container %s started (engine selected)", cfg.container)
             await _warm_vllm(settings, attempts=20, delay=15.0)
             _vllm_mark_used()
@@ -927,26 +927,41 @@ async def _vllm_lifecycle(settings: Settings, *, start: bool) -> None:
         )
 
 
+def _vllm_unavailable(settings: Settings, reason: str) -> HTTPException:
+    """503 for a vLLM-routed family whose service cannot serve the request."""
+    return HTTPException(
+        503,
+        f"vLLM-Omni is selected for '{_vllm_family(settings)}' but {reason} "
+        f"({settings.vllm.base_url}). The local engine is deliberately not used "
+        "as a fallback: check the service with GET /api/vllm/health, or set "
+        "vllm.fallback_to_local to allow the switch.",
+    )
+
+
 async def _stream_vllm(
     settings: Settings, req: TTSRequest, text: str
 ) -> AsyncIterator[Tuple[str, bytes, int]]:
-    """Yield native PCM from vLLM-Omni; yields nothing (to fall back) on failure."""
+    """Yield native PCM from vLLM-Omni.
+
+    Raises ``HTTPException(503)`` when the service cannot serve the request: the
+    caller decides whether that is an error (default) or a fallback.
+    """
     if not await _vllm_wake_if_sleeping(settings):
-        return
+        raise _vllm_unavailable(settings, "the hibernating service could not be woken up")
     payload = _vllm_payload(settings, req, text)
-    if payload is None:  # no reference clip to clone from: stay local
-        return
+    if payload is None:  # no reference clip to clone from
+        raise _vllm_unavailable(settings, "the request carries no reference clip to clone from")
     started = time.perf_counter()
     stream = vllm_backend.stream_pcm(settings.vllm.base_url, payload, path=settings.vllm.path)
     try:
         first = await stream.__anext__()
     except StopAsyncIteration:
         await stream.aclose()
-        return
-    except Exception:
-        log.warning("vLLM-Omni streaming unavailable; using the local engine", exc_info=True)
+        raise _vllm_unavailable(settings, "the service returned no audio") from None
+    except Exception as exc:
+        log.warning("vLLM-Omni unavailable: %s", exc, exc_info=True)
         await stream.aclose()
-        return
+        raise _vllm_unavailable(settings, f"the service is unreachable or not ready: {exc}") from exc
     metrics.observe_ttfa(time.perf_counter() - started)
     metrics.incr("tts_vllm_sessions")
     try:
@@ -972,27 +987,37 @@ async def _stream_pcm(
     max_chars = req.max_chars or settings.chunking.max_chars
     chunks = chunk_text(text, max_chars) if use_chunking and text.strip() else ([text] if text.strip() else [])
 
-    # Optional: native codec-window streaming through a vLLM-Omni service.
+    # Native codec-window streaming through a vLLM-Omni service, when it serves
+    # this family.
     if chunks and _vllm_eligible(settings, req):
-        streamed = False
         served = _vllm_family(settings)
-        async for out in _stream_vllm(settings, req, text):
-            if not streamed:
-                streamed = True
-                # vLLM-Omni serves this family from now on: holding our own copy in
-                # VRAM too would double the cost for the same family (the vLLM
-                # service loads its own two stages). Drop it once, and only if the
-                # first bytes actually arrived (a failed stream falls back locally).
-                engine = getattr(scheduler, "engine", None)
-                if engine is not None:
-                    await _release_vllm_family(engine, served, f"is serving '{served}'")
-            yield out
-        if streamed:
+        try:
+            streamed = False
+            async for out in _stream_vllm(settings, req, text):
+                if not streamed:
+                    streamed = True
+                    # vLLM-Omni serves this family: holding our own copy in VRAM too
+                    # would double the cost for the same family (the service loads its
+                    # own two stages). Drop it once, and only if the first bytes
+                    # actually arrived.
+                    engine = getattr(scheduler, "engine", None)
+                    if engine is not None:
+                        await _release_vllm_family(engine, served, f"is serving '{served}'")
+                yield out
+        except HTTPException:
+            # The operator selected vLLM-Omni for this family: a silent switch to the
+            # local models would hide an unreachable or not-ready service. Fail (and
+            # count it) unless the fallback was explicitly enabled.
+            if not settings.vllm.fallback_to_local:
+                metrics.incr("tts_vllm_unavailable")
+                raise
+            metrics.incr("tts_vllm_fallbacks")
+            log.warning(
+                "vLLM-Omni unavailable; serving '%s' from the local engine "
+                "(vllm.fallback_to_local is on)", served,
+            )
+        else:
             return
-        # Nothing came back: `_stream_vllm` already logged the reason. Fall back to
-        # the local engine (the turn still works) and count it so a misconfigured or
-        # overloaded vLLM service is visible in /api/metrics.
-        metrics.incr("tts_vllm_fallbacks")
 
     started = time.perf_counter()
     first = True
@@ -1649,11 +1674,23 @@ def create_app(
         if not cfg.control:
             raise HTTPException(409, "Container control is disabled (docker.control)")
         try:
-            operation = getattr(docker_ctl, action)
             if action == "start":
-                state = await operation(cfg.socket, cfg.container, timeout=cfg.start_timeout)
+                state = await docker_ctl.start_or_recreate(
+                    cfg.socket, cfg.container, timeout=cfg.start_timeout
+                )
+            elif action == "restart":
+                try:
+                    state = await docker_ctl.restart(cfg.socket, cfg.container)
+                except docker_ctl.DockerError as exc:
+                    # A container whose network vanished cannot be restarted either:
+                    # rebuild it instead.
+                    if not docker_ctl.missing_network(exc):
+                        raise
+                    state = await docker_ctl.start_or_recreate(
+                        cfg.socket, cfg.container, timeout=cfg.start_timeout
+                    )
             else:
-                state = await operation(cfg.socket, cfg.container)
+                state = await docker_ctl.stop(cfg.socket, cfg.container)
         except docker_ctl.DockerError as exc:
             raise HTTPException(502, str(exc)) from exc
         if action in ("start", "restart"):
@@ -1805,10 +1842,39 @@ def create_app(
         if req.stream:
             if len(texts) > 1:
                 raise HTTPException(400, "Streaming only supports a single text")
+            settings = app.state.settings
+            stream = _stream_pcm(settings, scheduler, req, texts[0])
+            first: Optional[Tuple[str, bytes, int]] = None
+            if _vllm_eligible(settings, req):
+                # vLLM is the selected engine for this request: produce the first
+                # chunk *before* the response starts (headers are already sent once
+                # a StreamingResponse begins), so an unreachable service is a real
+                # 503 instead of an empty 200. The local engine is not a silent
+                # fallback — see `vllm.fallback_to_local`.
+                try:
+                    first = await stream.__anext__()
+                except StopAsyncIteration:
+                    raise HTTPException(503, "The engine produced no audio") from None
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    raise HTTPException(503, f"Generation failed: {exc}") from exc
+
+            async def body() -> AsyncIterator[bytes]:
+                if first is not None:
+                    yield first[1]
+                try:
+                    async for _sentence, pcm, _sr in stream:
+                        yield pcm
+                except Exception:  # pragma: no cover - requires GPU
+                    # Headers are sent: cut the stream (a client must treat a
+                    # truncated stream as an error).
+                    log.exception("Streaming error")
+
             return StreamingResponse(
-                _stream_http(app.state.settings, scheduler, req, texts[0]),
+                body(),
                 media_type="audio/pcm",
-                headers={"X-Sample-Rate": str(app.state.settings.audio.sample_rate)},
+                headers={"X-Sample-Rate": str(settings.audio.sample_rate)},
             )
 
         try:
@@ -1843,14 +1909,6 @@ def create_app(
             body = wav_bytes(combined, sample_rate)
             media = "audio/wav"
         return Response(content=body, media_type=media, headers=headers)
-
-    async def _stream_http(settings, sched, req, text) -> AsyncIterator[bytes]:
-        try:
-            async for _sentence, pcm, _sr in _stream_pcm(settings, sched, req, text):
-                yield pcm
-        except Exception:  # pragma: no cover - requires GPU
-            log.exception("Streaming error")
-            yield b""
 
     @app.post("/v1/audio/speech", tags=["TTS"])
     async def openai_speech(req: TTSRequest) -> Response:
@@ -2225,7 +2283,8 @@ async def _warm_vllm(settings: Settings, attempts: int = 8, delay: float = 15.0)
             if attempt >= attempts:
                 log.warning(
                     "vLLM-Omni warm-up gave up after %d attempts (%s): the service at %s "
-                    "is not reachable; turns will fall back to the local engine. Check it "
+                    "is not reachable; requests routed to it will fail until it answers "
+                    "(or fall back locally if vllm.fallback_to_local is on). Check it "
                     "with GET /api/vllm/health.",
                     attempts, exc, cfg.base_url,
                 )

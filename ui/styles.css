@@ -92,6 +92,11 @@ audio { width: 100%; margin-top: 10px; }
 select.lang { width: auto; margin: 0; padding: 4px 8px; font-size: .85rem; }
 
 .muted { color: var(--muted); font-size: .85rem; }
+.engine-warning {
+  margin: 8px 12px 0; padding: 8px 12px; border-radius: 6px;
+  background: #7f1d1d; color: #fee2e2; border: 1px solid #ef4444;
+  font-size: .9rem;
+}
 .log {
   margin-top: 10px; max-height: 240px; overflow: auto; white-space: pre-wrap;
   font-family: ui-monospace, monospace; font-size: .8rem; color: var(--muted);

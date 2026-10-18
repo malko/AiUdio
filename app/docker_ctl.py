@@ -27,6 +27,12 @@ class DockerError(RuntimeError):
     """Raised when the daemon refuses a call (socket missing, no permission…)."""
 
 
+def missing_network(exc: BaseException) -> bool:
+    """Does this error mean the container references a network that is gone?"""
+    message = str(exc).lower()
+    return "network" in message and "not found" in message
+
+
 def client(socket: str, timeout: float = 30.0) -> httpx.AsyncClient:
     """Async Docker API client bound to the unix socket."""
     transport = httpx.AsyncHTTPTransport(uds=socket)
@@ -274,6 +280,18 @@ async def set_model(
     wanted = with_flags(
         with_model(current, model) if model else current, values=values, switches=switches
     )
+    # Attach the new container to the same networks **with the same aliases**:
+    # compose publishes the service name (`tts-vllm`) as an alias, and dropping it
+    # makes `http://tts-vllm:8091` unresolvable from the gateway ([Errno -3]
+    # Temporary failure in name resolution) even though the service is running.
+    network_settings = (info.get("NetworkSettings") or {}).get("Networks") or {}
+    names = [net for net in network_settings if net]
+    if not names:
+        # A container that never started can report no network at all: compose
+        # still labels the network it belongs to.
+        label = str((config.get("Labels") or {}).get("com.docker.compose.network") or "").strip()
+        if label:
+            names = [label]
     if wanted == current:
         # Nothing to change: just make sure it is in the wanted state.
         if not (info.get("State") or {}).get("Running"):
@@ -285,9 +303,15 @@ async def set_model(
                 # A container can point at a network *id* that no longer exists (the
                 # compose network was recreated with a new id): starting it then
                 # fails with `network <id> not found`. Recreate it below instead,
-                # which re-attaches it by network name.
-                if "network" not in str(exc).lower() or "not found" not in str(exc).lower():
+                # which re-attaches it by network name — but only when we know that
+                # name, or the replacement would be broken too.
+                if not missing_network(exc):
                     raise
+                if not names:
+                    raise DockerError(
+                        f"{exc} — the container's network is gone and its name is "
+                        "unknown: recreate the stack (docker compose up -d --force-recreate)"
+                    ) from exc
                 log.warning(
                     "Container %s references a missing network (%s); recreating it",
                     name, exc,
@@ -299,11 +323,6 @@ async def set_model(
     host_config = dict(info.get("HostConfig") or {})
     for key in ("Name", "Created", "State", "NetworkSettings", "Mounts"):
         host_config.pop(key, None)
-    # Attach the new container to the same networks **with the same aliases**:
-    # compose publishes the service name (`tts-vllm`) as an alias, and dropping it
-    # makes `http://tts-vllm:8091` unresolvable from the gateway ([Errno -3]
-    # Temporary failure in name resolution) even though the service is running.
-    network_settings = (info.get("NetworkSettings") or {}).get("Networks") or {}
     endpoints: Dict[str, Any] = {}
     for net, spec in network_settings.items():
         endpoint: Dict[str, Any] = {}
@@ -313,10 +332,11 @@ async def set_model(
         if (spec or {}).get("IPAMConfig"):
             endpoint["IPAMConfig"] = spec["IPAMConfig"]
         endpoints[net] = endpoint
+    for net in names:  # e.g. recovered from the compose label
+        endpoints.setdefault(net, {})
     # `NetworkMode` may hold a network *id* (it changes when the network is
     # recreated, and the start then fails with `network <id> not found`). Always
     # reference the stable network name we attach to.
-    names = [net for net in network_settings if net]
     mode = str(host_config.get("NetworkMode") or "")
     if names and (not mode or re.fullmatch(r"[0-9a-f]{12,64}", mode) or mode not in names):
         host_config["NetworkMode"] = names[0]
@@ -365,6 +385,34 @@ async def set_model(
     except DockerError:  # pragma: no cover - cosmetic
         log.warning("Could not remove the previous container %s", previous)
     return await status(socket, name)
+
+
+async def start_or_recreate(socket: str, name: str, timeout: float = 30.0) -> Dict[str, Any]:
+    """Start the container, recreating it if it references a missing network.
+
+    The UI's Start button and the engine toggle go through here: a container that
+    points at a network id that no longer exists (the compose network was recreated)
+    fails `/start` with `network <id> not found` and would otherwise stay
+    unstartable, while the gateway could rebuild it in place.
+    """
+    try:
+        return await start(socket, name, timeout=timeout)
+    except DockerError as exc:
+        if not missing_network(exc):
+            raise
+        log.warning(
+            "Container %s references a missing network (%s); recreating it to "
+            "re-attach it by network name", name, exc,
+        )
+    try:
+        return await set_model(socket, name, start=True, timeout=timeout)
+    except DockerError as exc:
+        if not missing_network(exc):
+            raise
+        raise DockerError(
+            f"{exc} — the compose network is gone: recreate the stack "
+            "(docker compose up -d --force-recreate)"
+        ) from exc
 
 
 async def wait_ready(url: str, timeout: float = 300.0, interval: float = 3.0) -> bool:

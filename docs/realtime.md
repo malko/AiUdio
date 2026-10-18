@@ -63,8 +63,11 @@ depth, and per-stage timings (`/api/metrics`).
   `custom_voice` (preset speakers) and `base` (voice cloning from a reference clip, sent
   inline as a `data:` URL), because **the service loads a single checkpoint**. Start it with
   a Base checkpoint and select `family: base` to route your cloned voices to it. Requests
-  of the other family, and every request when the service is down, fall back to the local
-  per-sentence engine. Enable it without editing the state file:
+  of the other family keep using the local per-sentence engine. A request routed to a
+  selected-but-unreachable service **fails with an explicit 503** (UI: a red banner and the
+  error on the turn) instead of silently switching to the local models — set
+  `vllm.fallback_to_local: true` if you prefer the old fallback. Enable it without editing the
+  state file:
 
   ```bash
   docker compose --profile vllm up -d tts-vllm     # the service
@@ -201,9 +204,10 @@ depth, and per-stage timings (`/api/metrics`).
   (tens of seconds: kernel/graph warm-up and the speech caches); the gateway therefore
   primes it with a tiny request when vLLM is enabled or at startup. That probe retries for
   ~2 minutes (the gateway usually boots before the vLLM service listens) and only logs a
-  warning if it never answers; a turn that finds vLLM unavailable **falls back to the local
-  engine** and counts `tts_vllm_fallbacks` (`tts_vllm_sessions` = served, `tts_vllm_warmups`
-  = primed).
+  warning if it never answers. A request that finds vLLM unavailable **fails loudly** (503
+  for `/api/tts`/`/ws/tts`, an `error` event for `/ws/chat`) and counts `tts_vllm_unavailable`
+  — the local engine is never swapped in silently (`tts_vllm_sessions` = served,
+  `tts_vllm_warmups` = primed, `tts_vllm_fallbacks` = only with `vllm.fallback_to_local`).
   Measured once warm (1.7B CustomVoice, `--enforce-eager`, `--max-model-len 2048`):
   TTFB ≈ 0.05 s and RTF ≈ 0.22, i.e. the audio starts almost immediately and is produced
   ~4× faster than it plays.

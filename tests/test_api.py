@@ -406,7 +406,7 @@ def test_vllm_streaming_used(client, monkeypatch):
     assert seen["payload"]["response_format"] == "pcm"
 
 
-def test_vllm_falls_back_to_local(client, monkeypatch):
+def test_vllm_unavailable_is_a_503(client, monkeypatch):
     from app import vllm_backend
 
     async def failing_stream(base_url, payload, **kwargs):
@@ -416,8 +416,25 @@ def test_vllm_falls_back_to_local(client, monkeypatch):
     monkeypatch.setattr(vllm_backend, "stream_pcm", failing_stream)
     client.app.state.settings.vllm.enabled = True
     r = client.post("/api/tts", json={"text": "One. Two.", "stream": True, "format": "pcm"})
-    assert r.status_code == 200
-    assert r.content  # local engine fallback
+    # The selected engine is not swapped silently for the local one: the failure is
+    # reported before the response starts.
+    assert r.status_code == 503, r.text
+    assert "vLLM-Omni" in r.json()["detail"]
+
+
+def test_vllm_unavailable_falls_back_when_explicitly_enabled(client, monkeypatch):
+    from app import vllm_backend
+
+    async def failing_stream(base_url, payload, **kwargs):
+        raise RuntimeError("down")
+        yield b""  # pragma: no cover
+
+    monkeypatch.setattr(vllm_backend, "stream_pcm", failing_stream)
+    client.app.state.settings.vllm.enabled = True
+    client.app.state.settings.vllm.fallback_to_local = True
+    r = client.post("/api/tts", json={"text": "One. Two.", "stream": True, "format": "pcm"})
+    assert r.status_code == 200, r.text
+    assert r.content  # local engine, the documented escape hatch
 
 
 def test_openai_voices_includes_avatars(client):
