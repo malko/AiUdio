@@ -31,6 +31,15 @@ function wsURL(path) {
 
 const fmtMB = (bytes) => ((bytes || 0) / (1024 * 1024)).toFixed(0);
 
+// FastAPI errors are JSON `{"detail": "..."}`; fall back to the raw body.
+function errorFromBody(text) {
+  try {
+    return JSON.parse(text).detail || text;
+  } catch (e) {
+    return text;
+  }
+}
+
 // ----------------------------------------------------------------- player PCM
 class PCMPlayer {
   constructor(sampleRate, prebufferMs = 200) {
@@ -48,6 +57,8 @@ class PCMPlayer {
     this.gain = this.ctx.createGain();
     this.gain.gain.value = 1;
     this.gain.connect(this.ctx.destination);
+    // Sources already scheduled on the output, so `reset()` can cancel them.
+    this.sources = [];
   }
   pushBytes(bytes) {
     let raw;
@@ -81,12 +92,20 @@ class PCMPlayer {
     items.forEach((it) => this.play(it));
   }
   play(int16) {
+    // Some browsers gate audio until a user gesture: resume if the context is
+    // suspended (e.g. a reply created from a WebSocket callback).
+    if (this.ctx.state === "suspended") this.ctx.resume().catch(() => {});
     const f = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) f[i] = int16[i] / 32768;
     const buf = this.ctx.createBuffer(1, f.length, this.sr);
     buf.copyToChannel(f, 0);
     const src = this.ctx.createBufferSource();
     src.buffer = buf; src.connect(this.gain);
+    src.onended = () => {
+      const i = this.sources.indexOf(src);
+      if (i >= 0) this.sources.splice(i, 1);
+    };
+    this.sources.push(src);
     const clock = Math.max(this.ctx.currentTime, this.time);
     src.start(clock);
     this.time = clock + buf.duration;
@@ -106,6 +125,9 @@ class PCMPlayer {
   }
   reset() {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    // Cancel anything already scheduled, otherwise a new generate would overlap.
+    for (const src of this.sources) { try { src.stop(); } catch (e) { /* ended */ } }
+    this.sources = [];
     this.leftover = new Uint8Array(0);
     this.started = false; this.pending = []; this.pendingSeconds = 0;
     this.time = this.ctx.currentTime;
@@ -136,7 +158,6 @@ let sttDownloadAbort = null;
 let avatars = [];
 let voiceEntries = [];
 let selectedVoiceId = localStorage.getItem("chatVoice") || "";
-let speakers = [];
 let micDeviceId = "";
 
 // ---------------------------------------------------------------- tabs + i18n
@@ -175,6 +196,8 @@ $("#lang-select").addEventListener("change", (e) => {
     renderAvatars();
     renderVoiceList();
     loadMicDevices();
+    applyCloneEngineFields(CONFIG);
+    initCloneEngineSelects();
   }
 });
 
@@ -423,7 +446,7 @@ async function selectVariant(id) {
     const text = await r.text();
     if (!r.ok) {
       let detail = text;
-      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      detail = errorFromBody(text);
       throw new Error(detail);
     }
     status.textContent = t("status.saved");
@@ -474,7 +497,7 @@ $("#tts-load").addEventListener("click", async () => {
     const text = await r.text();
     if (!r.ok) {
       let detail = text;
-      try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      detail = errorFromBody(text);
       $("#tts-model-status").textContent = `${t("status.error")} ${detail}`;
     } else {
       $("#tts-model-status").textContent = `${ttsName(family)} — ${t("models.loaded")}`;
@@ -495,7 +518,7 @@ async function loadVoices() {
   const family = selectedFamily();
   try {
     const data = await getJSON(`/api/voices?family=${encodeURIComponent(family)}`);
-    speakers = data.speakers || [];
+    const speakers = data.speakers || [];
     const sel = $("#tts-speaker");
     sel.innerHTML = "";
     speakers.forEach((s) => {
@@ -508,6 +531,7 @@ async function loadVoices() {
 }
 
 async function refreshStatus() {
+  if (!CONFIG) return;  // config never loaded: leave the error state alone
   try {
     const h = await getJSON("/health");
     $("#health").className = "dot ok";
@@ -665,13 +689,20 @@ $("#tts-go").addEventListener("click", async () => {
     if (ref) payload.ref_audio = ref;
   }
   if (payload.stream) {
-    ttsPlayer = ttsPlayer || new PCMPlayer(TTS_SESSION.sample_rate);
-    ttsPlayer.reset();
     try {
       const r = await apiFetch("/api/tts", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
       if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      // Honour the rate the server announces instead of the configured one.
+      const rate = parseInt(r.headers.get("x-sample-rate") || "0", 10);
+      if (rate && rate !== TTS_SESSION.sample_rate && ttsPlayer) {
+        ttsPlayer.stop();
+        ttsPlayer = null;
+      }
+      if (rate) TTS_SESSION.sample_rate = rate;
+      ttsPlayer = ttsPlayer || new PCMPlayer(TTS_SESSION.sample_rate);
+      ttsPlayer.reset();
       const reader = r.body.getReader();
       const t0 = performance.now(); let bytes = 0;
       while (true) {
@@ -693,7 +724,11 @@ $("#tts-go").addEventListener("click", async () => {
         body: JSON.stringify(Object.assign({}, payload, { stream: false, format: "wav" })),
       });
       if (!r.ok) throw new Error((await r.text()).slice(0, 200));
-      $("#tts-player").src = URL.createObjectURL(await r.blob());
+      const player = $("#tts-player");
+      if (player.dataset.url) URL.revokeObjectURL(player.dataset.url);
+      const url = URL.createObjectURL(await r.blob());
+      player.dataset.url = url;
+      player.src = url;
       $("#tts-status").textContent = t("status.done");
     } catch (e) {
       $("#tts-status").textContent = t("status.error");
@@ -752,6 +787,7 @@ $("#av-clean") && $("#av-clean").addEventListener("click", async () => {
     const body = await r.json();
     if (!r.ok) throw new Error(body.detail || r.status);
     await loadAvatars();
+    await loadAvatarsHygiene();
     if (body.removed.length) {
       box.textContent = `${body.removed.length} ${t("avatars.hygRemoved")} — ${box.textContent}`;
     }
@@ -869,7 +905,10 @@ $("#ad-photo").addEventListener("change", () => {
   const el = $("#ad-photo-preview");
   el.textContent = "";
   el.style.background = "";
-  el.style.backgroundImage = `url('${URL.createObjectURL(f)}')`;
+  if (el.dataset.url) URL.revokeObjectURL(el.dataset.url);
+  const url = URL.createObjectURL(f);
+  el.dataset.url = url;
+  el.style.backgroundImage = `url('${url}')`;
 });
 $("#ad-close").addEventListener("click", () => $("#avatar-dialog").close());
 
@@ -885,14 +924,16 @@ $("#ad-fingerprint").addEventListener("click", async () => {
     const r = await apiFetch("/api/avatars/fingerprint", { method: "POST", body: fd });
     if (!r.ok) {
       let detail = await r.text();
-      try { detail = JSON.parse(detail).detail || detail; } catch (e) { /* keep */ }
+      detail = errorFromBody(detail);
       throw new Error(detail);
     }
     const blob = await r.blob();
+    const dialog = $("#avatar-dialog");
+    if (dialog.dataset.fingerprint) URL.revokeObjectURL(dialog.dataset.fingerprint);
     const url = URL.createObjectURL(blob);
     const el = $("#ad-fingerprint-audio");
     el.src = url; el.hidden = false;
-    $("#avatar-dialog").dataset.fingerprint = url;
+    dialog.dataset.fingerprint = url;
     status.textContent = t("avatars.fingerprintReady");
   } catch (e) {
     status.textContent = `${t("status.error")} ${e}`;
@@ -916,6 +957,10 @@ async function reloadAvatarViews() {
   await loadAvatars();
   await loadConversationVoices();
   buildStartupVoiceSelect();
+  // An edited/regenerated voice invalidates the warm-up marks and preload cache.
+  voiceCache.clear();
+  voiceLoad.loaded = "";
+  renderVoiceList();
 }
 
 $("#ad-save").addEventListener("click", async () => {
@@ -932,7 +977,7 @@ $("#ad-save").addEventListener("click", async () => {
     });
     if (!r.ok) {
       let detail = await r.text();
-      try { detail = JSON.parse(detail).detail || detail; } catch (e) { /* keep */ }
+      detail = errorFromBody(detail);
       throw new Error(detail);
     }
     await reloadAvatarViews();
@@ -1470,13 +1515,15 @@ $("#stt-record").addEventListener("click", async () => {
     });
     micCtx = cap.ctx; micStream = cap.stream; micSource = cap.source; micNode = cap.node; micSink = cap.sink;
     loadMicDevices();
-    sttSocket = new WebSocket(wsURL("/ws/stt"));
-    sttSocket.binaryType = "arraybuffer";
+    const sock = new WebSocket(wsURL("/ws/stt"));
+    sock.binaryType = "arraybuffer";
+    sttSocket = sock;
     sttFinal = $("#stt-text").textContent;
     sttPartial = "";
 
-    sttSocket.onopen = () => {
-      sttSocket.send(JSON.stringify({
+    sock.onopen = () => {
+      if (sttSocket !== sock) { try { sock.close(); } catch (e) { /* aborted */ } return; }
+      sock.send(JSON.stringify({
         type: "session.update",
         session: { sample_rate: 16000, language: $("#stt-lang").value || undefined, automatic_punctuation: true },
       }));
@@ -1484,7 +1531,8 @@ $("#stt-record").addEventListener("click", async () => {
       btn.textContent = t("stt.stop");
       btn.classList.remove("primary");
     };
-    sttSocket.onmessage = (ev) => {
+    sock.onmessage = (ev) => {
+      if (sttSocket !== sock) return;
       if (typeof ev.data !== "string") return;
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (msg.type && msg.type.includes("delta")) {
@@ -1498,8 +1546,11 @@ $("#stt-record").addEventListener("click", async () => {
         $("#stt-status").textContent = msg.message || t("stt.serviceNotReady");
       }
     };
-    sttSocket.onerror = () => { $("#stt-status").textContent = t("stt.serviceNotReady"); };
-    sttSocket.onclose = (ev) => {
+    sock.onerror = () => {
+      if (sttSocket === sock) $("#stt-status").textContent = t("stt.serviceNotReady");
+    };
+    sock.onclose = (ev) => {
+      if (sttSocket !== sock) return;  // already stopped/replaced: not our business
       stopMic();
       if (ev && ev.code !== 1000 && ev.code !== 4401) $("#stt-status").textContent = t("stt.serviceNotReady");
     };
@@ -1514,11 +1565,15 @@ function stopMic() {
   if (micSink) micSink.disconnect();
   if (micCtx) micCtx.close();
   if (micStream) micStream.getTracks().forEach((track) => track.stop());
-  if (sttSocket && sttSocket.readyState === 1) {
-    try { sttSocket.send(JSON.stringify({ type: "input_audio_buffer.commit" })); } catch (e) { /* ignore */ }
-    sttSocket.close();
+  const sock = sttSocket;
+  sttSocket = null;  // null *before* closing, so onclose() knows this is not its socket
+  if (sock) {
+    try {
+      if (sock.readyState === 1) sock.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      sock.close();  // also aborts a socket still CONNECTING
+    } catch (e) { /* ignore */ }
   }
-  sttSocket = null; micCtx = null; micStream = null; micSource = null; micNode = null; micSink = null;
+  micCtx = null; micStream = null; micSource = null; micNode = null; micSink = null;
   $("#stt-status").textContent = t("stt.stopped");
   const btn = $("#stt-record"); btn.textContent = t("stt.start"); btn.classList.add("primary");
 }
@@ -1547,6 +1602,9 @@ $("#stt-upload").addEventListener("click", async () => {
 
 // ----------------------------------------------------------------- chat tab
 let chatSocket = null, chatPlayer = null, currentAssistant = null, chatBusy = false;
+let chatConnectPromise = null;  // in-flight connect, so two sends share one socket
+let chatTurnSeq = 0;            // client turn ids, echoed by the server
+let activeTurn = 0;
 let chatSentAt = 0;  // performance.now() of the last send, for the audio-start log
 
 // Replay cache: keep the last N assistant messages' PCM in memory; older ones
@@ -1563,8 +1621,6 @@ function newAudioRecord() {
   chatAudioCache.set(id, record);
   while (chatAudioCache.size > CHAT_AUDIO_KEEP) {
     const oldest = chatAudioCache.keys().next().value;
-    const rec = chatAudioCache.get(oldest);
-    if (rec) rec.chunks = []; // freed; replay will regenerate
     chatAudioCache.delete(oldest);
   }
   return record;
@@ -1688,13 +1744,21 @@ function sendChatConfig() {
 
 function ensureChatSocket() {
   if (chatSocket && chatSocket.readyState === 1) return Promise.resolve(chatSocket);
-  return new Promise((resolve, reject) => {
+  if (chatConnectPromise) return chatConnectPromise;  // dedupe concurrent sends
+  chatConnectPromise = new Promise((resolve, reject) => {
     const sock = new WebSocket(wsURL("/ws/chat"));
     sock.binaryType = "arraybuffer";
-    sock.onopen = () => { chatSocket = sock; sock.onmessage = onChatMessage; sock.send(JSON.stringify(chatConfig())); resolve(sock); };
-    sock.onerror = () => reject(new Error("connection failed"));
-    sock.onclose = () => { chatSocket = null; };
+    sock.onopen = () => {
+      chatConnectPromise = null;
+      chatSocket = sock;
+      sock.onmessage = onChatMessage;
+      sock.send(JSON.stringify(chatConfig()));
+      resolve(sock);
+    };
+    sock.onerror = () => { chatConnectPromise = null; reject(new Error("connection failed")); };
+    sock.onclose = () => { if (chatSocket === sock) chatSocket = null; };
   });
+  return chatConnectPromise;
 }
 
 function resetChatAudio() {
@@ -1710,6 +1774,11 @@ function onChatMessage(ev) {
     return;
   }
   let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+  // Events of a turn the client has already moved past must not touch the current
+  // one: after a barge-in / new message the server can still emit the previous
+  // turn's `turn.cancelled`, `error`, remaining `llm.delta` or audio. The optional
+  // `turn` id (echoed by the server) is what tells them apart.
+  if (msg.turn != null && msg.turn !== activeTurn) return;
   if (msg.type === "llm.delta") {
     if (currentAssistant) currentAssistant.textContent += msg.text;
     // The bubble grows as tokens arrive: keep it in view while the user is at the
@@ -1723,6 +1792,10 @@ function onChatMessage(ev) {
       chatSentAt = 0;
     }
     // Ignore audio for a cancelled turn (chatBusy is false after interrupt).
+    if (msg.sample_rate && msg.sample_rate !== TTS_SESSION.sample_rate) {
+      if (chatPlayer) { chatPlayer.stop(); chatPlayer = null; }
+      TTS_SESSION.sample_rate = msg.sample_rate;
+    }
     if (chatBusy && !chatPlayer) chatPlayer = new PCMPlayer(TTS_SESSION.sample_rate);
   } else if (msg.type === "llm.done") {
     if (currentAssistant && !currentAssistant.textContent) currentAssistant.textContent = msg.text || "";
@@ -1753,7 +1826,9 @@ async function chatSend() {
   if (!text) return;
   input.value = "";
   // A new turn replaces whatever is still playing: never let two replies overlap.
-  if (assistantSpeaking()) interruptChat("");
+  if (chatBusy || assistantSpeaking()) interruptChat("");
+  const turn = ++chatTurnSeq;
+  activeTurn = turn;
   appendTurn("user", text);
   currentAssistant = appendTurn("assistant", "");
   $("#chat-status").textContent = "";
@@ -1762,7 +1837,7 @@ async function chatSend() {
   try {
     const sock = await ensureChatSocket();
     sock.send(JSON.stringify(chatConfig()));
-    sock.send(JSON.stringify({ type: "input.text", text }));
+    sock.send(JSON.stringify({ type: "input.text", text, turn }));
   } catch (e) {
     if (currentAssistant) currentAssistant.textContent = `${t("status.error")} ${e}`;
     currentAssistant = null;
@@ -1772,7 +1847,10 @@ async function chatSend() {
 }
 
 $("#chat-send").addEventListener("click", chatSend);
-$("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") chatSend(); });
+$("#chat-input").addEventListener("keydown", (e) => {
+  // Enter confirms an IME candidate (CJK input): only a plain Enter sends.
+  if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) chatSend();
+});
 $("#chat-speak").addEventListener("change", sendChatConfig);
 $("#chat-language").addEventListener("change", sendChatConfig);
 $("#chat-clone-engine").addEventListener("change", sendChatConfig);
@@ -2066,7 +2144,7 @@ $("#set-startup-save").addEventListener("click", async () => {
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      const detail = errorFromBody(text);
       throw new Error(detail);
     }
     const cfg = JSON.parse(text);
@@ -2095,7 +2173,7 @@ async function saveSettings() {
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      const detail = errorFromBody(text);
       return { ok: false, detail };
     }
     let cfg = null; try { cfg = JSON.parse(text); } catch (e) { /* ignore */ }
@@ -2141,11 +2219,12 @@ $("#gen-save").addEventListener("click", async () => {
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      const detail = errorFromBody(text);
       throw new Error(detail);
     }
     const cfg = JSON.parse(text);
     CONFIG = Object.assign({}, CONFIG, { generation: cfg.generation, chunking: cfg.chunking, audio: cfg.audio });
+    TTS_SESSION.sample_rate = CONFIG.audio.sample_rate;
     applyGenerationFields(cfg);
     status.textContent = t("status.saved");
   } catch (e) {
@@ -2166,7 +2245,7 @@ $("#set-clone-save").addEventListener("click", async () => {
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      const detail = errorFromBody(text);
       throw new Error(detail);
     }
     const cfg = JSON.parse(text);
@@ -2189,7 +2268,7 @@ $("#set-log-save").addEventListener("click", async () => {
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      const detail = errorFromBody(text);
       throw new Error(detail);
     }
     const cfg = JSON.parse(text);
@@ -2201,7 +2280,6 @@ $("#set-log-save").addEventListener("click", async () => {
 });
 
 // ------------------------------------------------------------ vLLM-Omni card
-var VLLM_SERVICE = null;
 
 function vllmEngine() {
   const checked = document.querySelector('input[name="set-vllm-engine"]:checked');
@@ -2240,10 +2318,12 @@ function fillVllmModels() {
     option.textContent = `${variant.label || ""} ${variant.repo.split("/").pop()}`.trim();
     select.appendChild(option);
   }
-  // Fall back to whatever the local registry holds for the routed family.
-  const wanted = current || ((CONFIG.models && CONFIG.models.registry) || {})[
-    (CONFIG.vllm && CONFIG.vllm.family) === "base" ? "base" : "custom_voice"
-  ];
+  // Fall back to the checkpoint the settings ask for, then the local registry.
+  const wanted = current
+    || (CONFIG.vllm && CONFIG.vllm.model)
+    || ((CONFIG.models && CONFIG.models.registry) || {})[
+      (CONFIG.vllm && CONFIG.vllm.family) === "base" ? "base" : "custom_voice"
+    ];
   if (wanted) select.value = wanted;
 }
 
@@ -2276,7 +2356,6 @@ async function refreshVllmService() {
   if (!status || !control) return;
   try {
     const r = await getJSON("/api/vllm/service");
-    VLLM_SERVICE = r;
     if (r.state) {
       const state = r.state.running ? t("vllm.running") : t("vllm.stopped");
       const asleep = r.sleeping ? ` (${t("vllm.asleep")})` : "";
@@ -2329,7 +2408,7 @@ $("#set-vllm-save").addEventListener("click", async () => {
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      const detail = errorFromBody(text);
       throw new Error(detail);
     }
     const cfg = JSON.parse(text);
@@ -2369,7 +2448,6 @@ for (const [id, action] of [["#set-vllm-start", "start"], ["#set-vllm-stop", "st
       const r = await apiFetch(`/api/vllm/service/${action}`, { method: "POST" });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || r.status);
-      VLLM_SERVICE = body;
       await refreshVllmService();
       if (action !== "stop") status.textContent = `${status.textContent} — ${t("vllm.loading")}`;
     } catch (e) {
@@ -2421,7 +2499,7 @@ async function ensureSession() {
   const text = await r.text();
   if (!r.ok) {
     let detail = text;
-    try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+    detail = errorFromBody(text);
     throw new Error(detail || `HTTP ${r.status}`);
   }
   const data = JSON.parse(text);
@@ -2506,7 +2584,7 @@ async function createApiKey() {
     });
     const text = await r.text();
     if (!r.ok) {
-      let detail = text; try { detail = JSON.parse(text).detail || text; } catch (e) { /* keep */ }
+      const detail = errorFromBody(text);
       throw new Error(detail);
     }
     const data = JSON.parse(text);
@@ -2518,9 +2596,13 @@ async function createApiKey() {
     code.textContent = data.key;
     const copy = document.createElement("button");
     copy.textContent = t("settings.copy");
-    copy.addEventListener("click", () => {
-      navigator.clipboard.writeText(data.key);
-      copy.textContent = t("settings.copied");
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(data.key);
+        copy.textContent = t("settings.copied");
+      } catch (e) {
+        copy.textContent = t("status.error");
+      }
     });
     box.appendChild(label); box.appendChild(code); box.appendChild(copy);
     $("#set-key-name").value = "";
@@ -2538,7 +2620,7 @@ async function deleteApiKey(id) {
   try {
     const r = await apiFetch(`/api/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!r.ok) {
-      let detail = await r.text(); try { detail = JSON.parse(detail).detail || detail; } catch (e) { /* keep */ }
+      const detail = errorFromBody(await r.text());
       throw new Error(detail);
     }
     await loadApiKeys();

@@ -10,9 +10,9 @@
   <header>
     <h1 id="title" data-i18n="app.title">AiUdio Server</h1>
     <div class="status">
-      <span id="health" class="dot" title="status">●</span>
+      <span id="health" class="dot" title="status" role="img" aria-label="status">●</span>
       <span id="active-model">—</span>
-      <select id="lang-select" class="lang">
+      <select id="lang-select" class="lang" aria-label="Language">
         <option value="en">English</option>
         <option value="fr">Français</option>
       </select>
@@ -53,7 +53,7 @@
           <div id="chat-stt-picker" class="stt-picker grow"></div>
           <label class="inline"><input id="chat-speak" type="checkbox" checked /> <span data-i18n="chat.speak">Speak the reply (TTS)</span></label>
         </div>
-        <div id="chat-log" class="chat-log"></div>
+        <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-label="Conversation"></div>
         <div class="row">
           <input id="chat-input" type="text" data-i18n-ph="chat.placeholder" placeholder="Your message..." />
           <button id="chat-mic" data-i18n-title="chat.dictate" title="Dictate via STT">🎤</button>
@@ -176,7 +176,7 @@
     </div>
   </section>
 
-  <dialog id="avatar-dialog" class="modal">
+  <dialog id="avatar-dialog" class="modal" aria-labelledby="ad-title">
     <div class="modal-head">
       <div id="ad-photo-preview" class="avatar-photo big"></div>
       <h2 id="ad-title">Edit voice</h2>
