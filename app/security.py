@@ -119,6 +119,47 @@ def request_authorized(request: Request, settings) -> bool:
     )
 
 
+def presented_api_key(
+    settings,
+    authorization: Optional[str],
+    x_api_key: Optional[str],
+    query_key: Optional[str],
+) -> Optional[ApiKey]:
+    """The matching key record (client or session), whatever the transport."""
+    bearer = None
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            bearer = token
+    return _match_key(settings, x_api_key, query_key, bearer)
+
+
+def request_key(request: Request, settings) -> Optional[ApiKey]:
+    """The key the request authenticated with (None for Basic admin or no auth)."""
+    if not settings.auth.enabled:
+        return None
+    if _path_exempt(request.url.path, settings.auth.exempt_paths):
+        return None
+    return presented_api_key(
+        settings,
+        request.headers.get("authorization"),
+        request.headers.get("x-api-key"),
+        request.query_params.get("api_key"),
+    )
+
+
+def websocket_key(websocket: WebSocket, settings) -> Optional[ApiKey]:
+    """Same as ``request_key`` for a WebSocket handshake."""
+    if not settings.auth.enabled:
+        return None
+    return presented_api_key(
+        settings,
+        websocket.headers.get("authorization"),
+        websocket.headers.get("x-api-key"),
+        websocket.query_params.get("api_key"),
+    )
+
+
 async def require_auth(request: Request, settings) -> None:
     if _path_exempt(request.url.path, settings.auth.exempt_paths):
         return

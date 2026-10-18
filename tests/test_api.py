@@ -283,6 +283,81 @@ def test_settings_clamp_max_chars(client):
     ).json()["chunking"]["max_chars"] == 40
 
 
+def test_text_cleanup_setting_and_fallbacks(client):
+    """`text` is editable, and an unknown level falls back to the default."""
+    r = client.put("/api/settings", json={"text": {"cleanup": "llm", "emoji": "name"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == {"cleanup": "llm", "emoji": "name", "code_blocks": "drop"}
+    r = client.put("/api/settings", json={"text": {"cleanup": "nonsense"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["text"]["cleanup"] == "off"     # unknown level -> default + warning
+
+
+def test_api_key_text_policy(auth_client, monkeypatch):
+    """A key can carry its own cleanup policy; PATCH changes it without rotating it."""
+    calls = _spy_synth(monkeypatch, auth_client)
+    admin = {"auth": ("admin", "s3cret")}
+    raw = "## Titre 😀 **gras**"
+
+    # The default policy leaves the text untouched.
+    auth_client.post("/api/tts", json={"text": raw}, headers={"X-API-Key": "k-123"})
+    assert calls[-1]["text"] == raw
+
+    # The global setting applies to every client…
+    r = auth_client.put(
+        "/api/settings", json={"text": {"cleanup": "llm", "emoji": "name"}}, **admin
+    )
+    assert r.status_code == 200, r.text
+    calls.clear()
+    auth_client.post(
+        "/api/tts", json={"text": raw, "language": "French"}, headers={"X-API-Key": "k-123"}
+    )
+    assert calls[-1]["text"] == "Titre sourire gras"
+
+    # …unless the key overrides it (here: a machine client that wants it verbatim).
+    created = auth_client.post(
+        "/api/api-keys", json={"name": "batch", "text": {"cleanup": "off"}}, **admin
+    ).json()
+    assert created["text"] == {"cleanup": "off"}
+    calls.clear()
+    auth_client.post("/api/tts", json={"text": raw}, headers={"X-API-Key": created["key"]})
+    assert calls[-1]["text"] == raw
+
+    # PATCH: change the policy without invalidating the secret.
+    r = auth_client.patch(
+        f"/api/api-keys/{created['id']}", json={"text": {"emoji": "strip"}}, **admin
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == {"emoji": "strip"}
+    calls.clear()
+    auth_client.post("/api/tts", json={"text": "Bonjour 😀"}, headers={"X-API-Key": created["key"]})
+    assert calls[-1]["text"] == "Bonjour"      # inherits the global `llm` level
+
+    # `text: null` clears the override again.
+    assert auth_client.patch(
+        f"/api/api-keys/{created['id']}", json={"text": None}, **admin
+    ).json()["text"] is None
+
+
+def test_api_key_patch_is_admin_only_and_validated(auth_client):
+    admin = {"auth": ("admin", "s3cret")}
+    created = auth_client.post("/api/api-keys", json={"name": "x"}, **admin).json()
+    client_headers = {"X-API-Key": "k-123"}
+    assert auth_client.patch(
+        f"/api/api-keys/{created['id']}", json={"text": {"emoji": "strip"}},
+        headers=client_headers,
+    ).status_code == 403
+    assert auth_client.patch(
+        "/api/api-keys/nope", json={"name": "y"}, **admin
+    ).status_code == 404
+    assert auth_client.patch(
+        f"/api/api-keys/{created['id']}", json={"name": "  "}, **admin
+    ).status_code == 400
+    assert auth_client.patch(
+        f"/api/api-keys/{created['id']}", json={"text": "nonsense"}, **admin
+    ).status_code == 400
+
+
 def _clone_body(ref_audio):
     return {"text": "hello", "family": "base", "ref_audio": ref_audio}
 

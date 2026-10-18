@@ -43,9 +43,12 @@ from .security import (
     is_basic_admin,
     presented_key,
     request_authorized,
+    request_key,
     validate_media_ref,
+    websocket_key,
 )
 from .stt_models import iter_download, load_index, mark_active, read_active
+from .textclean import CleanState, Policy, clean, resolve
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -209,6 +212,7 @@ def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:
         },
         "audio": settings.audio.model_dump(),
         "chunking": settings.chunking.model_dump(),
+        "text": settings.text.model_dump(),
         "generation": settings.generation.model_dump(),
         "stt": {
             "enabled": settings.stt.enabled,
@@ -977,13 +981,20 @@ async def _stream_vllm(
 
 async def _stream_pcm(
     settings: Settings, scheduler: BatchScheduler, req: TTSRequest, text: str,
-    *, split_chunks: bool = True,
+    *, split_chunks: bool = True, text_cfg: Optional[Policy] = None,
+    text_state: Optional[CleanState] = None,
 ) -> AsyncIterator[Tuple[str, bytes, int]]:
     """Generate the text sentence by sentence and yield progressive PCM chunks.
 
     ``split_chunks`` is turned off by the chat pipeline, which already hands over
     sentence-aligned units: splitting them again would cut a sentence mid-way.
+
+    ``text_cfg`` is the client's cleanup policy (the global one when omitted);
+    the chat path reuses the same ``text_state`` across a turn so an open code
+    fence is remembered.
     """
+    language = req.language if isinstance(req.language, str) else None
+    text, text_state = clean(text, text_cfg or settings.text, language, text_state)
     use_chunking = split_chunks and (
         req.chunking if req.chunking is not None else settings.chunking.enabled
     )
@@ -1110,6 +1121,9 @@ def create_app(
                 status_code=401,
                 headers={"WWW-Authenticate": 'Basic realm="aiudio"'},
             )
+        # Remembered for the handlers that need the client's own settings (the
+        # text-cleanup policy of an API key).
+        request.state.api_key = request_key(request, app.state.settings)
         return await call_next(request)
 
     if settings.server.cors_origins:
@@ -1531,8 +1545,8 @@ def create_app(
     @app.put("/api/settings", tags=["Settings"])
     async def api_settings_update(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         _admin_ok(request)
-        allowed = {"llm", "generation", "chunking", "audio", "stt", "ui", "startup", "models",
-                   "vllm", "server", "docker"}
+        allowed = {"llm", "generation", "chunking", "text", "audio", "stt", "ui", "startup",
+                   "models", "vllm", "server", "docker"}
         sections = {k: v for k, v in payload.items() if k in allowed}
         # `server` is huge (host, port, CORS...): only the log level is editable, and
         # it is applied immediately (no restart).
@@ -1815,7 +1829,10 @@ def create_app(
         if not name:
             raise HTTPException(400, "A name is required")
         expires_at = _parse_expiry(payload.get("expires_at"), payload.get("expires_in_days"))
-        raw, record = apikeys.new_key(name=name, expires_at=expires_at)
+        text_policy = _parse_policy(payload.get("text"))
+        raw, record = apikeys.new_key(
+            name=name, expires_at=expires_at, text=text_policy
+        )
         keys = list(app.state.settings.auth.api_keys) + [record]
         app.state.settings = store.update(
             auth={"api_keys": [k.model_dump() for k in keys]}
@@ -1834,9 +1851,37 @@ def create_app(
         )
         return {"deleted": key_id}
 
+    @app.patch("/api/api-keys/{key_id}", tags=["Access"])
+    async def update_api_key(key_id: str, request: Request) -> Dict[str, Any]:
+        """Rename a key and/or change its per-client text policy.
+
+        Only the non-secret fields are editable here: changing the policy of a
+        client must not force a new key (and a new secret on their side).
+        """
+        _admin_ok(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        current = list(app.state.settings.auth.api_keys)
+        record = next((k for k in current if k.id == key_id), None)
+        if record is None:
+            raise HTTPException(404, f"Unknown key: {key_id}")
+        if "name" in payload:
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                raise HTTPException(400, "A name is required")
+            record.name = name
+        if "text" in payload:
+            # `null` (or {}) clears the override: the key follows the global policy.
+            record.text = _parse_policy(payload.get("text"))
+        keys = [k.model_dump() for k in current]
+        app.state.settings = store.update(auth={"api_keys": keys})
+        return apikeys.public(record)
+
     # ------------------------------------------------------------------- TTS
     @app.post("/api/tts", tags=["TTS"])
-    async def api_tts(req: TTSRequest) -> Response:
+    async def api_tts(req: TTSRequest, request: Request) -> Response:
         texts = req.resolve_texts()
         if not texts:
             raise HTTPException(400, "Field 'text' is required")
@@ -1844,11 +1889,20 @@ def create_app(
         # Validate the reference audio up-front (also covers the streaming path).
         validate_media_ref(req.ref_audio, app.state.settings, app.state.settings.paths.reference_audio)
 
+        # Input cleanup (the client's API key may override the global policy). It
+        # runs before chunking so the chunk sizes match what is actually spoken.
+        policy = _client_policy(app.state.settings, getattr(request.state, "api_key", None))
+        language = req.language if isinstance(req.language, str) else None
+        texts = [clean(t, policy, language)[0] for t in texts]
+        texts = [t for t in texts if t.strip()]
+        if not texts:
+            raise HTTPException(400, "Nothing to synthesize (empty after cleanup)")
+
         if req.stream:
             if len(texts) > 1:
                 raise HTTPException(400, "Streaming only supports a single text")
             settings = app.state.settings
-            stream = _stream_pcm(settings, scheduler, req, texts[0])
+            stream = _stream_pcm(settings, scheduler, req, texts[0], text_cfg=policy)
             first: Optional[Tuple[str, bytes, int]] = None
             if _vllm_eligible(settings, req):
                 # vLLM is the selected engine for this request: produce the first
@@ -1940,8 +1994,8 @@ def create_app(
         return Response(content=body, media_type=media, headers=headers)
 
     @app.post("/v1/audio/speech", tags=["TTS"])
-    async def openai_speech(req: TTSRequest) -> Response:
-        return await api_tts(req)
+    async def openai_speech(req: TTSRequest, request: Request) -> Response:
+        return await api_tts(req, request)
 
     @app.get("/v1/audio/voices", tags=["Models"])
     async def openai_voices() -> Dict[str, Any]:
@@ -2250,12 +2304,36 @@ async def _authorize_ws(websocket: WebSocket, settings: Settings) -> bool:
         return True
     from .security import _authorized
 
+    key = websocket_key(websocket, settings)
+    websocket.state.api_key = key
+    if key is not None:
+        return True
     return _authorized(
         settings,
         websocket.headers.get("authorization"),
         websocket.headers.get("x-api-key"),
         websocket.query_params.get("api_key"),
     )
+
+
+def _client_policy(settings: Settings, key=None) -> Policy:
+    """Text policy for a client: the global setting, overridden by its API key."""
+    return resolve(settings.text, getattr(key, "text", None))
+
+
+def _ws_policy(websocket, settings: Settings) -> Policy:
+    """Same, from a WebSocket handshake (``_authorize_ws`` stored the key)."""
+    state = getattr(websocket, "state", None)
+    return _client_policy(settings, getattr(state, "api_key", None))
+
+
+def _parse_policy(value) -> Optional[Policy]:
+    """A `text` policy from an admin payload (None or {} = inherit the global)."""
+    if not value:
+        return None
+    if not isinstance(value, dict):
+        raise HTTPException(400, "'text' must be an object")
+    return Policy(**value)
 
 
 def _stt_headers(cfg) -> Dict[str, str]:
@@ -2451,7 +2529,9 @@ async def _ws_synthesize(websocket: WebSocket, settings, scheduler, config, text
     req.text = text
     index = 0
     sample_rate = settings.audio.sample_rate
-    async for sentence, pcm, sr in _stream_pcm(settings, scheduler, req, text):
+    async for sentence, pcm, sr in _stream_pcm(
+        settings, scheduler, req, text, text_cfg=_ws_policy(websocket, settings),
+    ):
         sample_rate = sr
         await websocket.send_json({
             "type": "audio.start", "sentence_index": index,
@@ -2555,6 +2635,10 @@ async def _chat_turn(
     send_lock = send_lock or asyncio.Lock()
     queue: asyncio.Queue = asyncio.Queue()
     reply = ""
+    # Input cleanup for this client (its API key may override the global policy).
+    # One state per turn: an open code fence spans several chat chunks.
+    policy = _ws_policy(websocket, settings)
+    text_state = CleanState()
     buffer = ""
     index = 0
     queued = False
@@ -2592,7 +2676,8 @@ async def _chat_turn(
                 t_synth = time.perf_counter()
                 chunk_audio = 0.0
                 async for _, pcm, sr in _stream_pcm(
-                    settings, scheduler, req, sentence, split_chunks=False
+                    settings, scheduler, req, sentence, split_chunks=False,
+                    text_cfg=policy, text_state=text_state,
                 ):
                     # Keep start/pcm/done atomic so concurrent deltas cannot interleave.
                     async with send_lock:
@@ -2608,6 +2693,10 @@ async def _chat_turn(
                         })
                     index += 1
                     chunk_audio += len(pcm) / (2.0 * (sr or 1))  # mono PCM16
+                if chunk_audio <= 0.0:
+                    # Cleanup left nothing to say (an emoji-only chunk, or text
+                    # inside a dropped code fence): no audio, no bogus timings.
+                    continue
                 spoken += 1
                 now = time.perf_counter() - started
                 synth = time.perf_counter() - t_synth

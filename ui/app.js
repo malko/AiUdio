@@ -301,6 +301,10 @@ function applyGenerationFields(cfg) {
   set("#gen-minp", g.min_p);
   set("#gen-batch", g.batch_size);
   set("#gen-maxchars", (cfg.chunking || {}).max_chars);
+  const text = cfg.text || {};
+  set("#gen-cleanup", text.cleanup);
+  set("#gen-emoji", text.emoji);
+  set("#gen-codeblocks", text.code_blocks);
   set("#gen-format", (cfg.audio || {}).format);
   set("#gen-samplerate", (cfg.audio || {}).sample_rate);
 }
@@ -2282,6 +2286,11 @@ $("#gen-save").addEventListener("click", async () => {
   // One chunk must fit in a single generation: the server clamps this too (40..600).
   setIf(payload.chunking, "max_chars",
     maxChars === undefined ? undefined : Math.min(600, Math.max(40, maxChars)));
+  payload.text = {
+    cleanup: $("#gen-cleanup").value,
+    emoji: $("#gen-emoji").value,
+    code_blocks: $("#gen-codeblocks").value,
+  };
   if ($("#gen-format").value) payload.audio.format = $("#gen-format").value;
   setIf(payload.audio, "sample_rate", num("gen-samplerate", (v) => parseInt(v, 10)));
   try {
@@ -2294,7 +2303,7 @@ $("#gen-save").addEventListener("click", async () => {
       throw new Error(detail);
     }
     const cfg = JSON.parse(text);
-    CONFIG = Object.assign({}, CONFIG, { generation: cfg.generation, chunking: cfg.chunking, audio: cfg.audio });
+    CONFIG = Object.assign({}, CONFIG, { generation: cfg.generation, chunking: cfg.chunking, text: cfg.text || {}, audio: cfg.audio });
     TTS_SESSION.sample_rate = CONFIG.audio.sample_rate;
     applyGenerationFields(cfg);
     status.textContent = t("status.saved");
@@ -2590,7 +2599,7 @@ function renderApiKeys(keys) {
   if (!keys.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 6; td.className = "muted"; td.textContent = t("settings.noKeys");
+    td.colSpan = 7; td.className = "muted"; td.textContent = t("settings.noKeys");
     tr.appendChild(td); body.appendChild(tr);
     return;
   }
@@ -2605,6 +2614,12 @@ function renderApiKeys(keys) {
       k.last_used_at ? fmtDate(k.last_used_at) : "—",
     ];
     cells.forEach((c) => { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); });
+    const policy = document.createElement("td");
+    policy.title = t("settings.keyTextHint");
+    ["cleanup", "emoji", "code_blocks"].forEach((field) => {
+      policy.appendChild(keyPolicySelect(k.id, field, (k.text || {})[field]));
+    });
+    tr.appendChild(policy);
     const actions = document.createElement("td");
     if (k.expired) {
       const badge = document.createElement("span");
@@ -2618,6 +2633,54 @@ function renderApiKeys(keys) {
     tr.appendChild(actions);
     body.appendChild(tr);
   });
+}
+
+// Per-key text policy: each field is a select whose "" option means "inherit the
+// global setting" (the key then stores no override for that field).
+const KEY_POLICY_FIELDS = {
+  cleanup: [["off", "settings.cleanupOff"], ["light", "settings.cleanupLight"],
+            ["llm", "settings.cleanupLlm"]],
+  emoji: [["keep", "settings.emojiKeep"], ["strip", "settings.emojiStrip"],
+          ["name", "settings.emojiName"]],
+  code_blocks: [["drop", "settings.codeDrop"], ["announce", "settings.codeAnnounce"]],
+};
+
+function keyPolicySelect(keyId, field, value) {
+  const sel = document.createElement("select");
+  sel.dataset.key = keyId;
+  sel.dataset.field = field;
+  const add = (v, label) => {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = label;
+    sel.appendChild(o);
+  };
+  add("", t("settings.inherit"));
+  KEY_POLICY_FIELDS[field].forEach(([v, label]) => add(v, t(label)));
+  sel.value = value || "";
+  sel.addEventListener("change", () => patchApiKey(keyId));
+  return sel;
+}
+
+async function patchApiKey(id) {
+  const status = $("#set-keys-status");
+  const text = {};
+  document.querySelectorAll(`select[data-key="${CSS.escape(id)}"]`).forEach((sel) => {
+    if (sel.value) text[sel.dataset.field] = sel.value;
+  });
+  status.textContent = "…";
+  try {
+    const r = await apiFetch(`/api/api-keys/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: Object.keys(text).length ? text : null }),
+    });
+    if (!r.ok) throw new Error(errorFromBody(await r.text()));
+    await loadApiKeys();
+    status.textContent = t("status.saved");
+  } catch (e) {
+    status.textContent = `${t("status.error")} ${e}`;
+  }
 }
 
 async function loadApiKeys() {
@@ -2650,6 +2713,13 @@ async function createApiKey() {
   try {
     const payload = { name };
     if (Number.isFinite(days) && days > 0) payload.expires_in_days = days;
+    const textPolicy = {};
+    [["cleanup", "set-key-cleanup"], ["emoji", "set-key-emoji"],
+     ["code_blocks", "set-key-codeblocks"]].forEach(([field, id]) => {
+      const sel = $(`#${id}`);
+      if (sel && sel.value) textPolicy[field] = sel.value;
+    });
+    if (Object.keys(textPolicy).length) payload.text = textPolicy;
     const r = await apiFetch("/api/api-keys", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
@@ -2678,6 +2748,9 @@ async function createApiKey() {
     box.appendChild(label); box.appendChild(code); box.appendChild(copy);
     $("#set-key-name").value = "";
     $("#set-key-days").value = "";
+    ["set-key-cleanup", "set-key-emoji", "set-key-codeblocks"].forEach((id) => {
+      if ($(`#${id}`)) $(`#${id}`).value = "";
+    });
     status.textContent = "";
     await loadApiKeys();
   } catch (e) {

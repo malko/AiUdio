@@ -156,6 +156,26 @@
           <label class="grow"><span data-i18n="settings.sampleRate">Sample rate</span>
             <input id="gen-samplerate" type="number" step="1000" /></label>
         </div>
+        <div class="row">
+          <label class="grow"><span data-i18n="settings.textCleanup">Input text cleanup</span>
+            <select id="gen-cleanup">
+              <option value="off" data-i18n="settings.cleanupOff">off</option>
+              <option value="light" data-i18n="settings.cleanupLight">light (invisible characters, spacing)</option>
+              <option value="llm" data-i18n="settings.cleanupLlm">llm (markdown from an LLM)</option>
+            </select></label>
+          <label class="grow"><span data-i18n="settings.textEmoji">Emojis</span>
+            <select id="gen-emoji">
+              <option value="keep" data-i18n="settings.emojiKeep">keep</option>
+              <option value="strip" data-i18n="settings.emojiStrip">remove</option>
+              <option value="name" data-i18n="settings.emojiName">spoken name</option>
+            </select></label>
+          <label class="grow"><span data-i18n="settings.textCode">Code blocks (llm)</span>
+            <select id="gen-codeblocks">
+              <option value="drop" data-i18n="settings.codeDrop">drop</option>
+              <option value="announce" data-i18n="settings.codeAnnounce">announce</option>
+            </select></label>
+        </div>
+        <div class="muted" data-i18n="settings.textHint">Applied before the text is split (streaming and non-streaming). `off` sends the client's text as-is; `llm` also strips markdown and code fences.</div>
         <button id="gen-save" class="primary" data-i18n="settings.save">Save</button>
         <div id="gen-save-status" class="muted"></div>
       </div>
@@ -353,6 +373,29 @@
             <input id="set-key-days" type="number" min="0" step="1" data-i18n-ph="settings.keyDaysPlaceholder" placeholder="Expires in days (0 = never)" />
             <button id="set-key-create" class="primary" data-i18n="settings.createKey">Create key</button>
           </div>
+          <div class="row">
+            <label class="grow"><span data-i18n="settings.textCleanup">Input text cleanup</span>
+              <select id="set-key-cleanup">
+                <option value="" data-i18n="settings.inherit">inherit the global setting</option>
+                <option value="off" data-i18n="settings.cleanupOff">off</option>
+                <option value="light" data-i18n="settings.cleanupLight">light (invisible characters, spacing)</option>
+                <option value="llm" data-i18n="settings.cleanupLlm">llm (markdown from an LLM)</option>
+              </select></label>
+            <label class="grow"><span data-i18n="settings.textEmoji">Emojis</span>
+              <select id="set-key-emoji">
+                <option value="" data-i18n="settings.inherit">inherit the global setting</option>
+                <option value="keep" data-i18n="settings.emojiKeep">keep</option>
+                <option value="strip" data-i18n="settings.emojiStrip">remove</option>
+                <option value="name" data-i18n="settings.emojiName">spoken name</option>
+              </select></label>
+            <label class="grow"><span data-i18n="settings.textCode">Code blocks (llm)</span>
+              <select id="set-key-codeblocks">
+                <option value="" data-i18n="settings.inherit">inherit the global setting</option>
+                <option value="drop" data-i18n="settings.codeDrop">drop</option>
+                <option value="announce" data-i18n="settings.codeAnnounce">announce</option>
+              </select></label>
+          </div>
+          <div class="muted" data-i18n="settings.keyTextHint">Optional, for this client only: what the gateway is allowed to remove from the text it receives.</div>
           <div id="set-key-new" class="muted"></div>
           <table class="keys-table"><tbody id="set-keys-body"></tbody></table>
           <div id="set-keys-status" class="muted"></div>

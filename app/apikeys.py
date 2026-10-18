@@ -23,6 +23,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from .textclean import Policy
+
 KEY_PREFIX = "aiud_"
 
 
@@ -51,6 +53,9 @@ class ApiKey(BaseModel):
     expires_at: Optional[datetime] = None
     # Session keys are admin-scoped (may manage other keys).
     admin: bool = False
+    # Per-client input-text cleanup: only the fields set here override the global
+    # `text` setting, `None` inherits it entirely.
+    text: Optional[Policy] = None
 
     def is_expired(self, now: Optional[datetime] = None) -> bool:
         exp = _aware(self.expires_at)
@@ -65,6 +70,7 @@ def new_key(
     expires_at: Optional[datetime] = None,
     ttl_minutes: Optional[int] = None,
     admin: bool = False,
+    text: Optional[Policy] = None,
 ) -> tuple[str, ApiKey]:
     """Generate a fresh key. Returns ``(plaintext, record)`` (plaintext shown once)."""
     raw = KEY_PREFIX + secrets.token_urlsafe(32)
@@ -76,6 +82,7 @@ def new_key(
         hash=hash_key(raw),
         expires_at=expires_at,
         admin=admin,
+        text=text,
     )
     return raw, record
 
@@ -148,4 +155,6 @@ def public(key: ApiKey) -> Dict[str, object]:
         "expired": key.is_expired(),
         "last_used_at": _last_used.get(key.id),
         "session": key.id in _sessions,
+        # Only the fields that override the global `text` setting.
+        "text": key.text.model_dump(exclude_unset=True) if key.text is not None else None,
     }
