@@ -290,3 +290,52 @@ def test_a_missing_container_lists_what_the_daemon_sees(monkeypatch):
     message = str(excinfo.value)
     assert "docker.container" in message
     assert "aiudio-other-1" in message  # what to fix the setting to
+
+
+def test_set_model_recreates_when_start_fails_on_a_missing_network(monkeypatch):
+    """A stale network id must not leave the service unstartable.
+
+    Docker records the network id in some cases; when the compose network is
+    recreated the id is gone and `/start` answers 404 (`network <id> not found`).
+    The gateway then recreates the container, re-attaching it by network name.
+    """
+    calls = []
+    stale = "50ce6248282c5d22f952a54d0af6574709198a4ad6c4c20e7014d86a698a128a"
+    inspect = _inspect(CMD, running=False)
+    inspect["HostConfig"]["NetworkMode"] = stale
+    inspect["NetworkSettings"]["Networks"] = {"aiudio-net": {"Aliases": ["tts-vllm"]}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append((request.method, path))
+        if path == "/containers/json":
+            listing = [{"Id": "abcdef1234567890", "Names": ["/tts-vllm"]}]
+            return httpx.Response(200, json=listing)
+        if path.endswith("/json"):
+            return httpx.Response(200, json=inspect)
+        if path == "/containers/abcdef1234567890/start":
+            return httpx.Response(
+                404, json={"message": f"failed to set up container networking: network {stale} not found"}
+            )
+        if path == "/containers/create":
+            body = json.loads(request.content)
+            calls.append(("CREATE_BODY", body))
+            return httpx.Response(201, json={"Id": "new"})
+        if path == "/containers/new/start":
+            inspect["State"] = {"Running": True, "Status": "running"}
+            return httpx.Response(204)
+        return httpx.Response(204)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        docker_ctl, "client",
+        lambda socket, timeout=30.0: httpx.AsyncClient(transport=transport, base_url="http://docker"),
+    )
+
+    state = asyncio.run(docker_ctl.set_model("/var/run/docker.sock", "tts-vllm"))
+
+    body = [c[1] for c in calls if c[0] == "CREATE_BODY"][0]
+    assert body["HostConfig"]["NetworkMode"] == "aiudio-net"  # the name, not the dead id
+    assert body["NetworkingConfig"]["EndpointsConfig"]["aiudio-net"]["Aliases"] == ["tts-vllm"]
+    assert ("POST", "/containers/new/start") in calls
+    assert state["running"] is True

@@ -224,6 +224,11 @@ async def start(socket: str, name: str, timeout: float = 30.0) -> Dict[str, Any]
     return await status(socket, name)
 
 
+#: Alias for :func:`start`: ``set_model`` has a boolean ``start`` parameter of its
+#: own, which would shadow the function name inside its body.
+_start_container = start
+
+
 async def stop(socket: str, name: str, timeout: float = 60.0) -> Dict[str, Any]:
     info = await _container_id(socket, name)
     if (info.get("State") or {}).get("Running"):
@@ -272,8 +277,23 @@ async def set_model(
     if wanted == current:
         # Nothing to change: just make sure it is in the wanted state.
         if not (info.get("State") or {}).get("Running"):
-            return await start(socket, name, timeout=timeout) if start else describe(info)
-        return await stop(socket, name) if not start else describe(info)
+            if not start:
+                return describe(info)
+            try:
+                return await _start_container(socket, name, timeout=timeout)
+            except DockerError as exc:
+                # A container can point at a network *id* that no longer exists (the
+                # compose network was recreated with a new id): starting it then
+                # fails with `network <id> not found`. Recreate it below instead,
+                # which re-attaches it by network name.
+                if "network" not in str(exc).lower() or "not found" not in str(exc).lower():
+                    raise
+                log.warning(
+                    "Container %s references a missing network (%s); recreating it",
+                    name, exc,
+                )
+        else:
+            return await stop(socket, name) if not start else describe(info)
     cmd = wanted
 
     host_config = dict(info.get("HostConfig") or {})
@@ -293,6 +313,13 @@ async def set_model(
         if (spec or {}).get("IPAMConfig"):
             endpoint["IPAMConfig"] = spec["IPAMConfig"]
         endpoints[net] = endpoint
+    # `NetworkMode` may hold a network *id* (it changes when the network is
+    # recreated, and the start then fails with `network <id> not found`). Always
+    # reference the stable network name we attach to.
+    names = [net for net in network_settings if net]
+    mode = str(host_config.get("NetworkMode") or "")
+    if names and (not mode or re.fullmatch(r"[0-9a-f]{12,64}", mode) or mode not in names):
+        host_config["NetworkMode"] = names[0]
     body: Dict[str, Any] = {
         "Image": config.get("Image"),
         "Cmd": cmd,
