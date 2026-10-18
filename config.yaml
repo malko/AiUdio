@@ -114,6 +114,15 @@ chunking:
   # chars the engine would drop the tail). Cuts land on punctuation/word breaks.
   max_chars: 240
   silence_ms: 120
+# Input-text cleanup (applied before the text is split; API keys may override it).
+#   cleanup:     off (nothing) | light (invisible characters, spacing, quotes) |
+#                llm (also strips markdown and code fences)
+#   emoji:       keep | strip (removed) | name (the ~20 most frequent are spoken)
+#   code_blocks: drop | announce ("bloc de code") — used by `cleanup: llm`
+text:
+  cleanup: off
+  emoji: keep
+  code_blocks: drop
 audio:
   format: wav
   sample_rate: 24000

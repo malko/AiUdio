@@ -52,6 +52,26 @@ def test_residency_env_override(tmp_path, monkeypatch):
     assert ConfigStore(tmp_path / "b.yaml").settings.models.residency == "single"
 
 
+def test_text_cleanup_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXT_CLEANUP", "llm")
+    monkeypatch.setenv("TEXT_EMOJI", "name")
+    monkeypatch.setenv("TEXT_CODE_BLOCKS", "announce")
+    settings = ConfigStore(tmp_path / "a.yaml").settings
+    assert settings.text.cleanup == "llm"
+    assert settings.text.emoji == "name"
+    assert settings.text.code_blocks == "announce"
+    # An unknown value is ignored (the file/default wins), not an error.
+    monkeypatch.setenv("TEXT_CLEANUP", "bogus")
+    assert ConfigStore(tmp_path / "b.yaml").settings.text.cleanup == "off"
+
+
+def test_text_cleanup_is_persisted(tmp_path):
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.update(text={"cleanup": "light", "emoji": "strip"})
+    reloaded = ConfigStore(tmp_path / "config.yaml").settings
+    assert (reloaded.text.cleanup, reloaded.text.emoji) == ("light", "strip")
+
+
 def test_legacy_plaintext_keys_are_hashed(tmp_path):
     from app.apikeys import hash_key
 

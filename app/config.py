@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .apikeys import ApiKey, from_legacy
 from .chunking import MAX_CHUNK_CHARS, MIN_CHUNK_CHARS
+from .textclean import CHOICES, Policy
 
 log = logging.getLogger(__name__)
 
@@ -169,6 +170,14 @@ class ChunkingConfig(BaseModel):
     def _clamp_max_chars(cls, value: int) -> int:
         """Keep the stored chunk size in range (see `chunking.MAX_CHUNK_CHARS`)."""
         return min(MAX_CHUNK_CHARS, max(MIN_CHUNK_CHARS, int(value)))
+
+
+class TextConfig(Policy):
+    """Global input-text cleanup (per-key overrides live on `auth.api_keys`).
+
+    See `app/textclean.py` for what each level does; the defaults (`off`/`keep`)
+    leave the client's text untouched.
+    """
 
 
 class AudioConfig(BaseModel):
@@ -333,6 +342,7 @@ class Settings(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
+    text: TextConfig = Field(default_factory=TextConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -421,6 +431,17 @@ def _apply_env(settings: Settings) -> Settings:
         settings.docker.socket = v.strip()
     if v := os.environ.get("VLLM_REF_ROOT"):
         settings.vllm.ref_root = v.strip()
+    # Input-text cleanup (an unknown value is ignored — the previous one stays).
+    for env, field in (("TEXT_CLEANUP", "cleanup"), ("TEXT_EMOJI", "emoji"),
+                       ("TEXT_CODE_BLOCKS", "code_blocks")):
+        if not (v := os.environ.get(env)):
+            continue
+        if v.strip().lower() in CHOICES[field]:
+            settings.text = TextConfig(**{**settings.text.model_dump(), field: v})
+        else:
+            log.warning(
+                "Ignoring %s=%r (expected one of %s)", env, v, ", ".join(CHOICES[field])
+            )
     return settings
 
 
