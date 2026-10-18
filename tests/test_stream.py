@@ -379,3 +379,83 @@ def test_lifecycle_reports_a_missing_container(monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         asyncio.run(_vllm_lifecycle(settings, start=True))
     assert "does not exist" in caplog.text
+
+
+def test_idle_service_is_put_to_sleep_and_woken_on_demand(monkeypatch):
+    from app import main as main_mod
+
+    calls = []
+
+    async def fake_sleep(base_url, level=1, stage_ids=(0, 1)):
+        calls.append(("sleep", base_url, level))
+        return True
+
+    async def fake_wakeup(base_url, stage_ids=(0, 1)):
+        calls.append(("wake", base_url))
+        return True
+
+    monkeypatch.setattr(main_mod.vllm_backend, "omni_sleep", fake_sleep)
+    monkeypatch.setattr(main_mod.vllm_backend, "omni_wakeup", fake_wakeup)
+
+    settings = Settings()
+    settings.vllm.enabled = True
+    settings.vllm.base_url = "http://tts-vllm:8091"
+    settings.vllm.sleep_after = 0.0  # never, by default
+    main_mod._forget_vllm_sleep()
+    main_mod._vllm_mark_used()
+
+    assert asyncio.run(main_mod._vllm_sleep_if_idle(settings)) is False
+
+    settings.vllm.sleep_after = 1.0
+    main_mod._VLLM_IDLE_SINCE -= 5.0  # idle for longer than the threshold
+    assert asyncio.run(main_mod._vllm_sleep_if_idle(settings)) is True
+    assert calls == [("sleep", "http://tts-vllm:8091", 1)]
+    assert main_mod._VLLM_SLEEPING is True
+
+    # The next request wakes it before streaming.
+    assert asyncio.run(main_mod._vllm_wake_if_sleeping(settings)) is True
+    assert calls[-1] == ("wake", "http://tts-vllm:8091")
+    assert main_mod._VLLM_SLEEPING is False
+
+
+def test_sleep_mode_is_reported_once_when_the_service_does_not_support_it(
+    monkeypatch, caplog
+):
+    from app import main as main_mod
+
+    calls = []
+
+    async def unsupported(base_url, level=1, stage_ids=(0, 1)):
+        calls.append(1)
+        raise RuntimeError("404 Not Found")
+
+    monkeypatch.setattr(main_mod.vllm_backend, "omni_sleep", unsupported)
+    settings = Settings()
+    settings.vllm.enabled = True
+    settings.vllm.sleep_after = 1.0
+    main_mod._forget_vllm_sleep()
+    main_mod._VLLM_IDLE_SINCE = 0.0  # long idle
+
+    with caplog.at_level("INFO"):
+        assert asyncio.run(main_mod._vllm_sleep_if_idle(settings)) is False
+        # Told once: no repeated attempts, no log spam.
+        assert asyncio.run(main_mod._vllm_sleep_if_idle(settings)) is False
+    assert len(calls) == 1
+    assert "--enable-sleep-mode" in caplog.text
+
+
+def test_wake_failure_falls_back_to_the_local_engine(monkeypatch):
+    from app import main as main_mod
+
+    async def boom(base_url, stage_ids=(0, 1)):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(main_mod.vllm_backend, "omni_wakeup", boom)
+    settings = Settings()
+    settings.vllm.enabled = True
+    main_mod._forget_vllm_sleep()
+    main_mod._VLLM_SLEEPING = True
+    try:
+        assert asyncio.run(main_mod._vllm_wake_if_sleeping(settings)) is False
+    finally:
+        main_mod._forget_vllm_sleep()

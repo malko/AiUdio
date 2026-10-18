@@ -470,6 +470,85 @@ def _vllm_payload(
     )
 
 
+#: Sleep-mode bookkeeping: is the service hibernating, and since when it is idle?
+_VLLM_SLEEPING = False
+_VLLM_IDLE_SINCE = 0.0
+_VLLM_SLEEP_REFUSED = False
+
+
+def _vllm_mark_used() -> None:
+    """Note that the service was just used (resets the idle countdown)."""
+    global _VLLM_IDLE_SINCE, _VLLM_SLEEPING
+    _VLLM_IDLE_SINCE = time.monotonic()
+    _VLLM_SLEEPING = False
+
+
+async def _vllm_wake_if_sleeping(settings: Settings) -> bool:
+    """Wake the hibernating service before using it. False when it cannot."""
+    global _VLLM_SLEEPING
+    if not _VLLM_SLEEPING:
+        _vllm_mark_used()
+        return True
+    try:
+        started = time.perf_counter()
+        await vllm_backend.omni_wakeup(settings.vllm.base_url)
+        log.info(
+            "vLLM-Omni woken up in %.2fs (it had released its VRAM while idle)",
+            time.perf_counter() - started,
+        )
+    except Exception as exc:
+        log.warning("Could not wake the vLLM-Omni service: %s", exc)
+        return False
+    _vllm_mark_used()
+    return True
+
+
+def _forget_vllm_sleep() -> None:
+    """The service went away (stopped/restarted): forget its hibernation state."""
+    global _VLLM_SLEEPING, _VLLM_SLEEP_REFUSED
+    _VLLM_SLEEPING = False
+    _VLLM_SLEEP_REFUSED = False
+
+
+async def _vllm_sleep_if_idle(settings: Settings) -> bool:
+    """Ask the service to hibernate once it has been idle long enough."""
+    global _VLLM_SLEEPING, _VLLM_SLEEP_REFUSED
+    cfg = settings.vllm
+    if _VLLM_SLEEP_REFUSED or _VLLM_SLEEPING or not cfg.enabled or cfg.sleep_after <= 0:
+        return False
+    idle = time.monotonic() - _VLLM_IDLE_SINCE
+    if idle < cfg.sleep_after:
+        return False
+    try:
+        await vllm_backend.omni_sleep(cfg.base_url, level=cfg.sleep_level)
+    except Exception as exc:
+        # The endpoint only exists with `--enable-sleep-mode`: say it once.
+        _VLLM_SLEEP_REFUSED = True
+        log.info(
+            "vLLM-Omni sleep mode unavailable (%s): start the service with "
+            "--enable-sleep-mode to let it release its VRAM while idle", exc,
+        )
+        return False
+    _VLLM_SLEEPING = True
+    log.info(
+        "vLLM-Omni asleep after %.0fs idle (level %d): its VRAM is back in the pool",
+        idle, cfg.sleep_level,
+    )
+    return True
+
+
+async def _vllm_idle_loop(app_state) -> None:
+    """Background ticker: hibernate the service when nothing uses it."""
+    global _VLLM_IDLE_SINCE
+    while True:
+        try:
+            settings: Settings = app_state.settings
+            await _vllm_sleep_if_idle(settings)
+        except Exception:  # pragma: no cover - defensive, the loop must survive
+            log.debug("vLLM-Omni idle check failed", exc_info=True)
+        await asyncio.sleep(5.0)
+
+
 async def _vllm_lifecycle(settings: Settings, *, start: bool) -> None:
     """Keep the service container in step with the engine switch.
 
@@ -498,8 +577,10 @@ async def _vllm_lifecycle(settings: Settings, *, start: bool) -> None:
                 await docker_ctl.start(cfg.socket, cfg.container)
                 log.info("vLLM-Omni container %s started (engine selected)", cfg.container)
             await _warm_vllm(settings, attempts=20, delay=15.0)
+            _vllm_mark_used()
         else:
             state = await docker_ctl.stop(cfg.socket, cfg.container)
+            _forget_vllm_sleep()
             log.info(
                 "vLLM-Omni container %s stopped (local engine): its VRAM is free again",
                 state.get("name") or cfg.container,
@@ -515,6 +596,8 @@ async def _stream_vllm(
     settings: Settings, req: TTSRequest, text: str
 ) -> AsyncIterator[Tuple[str, bytes, int]]:
     """Yield native PCM from vLLM-Omni; yields nothing (to fall back) on failure."""
+    if not await _vllm_wake_if_sleeping(settings):
+        return
     payload = _vllm_payload(settings, req, text)
     if payload is None:  # no reference clip to clone from: stay local
         return
@@ -662,6 +745,7 @@ def create_app(
         await scheduler.start()
         log.info("Gateway started (auth=%s)", app.state.settings.auth.enabled)
         asyncio.create_task(_apply_startup(app))
+        asyncio.create_task(_vllm_idle_loop(app.state))
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
@@ -1036,6 +1120,8 @@ def create_app(
         if "server" in sections:
             _configure_logging(updated.server.log_level)
         if "vllm" in sections:
+            # Hibernation state belongs to the service as it was configured before.
+            _forget_vllm_sleep()
             if updated.vllm.enabled:
                 # Give the service's two stages the room they need *now* (the local
                 # copy of the family it serves is redundant), then start it (or
@@ -1100,6 +1186,8 @@ def create_app(
             "container": cfg.container,
             "family": _vllm_family(settings),
             "enabled": settings.vllm.enabled,
+            "sleeping": _VLLM_SLEEPING,
+            "sleep_after": settings.vllm.sleep_after,
         }
         if not cfg.control:
             out["error"] = (

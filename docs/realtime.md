@@ -101,6 +101,21 @@ depth, and per-stage timings (`/api/metrics`).
   The preset speakers (`vivian`, `serena`…) then stay local, and so do Chatterbox clones
   (`models.clone_backend: chatterbox` is not what a Base checkpoint serves).
 
+  **Idle hibernation** (the middle ground between running and stopped): start the service with
+  `--enable-sleep-mode` and set `vllm.sleep_after` (> 0, seconds). After that long without a
+  vLLM request the gateway asks the *running* server to sleep
+  (`POST /v1/omni/sleep {"stage_ids": [0, 1], "level": 1}`), which hands its VRAM back to the
+  pool **without stopping the container** — no Docker start, no ~1 min model load to pay again —
+  and the next request wakes it first (`POST /v1/omni/wakeup`, then the audio). Level 1 keeps
+  the weights in host RAM (fast wake, needs the RAM); level 2 really frees the pages. The
+  Settings card has the delay and the level, and shows *asleep, VRAM released*. If the service
+  was started without the flag the endpoint 404s: the gateway says so once
+  (`--enable-sleep-mode`) and never tries again until the settings change.
+
+  Note there is no "vLLM server without a model": `vllm serve <checkpoint>` always loads and
+  reserves at startup (that is what `--max-model-len`/`--gpu-memory-utilization` size). Sleep
+  mode is the supported way to keep the server up with the VRAM released.
+
   **Managing the service from the UI** (optional): with the Docker socket mounted and
   `docker.control` enabled, **Settings → vLLM-Omni** becomes a plain engine toggle —
   selecting **vLLM-Omni** starts the container (at boot too, since the gateway honours the

@@ -220,6 +220,11 @@ class VLLMConfig(BaseModel):
     # service reloads them automatically when the file changes — instead of being
     # inlined as base64 in every request.
     ref_root: str = ""
+    # Idle hibernation: seconds without a vLLM request before the service is asked
+    # to sleep (0 = never). It stays up and reachable, but gives its VRAM back
+    # (needs `--enable-sleep-mode` on the service); the next request wakes it first.
+    sleep_after: float = 0.0
+    sleep_level: int = 1  # 1 = weights offloaded to host RAM (fast wake), 2 = freed
 
     @field_validator("family")
     @classmethod

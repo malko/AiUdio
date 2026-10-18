@@ -303,6 +303,13 @@
         </label>
         <label><span data-i18n="settings.vllmUrl">Base URL</span> <input id="set-vllm-url" type="text" /></label>
         <label><span data-i18n="settings.vllmPath">Route</span> <input id="set-vllm-path" type="text" /></label>
+        <label><span data-i18n="settings.vllmSleep">Sleep after (seconds idle, 0 = never)</span>
+          <input id="set-vllm-sleep" type="number" min="0" step="10" />
+          <select id="set-vllm-sleep-level">
+            <option value="1" data-i18n="settings.vllmSleep1">level 1 — weights to RAM (fast wake)</option>
+            <option value="2" data-i18n="settings.vllmSleep2">level 2 — VRAM freed (slower wake)</option>
+          </select>
+        </label>
         <div class="muted" data-i18n="settings.vllmHint">The engine toggle is the whole lifecycle: picking vLLM-Omni starts the container (and stops nothing else), going back to the local engine stops it so its VRAM is free again. The service loads a single checkpoint, so pick the model it serves; the gateway routes only that family to it.</div>
         <div class="row">
           <button id="set-vllm-save" class="primary" data-i18n="settings.save">Save</button>

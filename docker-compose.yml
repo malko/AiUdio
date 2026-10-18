@@ -128,10 +128,13 @@ services:
     # voices here; `--allowed-local-media-path` lets it read the shared voice bank
     # below, so clips are sent as `file:///svc/voices/avatars/<id>.wav`
     # (vllm.ref_root: /svc/voices) instead of being inlined in every request.
+    # `--enable-sleep-mode` allows the gateway to hibernate it when idle
+    # (vllm.sleep_after > 0): the server stays up but gives its VRAM back.
     command: >
       vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
       --omni --host 0.0.0.0 --port 8091
       --allowed-local-media-path /svc/voices
+      --enable-sleep-mode
     # vLLM needs a large shared-memory segment (Docker's default is 64 MB).
     shm_size: "8gb"
     ports:

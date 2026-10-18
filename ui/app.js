@@ -239,6 +239,8 @@ function applyVllmFields(cfg) {
   refreshVllmService();
   if ($("#set-vllm-url")) $("#set-vllm-url").value = v.base_url || "";
   if ($("#set-vllm-path")) $("#set-vllm-path").value = v.path || "/v1/audio/speech";
+  if ($("#set-vllm-sleep")) $("#set-vllm-sleep").value = v.sleep_after || 0;
+  if ($("#set-vllm-sleep-level")) $("#set-vllm-sleep-level").value = String(v.sleep_level || 1);
 }
 
 function applyGenerationFields(cfg) {
@@ -2127,7 +2129,8 @@ async function refreshVllmService() {
     VLLM_SERVICE = r;
     if (r.state) {
       const state = r.state.running ? t("vllm.running") : t("vllm.stopped");
-      status.textContent = `${r.container}: ${state}${r.state.model ? ` — ${r.state.model}` : ""}`;
+      const asleep = r.sleeping ? ` (${t("vllm.asleep")})` : "";
+      status.textContent = `${r.container}: ${state}${asleep}${r.state.model ? ` — ${r.state.model}` : ""}`;
       if (r.state.model && $("#set-vllm-model")) {
         $("#set-vllm-model").value = r.state.model;
         if ($("#set-vllm-family")) $("#set-vllm-family").value = vllmFamilyForRepo(r.state.model);
@@ -2148,6 +2151,8 @@ $("#set-vllm-save").addEventListener("click", async () => {
     family: $("#set-vllm-family") ? $("#set-vllm-family").value : "custom_voice",
     base_url: $("#set-vllm-url").value.trim() || "http://tts-vllm:8091",
     path: $("#set-vllm-path").value.trim() || "/v1/audio/speech",
+    sleep_after: Number($("#set-vllm-sleep") ? $("#set-vllm-sleep").value : 0) || 0,
+    sleep_level: Number($("#set-vllm-sleep-level") ? $("#set-vllm-sleep-level").value : 1) || 1,
   };
   try {
     const r = await apiFetch("/api/settings", {

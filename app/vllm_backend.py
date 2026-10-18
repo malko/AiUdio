@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional, Sequence
 
 import httpx
 
@@ -114,3 +114,31 @@ async def stream_pcm(
     finally:
         if owns_client:
             await client.aclose()
+
+
+async def omni_sleep(
+    base_url: str, level: int = 1, stage_ids: Sequence[int] = (0, 1), timeout: float = 60.0
+) -> bool:
+    """Release the service's VRAM without stopping it.
+
+    vLLM-Omni keeps the server (and the container) up and moves every stage's
+    weights out of the GPU — level 1 offloads them to host RAM (fast wake), level 2
+    really frees the pages (weights are reloaded on wake). Requires the service to
+    have been started with ``--enable-sleep-mode``.
+    """
+    url = f"{base_url.rstrip('/')}/v1/omni/sleep"
+    async with httpx.AsyncClient(timeout=timeout) as api:
+        resp = await api.post(url, json={"stage_ids": list(stage_ids), "level": int(level)})
+        resp.raise_for_status()
+    return True
+
+
+async def omni_wakeup(
+    base_url: str, stage_ids: Sequence[int] = (0, 1), timeout: float = 180.0
+) -> bool:
+    """Bring the stages back to the GPU (the counterpart of :func:`omni_sleep`)."""
+    url = f"{base_url.rstrip('/')}/v1/omni/wakeup"
+    async with httpx.AsyncClient(timeout=timeout) as api:
+        resp = await api.post(url, json={"stage_ids": list(stage_ids)})
+        resp.raise_for_status()
+    return True

@@ -151,6 +151,11 @@ vllm:
   # Path the *service* sees the voice bank at (read-only mount), e.g. /svc/voices:
   # reference clips are then sent as file:// URIs instead of inline base64.
   ref_root: ''
+  # Hibernation: seconds without a vLLM request before the running service is asked
+  # to release its VRAM (0 = never). Needs `--enable-sleep-mode` on the service;
+  # the next request wakes it up first. Level 1 = weights in host RAM (fast wake).
+  sleep_after: 0.0
+  sleep_level: 1
 docker:
   # Pilot the vLLM-Omni container (start/stop/switch its checkpoint) from the UI.
   # Off by default: it requires the Docker socket, i.e. root-equivalent power over
