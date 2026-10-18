@@ -972,6 +972,8 @@ async def _stream_vllm(
     metrics.observe_ttfa(time.perf_counter() - started)
     metrics.incr("tts_vllm_sessions")
     try:
+        # The service was asked for `audio.sample_rate` (`_vllm_payload`): report
+        # that. The local branch reports each chunk's real rate instead.
         yield "", first, settings.audio.sample_rate
         async for chunk in stream:
             yield "", chunk, settings.audio.sample_rate
@@ -1903,27 +1905,29 @@ def create_app(
                 raise HTTPException(400, "Streaming only supports a single text")
             settings = app.state.settings
             stream = _stream_pcm(settings, scheduler, req, texts[0], text_cfg=policy)
-            first: Optional[Tuple[str, bytes, int]] = None
-            if _vllm_eligible(settings, req):
-                # vLLM is the selected engine for this request: produce the first
-                # chunk *before* the response starts (headers are already sent once
-                # a StreamingResponse begins), so an unreachable service is a real
-                # 503 instead of an empty 200. The local engine is not a silent
-                # fallback — see `vllm.fallback_to_local`.
-                try:
-                    first = await stream.__anext__()
-                except StopAsyncIteration:
-                    raise HTTPException(503, "The engine produced no audio") from None
-                except HTTPException:
-                    raise
-                except ValueError as exc:
-                    raise HTTPException(400, str(exc)) from exc
-                except Exception as exc:
-                    raise HTTPException(503, f"Generation failed: {exc}") from exc
+            # Produce the first chunk *before* the response starts (once a
+            # StreamingResponse begins, the headers are already sent):
+            #   - `X-Sample-Rate` must describe the PCM actually emitted. The
+            #     configured `audio.sample_rate` is only the rate *requested* from
+            #     the vLLM-Omni service (and a default for the rest): the local
+            #     engines have their own (24 kHz), and nothing resamples here.
+            #   - a failure becomes a real status code instead of a 200 followed by
+            #     an empty/truncated body. The vLLM-Omni engine is not a silent
+            #     fallback either — see `vllm.fallback_to_local`.
+            try:
+                first = await stream.__anext__()
+            except StopAsyncIteration:
+                raise HTTPException(503, "The engine produced no audio") from None
+            except HTTPException:
+                raise
+            except ValueError as exc:
+                # Bad request content (unusable reference clip, unknown language…).
+                raise HTTPException(400, str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(503, f"Generation failed: {exc}") from exc
 
             async def body() -> AsyncIterator[bytes]:
-                if first is not None:
-                    yield first[1]
+                yield first[1]
                 try:
                     async for _sentence, pcm, _sr in stream:
                         yield pcm
@@ -1935,7 +1939,7 @@ def create_app(
             return StreamingResponse(
                 body(),
                 media_type="audio/pcm",
-                headers={"X-Sample-Rate": str(settings.audio.sample_rate)},
+                headers={"X-Sample-Rate": str(first[2] or settings.audio.sample_rate)},
             )
 
         # Chunking is a per-request policy for every engine, streaming or not: a

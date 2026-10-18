@@ -477,6 +477,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | `Warning: flash-attn is not installed` | expected — attention falls back to PyTorch `sdpa` (no FlashAttention build in the image) |
 | `Chatterbox is not installed` | build the image with `INSTALL_CHATTERBOX=1`, or point `models.chatterbox.python` at a venv with `chatterbox-tts` |
 | Chatterbox slow with many callers | it has no batch API; requests are serialized (use Qwen for concurrent throughput) |
+| PCM plays too slow / an octave down (or too fast) | the client assumed a sample rate: read `X-Sample-Rate` **per response** (and `sample_rate` on every WS `audio.start`). It is the rate of the samples actually sent (24 kHz for the local engines); `audio.sample_rate` is only what is asked of the vLLM-Omni service, and nothing is resampled |
 | Chatterbox `CUDA error: device-side assert triggered` (or illegal access / OOM, then *every* request fails) | a kernel asserted. The usual cause is a **text longer than the model's 2048-token positional table** — now split automatically (older builds asserted in `text_pos_emb`); degenerate sampling values or a bad reference clip are rejected/clamped earlier. The gateway tears the poisoned worker down and respawns it on the next request; `POST /api/models/unload {"family":"chatterbox"}` forces it. For the true kernel, restart with `CUDA_LAUNCH_BLOCKING=1` and `TORCH_USE_CUDA_DSA=1` |
 
 ## Licenses and credits

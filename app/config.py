@@ -182,6 +182,10 @@ class TextConfig(Policy):
 
 class AudioConfig(BaseModel):
     format: str = "wav"
+    # Rate *requested* from the vLLM-Omni service (if any): the local engines have
+    # their own (24 kHz) and nothing resamples here. Every response announces the
+    # rate of the samples it really sends (`X-Sample-Rate` for raw PCM), so this is
+    # only the rate asked of that service and the default advertised to clients.
     sample_rate: int = 24000
     # Reference-audio security. Defaults are restrictive to avoid SSRF (remote
     # URLs) and local file disclosure (path traversal) from API clients.

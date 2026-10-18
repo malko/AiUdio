@@ -106,8 +106,11 @@ List voices: `GET /v1/audio/voices`.
 
 Set `stream: true` (single text only). `format` is forced to `pcm`; chunks are emitted
 **sentence by sentence** as they are synthesized, so playback can start early. The sample
-rate is in the `X-Sample-Rate` response header. A non-streaming `format: "pcm"` response
-carries the same header (WAV already embeds its rate).
+rate is in the `X-Sample-Rate` response header — it describes **the samples in that response**,
+so always read it rather than assuming `audio.sample_rate` (the local engines emit 24 kHz; the
+setting only tells the vLLM-Omni service what to produce). The first chunk is produced before
+the response starts, so an engine failure is a real status code instead of an empty 200. A
+non-streaming `format: "pcm"` response carries the same header (WAV already embeds its rate).
 
 ```bash
 curl -N http://localhost:8004/api/tts -H 'Content-Type: application/json' \
@@ -234,7 +237,7 @@ Errors are JSON `{"detail": "..."}` with a 4xx/5xx status:
 | Route | Limit / behaviour |
 |---|---|
 | `POST /api/tts` (REST) | Micro-batched; inference is **serialized** by the engine. A `text` is split per `chunking`/`max_chars` and the pieces are joined back (one file per text). Throughput scales with `generation.batch_size`; there is no server-side queue cap (pressure shows up as latency and `GET /api/metrics` queue depth). |
-| `POST /api/tts` `stream:true` | Per sentence, one text at most. A mid-stream failure **ends the stream without an error frame** (HTTP headers are already sent): treat a short/abrupt end as an error and retry the request. |
+| `POST /api/tts` `stream:true` | Per sentence, one text at most. The first chunk is produced **before** the headers, so an engine failure is a real `4xx`/`5xx`. A later failure **ends the stream without an error frame** (HTTP headers are already sent): treat a short/abrupt end as an error and retry the request. |
 | vLLM-routed family (`vllm.enabled`) | The service is authoritative for the family `vllm.family` names: if it is unreachable or not ready the request fails — `503` (`/api/tts`, `/ws/tts`) or an `error` event (`/ws/chat`) — instead of silently using the local engine. Set `vllm.fallback_to_local: true` to allow that switch. |
 | `/v1/audio/speech` | Same engine and limits as `/api/tts`. |
 | Chatterbox families | No batch API: requests are processed **sequentially** (one at a time). |
@@ -257,7 +260,9 @@ and keep an eye on `/api/metrics`.
 - **Jitter buffer**: buffer ~150–300 ms (or 2 chunks) before starting playback to absorb
   variation between chunks; concatenate to an `AudioContext`/`AudioTrack` at the sample
   rate from `X-Sample-Rate`.
-- **Sample rate**: output is mono 24 kHz PCM16 by default; resample client-side if needed.
+- **Sample rate**: never hard-code it. Every PCM response (and every WS `audio.start`) carries
+  the rate of its own samples (`X-Sample-Rate`, 24 kHz for the local engines); `audio.sample_rate`
+  is only what is asked of the vLLM-Omni service. Resample client-side if you need another rate.
 - **Cancel** in-flight work with `input.cancel` (`/ws/chat`) when the user speaks/aborts.
 - **Transport**: PCM16 is fine on a LAN; for WAN/high-latency links, compress (Opus) on the
   client or terminate closer to the user (the roadmap is described in

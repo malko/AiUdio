@@ -125,6 +125,9 @@ text:
   code_blocks: drop
 audio:
   format: wav
+  # Rate asked of the vLLM-Omni service and advertised as a default. The local
+  # engines output 24 kHz and nothing is resampled: every PCM response announces
+  # the rate of its own samples in X-Sample-Rate (read it, don't assume this one).
   sample_rate: 24000
   allow_remote_media: false
   allow_local_ref_paths: false

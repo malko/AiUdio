@@ -473,6 +473,50 @@ def test_pcm_samples_announce_the_rate(client):
     assert s.headers["x-sample-rate"] == "24000"
 
 
+def test_streaming_header_describes_the_pcm_not_the_config(tmp_path):
+    """`audio.sample_rate` is the rate *requested* from vLLM and a default for the
+    local engines: the header must report the rate of the samples actually sent."""
+    from conftest import DummyEngine, _settings
+
+    from app.config import ConfigStore
+    from app.main import create_app
+
+    store = ConfigStore(tmp_path / "config.yaml")
+    store.settings = _settings(tmp_path, audio={"sample_rate": 16000})
+    with TestClient(create_app(store, DummyEngine())) as c:   # engine: 24 kHz
+        s = c.post("/api/tts", json={"text": "Bonjour. Salut.", "stream": True})
+        assert s.status_code == 200, s.text
+        assert s.headers["X-Sample-Rate"] == "24000"
+        # The pre-pulled first chunk is part of the body, not swallowed: the mock
+        # returns one 100 ms chunk, i.e. 2400 samples of PCM16 at 24 kHz.
+        assert len(s.content) == 2400 * 2
+
+        w = c.post("/api/tts", json={"text": "Bonjour.", "format": "pcm"})
+        assert w.headers["X-Sample-Rate"] == "24000"
+
+        cap = c.get("/api/capabilities").json()
+        assert cap["tts"]["sample_rate"] == 16000               # still the setting
+
+
+def test_streaming_failure_is_a_real_status_code(client, monkeypatch):
+    """Before the response starts: a failure must not look like an empty 200."""
+    def boom(family, items):  # noqa: ARG001
+        raise RuntimeError("engine exploded")
+
+    monkeypatch.setattr(client.app.state.engine, "synthesize_batch", boom)
+    r = client.post("/api/tts", json={"text": "Bonjour.", "stream": True})
+    assert r.status_code == 503, r.text
+    assert "engine exploded" in r.json()["detail"]
+
+
+def test_streaming_without_audio_is_a_503(client, monkeypatch):
+    monkeypatch.setattr(
+        client.app.state.engine, "synthesize_batch", lambda family, items: []
+    )
+    r = client.post("/api/tts", json={"text": "Bonjour.", "stream": True})
+    assert r.status_code == 503, r.text
+
+
 def test_ready(client):
     r = client.get("/ready")
     assert r.status_code == 200
