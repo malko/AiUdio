@@ -302,12 +302,13 @@ class UIConfig(BaseModel):
 
 
 class StartupConfig(BaseModel):
-    """What to preload when the server starts."""
+    """What to activate when the server starts."""
 
-    stt_model: str = ""   # STT model filename or alias to activate at startup
-    voice: str = ""       # TTS family (custom_voice/voice_design/base) or "avatar:<id>"
-    tts_family: str = ""  # TTS family to preload (keeps it warm for low latency)
-    warmup: bool = False  # run a tiny synthesis after preload (absorbs CUDA init)
+    # STT model filename or alias to activate at startup (writes the `.active`
+    # pointer the STT service reads). Nothing TTS is preloaded: the local engines
+    # load on first use, which is also what keeps the VRAM free for a vLLM-Omni
+    # service's two stages.
+    stt_model: str = ""
 
 
 class AuthConfig(BaseModel):

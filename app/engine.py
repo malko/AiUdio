@@ -404,22 +404,6 @@ class TTSEngine:
     def synthesize_one(self, item: Dict[str, Any]) -> Tuple[np.ndarray, int]:
         return self.synthesize_batch(item["family"], [item])[0]
 
-    def warmup(self, family: str) -> None:  # pragma: no cover - GPU
-        """Best-effort warm-up: synthesize a tiny clip to absorb CUDA init.
-
-        Only meaningful for families that need no reference audio (custom_voice,
-        chatterbox); VoiceDesign/Base are skipped.
-        """
-        if family != "custom_voice" and self.settings.models.backend_for(family) != "chatterbox":
-            return
-        item = {"text": "a.", "language": "English", "speaker": None, "instruct": ""}
-        try:
-            started = time.perf_counter()
-            self.synthesize_batch(family, [item])
-            log.info("Warm-up %s done in %.2fs", family, time.perf_counter() - started)
-        except Exception:
-            log.debug("Warm-up failed for %s", family, exc_info=True)
-
     # --------------------------------------------------------- chatterbox path
     def _recover_chatterbox(self, handle: ModelHandle) -> None:
         """Drop a dead/poisoned Chatterbox worker so the next request respawns it.

@@ -99,9 +99,8 @@ def _parse_expiry(value: Any, days: Any):
 
 
 async def _apply_startup(app: FastAPI) -> None:
-    """Preload the STT model / voice configured in Settings (best effort)."""
+    """Activate the configured STT model and the vLLM service (best effort)."""
     settings: Settings = app.state.settings
-    engine: TTSEngine = app.state.engine
 
     if settings.docker.control and not settings.vllm.enabled:
         # The local engine is selected: a vLLM-Omni container that is running holds
@@ -126,38 +125,6 @@ async def _apply_startup(app: FastAPI) -> None:
         except Exception:
             log.exception("Startup STT activation failed")
 
-    voice = settings.startup.voice
-    if voice and settings.vllm.enabled:
-        # Both vLLM-Omni stages live on the same GPU and profile against the *free*
-        # memory at startup: loading any local model here (even another family) is
-        # what leaves stage 0 with "Available KV cache memory: 0.0 GiB".
-        log.info(
-            "Startup: not preloading '%s' — the vLLM-Omni engine is selected "
-            "(keeping the VRAM for the service's two stages)",
-            voice,
-        )
-    elif voice:
-        try:
-            if voice.startswith("avatar:"):
-                store = AvatarStore(_avatar_dir(settings))
-                avatar = store.get(voice.split(":", 1)[1])
-                if avatar:
-                    if _clone_family(settings) == "chatterbox":
-                        await asyncio.to_thread(engine.ensure, "chatterbox")
-                    else:
-                        handle = await asyncio.to_thread(engine.ensure, "base")
-                        await asyncio.to_thread(
-                            engine._cached_clone_prompt, handle,
-                            str(store.wav_path(avatar.id)), avatar.ref_text or None,
-                            bool(avatar.x_vector_only),
-                        )
-                    log.info("Startup: loaded voice '%s'", avatar.name)
-            else:
-                await asyncio.to_thread(engine.ensure, voice)
-                log.info("Startup: loaded model '%s'", voice)
-        except Exception:
-            log.exception("Startup voice load failed")
-
     if settings.vllm.enabled:
         try:
             # The engine switch drives the container: start it if `docker.control`
@@ -165,24 +132,6 @@ async def _apply_startup(app: FastAPI) -> None:
             await _vllm_lifecycle(settings, start=True)
         except Exception:  # pragma: no cover - defensive
             log.debug("vLLM-Omni warm-up skipped", exc_info=True)
-
-    family = settings.startup.tts_family
-    if family and settings.vllm.enabled:
-        log.info(
-            "Startup: not preloading '%s' — the vLLM-Omni engine is selected "
-            "(keeping the VRAM for the service's two stages)",
-            family,
-        )
-        family = ""
-    if family:
-        try:
-            await asyncio.to_thread(engine.ensure, family)
-            log.info("Startup: preloaded TTS family '%s'", family)
-            if settings.startup.warmup and hasattr(engine, "warmup"):
-                await asyncio.to_thread(engine.warmup, family)
-                log.info("Startup: warmed up '%s'", family)
-        except Exception:
-            log.exception("Startup TTS preload failed")
 
 
 def _public_config(settings: Settings, engine: TTSEngine) -> Dict[str, Any]:

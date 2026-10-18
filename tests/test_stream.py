@@ -801,11 +801,12 @@ def test_nothing_is_logged_when_the_service_is_already_stopped(monkeypatch, capl
     assert caplog.text == ""
 
 
-def test_startup_does_not_preload_local_models_when_vllm_is_selected(monkeypatch):
-    """With the vLLM engine selected, no local model may be loaded at boot.
+def test_startup_loads_no_local_model(monkeypatch):
+    """The boot only activates the STT model and the vLLM service.
 
-    The service's two stages profile against free VRAM: preloading a local family
-    (even one it does not serve) leaves stage 0 with no KV cache.
+    Both vLLM-Omni stages profile against *free* VRAM: loading a local family at
+    startup (even one the service does not serve) leaves stage 0 with no KV cache,
+    so nothing TTS is preloaded any more.
     """
     from types import SimpleNamespace
 
@@ -819,13 +820,13 @@ def test_startup_does_not_preload_local_models_when_vllm_is_selected(monkeypatch
 
     settings = Settings()
     settings.vllm.enabled = True
-    settings.startup.voice = "base"
-    settings.startup.tts_family = "custom_voice"
+    settings.startup.stt_model = "whatever"
     app = SimpleNamespace(state=SimpleNamespace(settings=settings, engine=Engine()))
 
     async def noop(*a, **k):
         return None
 
     monkeypatch.setattr(main_mod, "_vllm_lifecycle", noop)
+    monkeypatch.setattr(main_mod, "_vllm_enforce_engine", noop)
     asyncio.run(main_mod._apply_startup(app))
     assert loaded == []

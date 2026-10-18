@@ -191,7 +191,6 @@ $("#lang-select").addEventListener("change", (e) => {
   window.I18N.setLang(e.target.value);
   if (CONFIG) {
     buildTtsFamilySelect();
-    buildStartupVoiceSelect();
     renderSttPickers();
     renderAvatars();
     renderVoiceList();
@@ -254,7 +253,6 @@ async function init() {
   await loadConversationVoices();
   const preload = selectedVoice();
   if (preload) loadVoiceModel(preload);
-  buildStartupVoiceSelect();
   await loadMicDevices();
   fitChatLayout();
   refreshConfigModels();
@@ -978,7 +976,6 @@ function avatarDialogForm() {
 async function reloadAvatarViews() {
   await loadAvatars();
   await loadConversationVoices();
-  buildStartupVoiceSelect();
   // An edited/regenerated voice invalidates the warm-up marks and preload cache.
   voiceCache.clear();
   voiceLoad.loaded = "";
@@ -2181,12 +2178,6 @@ $("#chat-vad").addEventListener("click", () => {
 });
 
 // ------------------------------------------------------------- settings tab
-function buildStartupVoiceSelect() {
-  // The TTS preload settings (`startup.voice`, `tts_family`, `warmup`) stay in
-  // config.yaml / env: they only save the *first* call after a boot, and the chat
-  // keeps its own voice choice on the client side.
-}
-
 $("#set-startup-save").addEventListener("click", async () => {
   const status = $("#set-startup-status");
   status.textContent = "…";

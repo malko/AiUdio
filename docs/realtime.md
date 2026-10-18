@@ -48,9 +48,11 @@ depth, and per-stage timings (`/api/metrics`).
   becomes negative). A sentence that never ends is cut at the last clause/space boundary past
   ~240 chars (last resort). Chat units are synthesized as-is: `_stream_pcm` does not re-split
   them (that pass, `chunking.*`, applies to the TTS API/WebSocket routes).
-- **Preload + optional warm-up**: `startup.tts_family` preloads a family at boot;
-  `startup.warmup: true` runs a tiny synthesis to absorb CUDA init. `residency: multi`
-  keeps several families hot (more VRAM; `TTS_RESIDENCY=multi`, `single` by default).
+- **Keep models hot**: `residency: multi` keeps several families loaded (more VRAM;
+  `TTS_RESIDENCY=multi`, `single` by default) and `models.resident` lists the ones to pin. The
+  first call to a family still pays its load + CUDA init: nothing TTS is preloaded at boot any
+  more (a boot-time preload was wasted whenever another family was used first, and it starved a
+  vLLM-Omni service's two stages of the VRAM they profile against).
 - **Adaptive client endpointing**: the VAD shortens the silence window when the streaming
   transcript already ends with sentence punctuation (faster turn-taking).
 - **Browser echo cancellation**: the mic is opened with `echoCancellation`,

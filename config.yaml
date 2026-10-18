@@ -208,10 +208,8 @@ ui:
   show_stt_tab: true
   show_chat_tab: true
 startup:
+  # STT model to activate at boot ('' = nothing: load on first use).
   stt_model: ''
-  voice: ''
-  tts_family: ''
-  warmup: false
 auth:
   enabled: false
   username: admin
