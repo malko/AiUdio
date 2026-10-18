@@ -61,16 +61,25 @@ Protocol modeled on vLLM-Omni for compatibility/passthrough:
 | `app/config.py` | `config.yaml` + env overrides, persistence |
 | `app/schemas.py` | request/response models, OpenAI/vLLM aliases |
 | `app/chunking.py` | sentence/chunk splitting, audio concatenation |
-| `app/audio.py` | PCM16/WAV/base64 |
+| `app/audio.py` | PCM16/WAV encoding |
 | `app/engine.py` | model pool, backend dispatch, batch inference |
 | `app/chatterbox_backend.py` | client for the isolated Chatterbox worker process |
 | `app/chatterbox_worker.py` | Chatterbox inference in its own venv (JSON protocol) |
+| `app/vllm_backend.py` | vLLM-Omni streaming client (PCM, sleep/wake) |
 | `app/languages.py` | language name ↔ ISO code mapping |
+| `app/avatars.py` | voice bank (clone metadata + reference clips) |
+| `app/apikeys.py` | API keys (hash/verify) and admin sessions |
 | `app/scheduler.py` | asynchronous micro-batching |
 | `app/llm.py` | OpenAI-compatible LLM client (SSE) |
-| `app/security.py` | Basic + API keys |
+| `app/security.py` | Basic + API keys, media-reference validation |
+| `app/stt_models.py` | STT model index and on-demand download |
+| `app/docker_ctl.py` | Docker API client (pilots the vLLM-Omni container) |
+| `app/metrics.py` | in-process metrics (TTFA/RTF/counters) |
 | `app/main.py` | FastAPI application, routes, WS, proxies |
+| `ui/app.js` | web UI logic (tabs, players, WebSocket clients) |
+| `ui/index.html` / `ui/styles.css` | web UI markup / styling |
 | `ui/i18n.js` | multilingual UI strings |
+| `ui/pcm-worklet.js` | AudioWorklet microphone capture |
 
 ## "True real-time" streaming
 

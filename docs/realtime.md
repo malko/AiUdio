@@ -318,7 +318,9 @@ depth, and per-stage timings (`/api/metrics`).
   less of our own audio in the mic), and the ~0.6 s of microphone held back while the assistant
   spoke is handed to the STT right after the barge-in, so the first words are not lost (a
   natural end drops it instead: it is mostly our own tail). Starting a new turn resets the
-  previous playback, including from dictation, so two replies never overlap.
+  previous playback, including from dictation, so two replies never overlap. Each turn carries
+  an optional client id (`input.text` → `turn`), echoed by the server on its events, so a late
+  `turn.cancelled`/`error` from the previous turn cannot land on the new reply.
 
 ### Diagnosing a slow engine (Qwen3-TTS vs Chatterbox)
 

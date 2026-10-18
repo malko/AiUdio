@@ -37,6 +37,9 @@ Authentication is **disabled by default** (trusted LAN). When `auth.enabled` is 
   **session key** (`POST /api/session`) and uses it like any client.
 - Keys are created/revoked in the UI (**Settings → Access & API keys**) — see
   [`security.md`](security.md). They are stored hashed and shown once.
+- **Admin-only writes** (when `auth.enabled`): `PUT /api/settings`, model/voice management,
+  avatar writes and `POST /api/stt/download` require HTTP Basic or an admin session key — a
+  plain client key gets `403`. Read routes (TTS/STT/voices/capabilities) accept any valid key.
 
 ```python
 HEADERS = {"X-API-Key": "aiud_..."}
@@ -164,7 +167,9 @@ The LLM is **not** served by AiUdio; point it at an external OpenAI-compatible e
 - `WS /ws/chat` — full cascade with audio. Client events:
   `session.config` (`speak`, `personality`, `tts`), `input.text`, `input.cancel`.
   Server events: `transcript`, `llm.delta`, `audio.start`/PCM/`audio.done`, `llm.done`,
-  `turn.cancelled`, `error`.
+  `turn.cancelled`, `error`. Optional `turn` id: if you send `{"type":"input.text","text":…,"turn":N}`,
+  the server echoes `turn: N` on that turn's events, so a client can drop the tail of a turn it
+  cancelled (barge-in).
 
 ```python
 import asyncio, json, websockets

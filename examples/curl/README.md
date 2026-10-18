@@ -46,6 +46,14 @@ curl -s "${AUTH[@]}" "$BASE/api/tts" -H 'Content-Type: application/json' \
   -d '{"text":"Hello","avatar":"narrator"}' -o out.wav
 ```
 
+## Voices
+
+```bash
+curl -s "${AUTH[@]}" "$BASE/api/voices?family=custom_voice" | jq          # speakers + languages
+curl -s "${AUTH[@]}" "$BASE/v1/audio/voices" | jq                        # voices + voice-bank avatars
+curl -s "${AUTH[@]}" "$BASE/api/avatars" | jq '.avatars[].id'            # voice-bank ids
+```
+
 ## OpenAI-compatible
 
 ```bash

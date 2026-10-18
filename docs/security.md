@@ -34,6 +34,10 @@ environment variables.
 - Comparisons use `secrets.compare_digest` (constant time).
 - Managing keys requires an admin (HTTP Basic or an admin session key); a plain client
   key is refused (HTTP 403). `POST /api/session` requires HTTP Basic specifically.
+- The same admin check gates every **mutating** route: `PUT /api/settings` (including
+  `docker.control` and the vLLM-Omni profile), model/voice management, avatar writes and
+  `POST /api/stt/download`. A plain client key (intended for synthesis) cannot change the
+  configuration, create/delete voices or pilot containers.
 
 ## LAN deployment recommendations
 

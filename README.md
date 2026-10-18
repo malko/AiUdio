@@ -387,6 +387,8 @@ AUTH_PASSWORD='strong-password'
   `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 - The admin UI mints a short-lived **session key** on load (`POST /api/session`), so it
   needs no manual key — and it works for WebSocket too.
+- **Admin-only writes**: changing settings, models, voices or downloading STT models requires
+  HTTP Basic or an admin session key; a plain client key is refused (`403`).
 - `/health` stays public.
 
 ⚠️ **A browser cannot send an `Authorization` header over WebSocket**: the UI uses the
@@ -427,7 +429,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | Very long first call | weights are downloading (check logs / `hf_cache`) |
 | Authenticated WS fails | use an API key (Basic does not work over browser WebSocket) |
 | STT unreachable | `docker compose logs stt`; the upstream build may need a path adjustment (`cmake --install`) |
-| Voice bank has files but few voices | tab **Voices** shows the audit (files, size, duplicates, orphans) with a *Remove orphan files* button; each voice is `<id>.json` + `<id>.wav` (+ `.png`), and saving a voice with an existing name creates a second entry |
+| Voice bank has files but few voices | the **Voice Bank** tab shows the audit (files, size, duplicates, orphans) with a *Remove orphan files* button; each voice is `<id>.json` + `<id>.wav` (+ `.png`), and saving a voice with an existing name creates a second entry |
 | Choppy TTS streaming | lower `chunking.max_chars` or use the `vllm` profile |
 | vLLM serves the wrong checkpoint | `/api/vllm/health` reports `served_family`; set `vllm.family` to match (`custom_voice` presets / `base` clones) — the service loads a single model |
 | vLLM `Stage-1 has no live replica` / stage-1 CUDA OOM | the two stages each reserve a fraction of the *same* GPU (Qwen3-TTS: 0.3 + 0.3 = 60 % of the card, whatever the model size): lower them with `--stage-overrides`; see [realtime](docs/realtime.md) |

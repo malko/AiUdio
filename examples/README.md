@@ -11,7 +11,7 @@ Runnable clients for the AiUdio API. All read `AIUDIO_BASE_URL` (default
 | `node/tts.mjs` | One-shot TTS (Node ≥ 18, built-in fetch). |
 | `node/tts_stream.mjs` | Streaming PCM over HTTP (Node ≥ 18). |
 | `node/chat.mjs` | `/ws/chat` cascade (Node ≥ 22, global WebSocket). |
-| `curl/README.md` | Copy-paste `curl` commands for every flow. |
+| `curl/README.md` | Copy-paste `curl` commands for the HTTP flows (WebSockets need the Python/Node examples). |
 
 ```bash
 export AIUDIO_BASE_URL=http://localhost:8004

@@ -16,6 +16,12 @@ All routes are served by the gateway (`:8004`). When `auth.enabled` is true, add
 | GET | `/api/config` | Public configuration (models, languages, LLM, UI) |
 | PUT | `/api/settings` | Update `llm`, `generation`, `chunking`, `audio`, `stt`, `ui`, `startup`, `models`, `vllm` (`enabled`/`base_url`/`path`/`family`/`ref_root`/`model`/`max_model_len`/`enforce_eager`/`stage_memory`/`sleep_after`/`sleep_level`), `docker` (`control`), `server.log_level` — sections merge recursively. Selecting the vLLM-Omni engine starts the container (and unloads our copy of the family it serves); going back to the local engine stops it, returning its VRAM |
 
+> **Admin-only writes.** When `auth.enabled` is true, `PUT /api/settings`, model/voice management
+> (`POST /api/models/select|load|unload`, `POST /api/voices/load`), avatar writes
+> (`POST`/`PUT`/`DELETE /api/avatars…`, `POST /api/avatars/hygiene/clean`) and
+> `POST /api/stt/download` require an **admin** (HTTP Basic or an admin session key); a plain
+> client key gets `403`. Read-only routes stay open to any valid key.
+
 ## Access (admin)
 
 Authentication is off by default. When `auth.enabled` is true, machine clients use an
@@ -116,6 +122,15 @@ Multipart `file` → segments `{start, end, speaker}`.
 ### `GET /api/stt/health`
 Upstream STT service status.
 
+### `GET /api/stt/models`
+Downloadable STT models from the vendored index, with cache status and the active one:
+`{available, active, models: [{repo, aliases, filename, size, cached, active, streaming}]}`.
+
+### `POST /api/stt/download`
+`{"model": "<repo|alias|filename>"}` (defaults to the index's default ASR model) — downloads the
+GGUF into the shared cache (SHA-256 verified), yields SSE progress events and points the STT
+container at it. Admin-only.
+
 ### `WS /ws/stt`
 Passthrough to the STT service's `/v1/audio/transcriptions/realtime`. Events:
 `session.created`, `session.update`, PCM16 frames, `input_audio_buffer.commit`,
@@ -131,7 +146,9 @@ Tests the connection to the external LLM.
 
 ### `WS /ws/chat`
 `{"type":"session.config","speak":true,"personality":"...","tts":{...}}` then
-`{"type":"input.text","text":"..."}`. Send `{"type":"input.cancel"}` to stop the
-current turn (LLM stream + TTS synthesis); `personality` is appended to the system
-prompt for avatars that define one.
+`{"type":"input.text","text":"...","turn":1}` (the optional `turn` id is echoed on the turn's
+`transcript`, `llm.delta`, `llm.done`, `turn.cancelled`, `error` and `audio.*` events, so a
+client can ignore the tail of a turn it already cancelled). Send `{"type":"input.cancel"}` to stop
+the current turn (LLM stream + TTS synthesis); `personality` is appended to the system prompt for
+avatars that define one.
 Server events: `transcript`, `llm.delta`, `audio.start` / PCM / `audio.done`, `llm.done`.
