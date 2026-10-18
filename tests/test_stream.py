@@ -621,3 +621,73 @@ def test_reconcile_recreates_only_what_differs(monkeypatch):
 
 async def _noop():
     return None
+
+
+def test_container_profile_is_read_from_its_command():
+    from app.main import _vllm_container_flags
+
+    cmd = [
+        "vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
+        "--max-model-len", "2048", "--enforce-eager",
+        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.13}, "1": {"gpu_memory_utilization": 0.11}}',
+    ]
+    profile = _vllm_container_flags(cmd)
+    assert profile["model"] == "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    assert profile["stage_memory"] == {"0": 0.13, "1": 0.11}
+    assert profile["max_model_len"] == 2048
+    assert profile["enforce_eager"] is True
+
+    # A container started straight from the compose: a budget, no context override.
+    bare = _vllm_container_flags(["vllm", "serve", "m", "--omni"])
+    assert bare["stage_memory"] == {} and bare["max_model_len"] is None
+    assert bare["enforce_eager"] is False
+    # Garbage in the flag is ignored, never fatal.
+    broken = _vllm_container_flags(["vllm", "serve", "m", "--stage-overrides", "not json"])
+    assert broken["stage_memory"] == {}
+
+
+def test_service_profile_reports_divergence(monkeypatch):
+    from app import main as main_mod
+
+    monkeypatch.setattr(
+        main_mod, "_gpu_memory",
+        lambda: {"total_bytes": int(15.48 * 1024 ** 3), "free_bytes": int(9 * 1024 ** 3), "name": "x"},
+    )
+    settings = Settings()
+    settings.vllm.model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    settings.vllm.max_model_len = 2048
+    settings.vllm.enforce_eager = True
+
+    matching = main_mod._vllm_container_flags([
+        "vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
+        "--max-model-len", "2048", "--enforce-eager",
+        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.13}, "1": {"gpu_memory_utilization": 0.11}}',
+    ])
+    assert main_mod._vllm_profile_status(settings, matching)["matches"] is True
+
+    # Same container, but the settings now ask for another checkpoint: divergence.
+    settings.vllm.model = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    status = main_mod._vllm_profile_status(settings, matching)
+    assert status["matches"] is False
+
+    # An uncomputable budget must not be reported as a divergence on its own: the
+    # container keeps the flag it was started with.
+    monkeypatch.setattr(main_mod, "_gpu_memory", lambda: None)
+    settings.vllm.model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    assert main_mod._vllm_profile_status(settings, matching)["matches"] is True
+    # …but a context/eager difference still is one.
+    loose = main_mod._vllm_container_flags([
+        "vllm", "serve", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "--omni",
+        "--stage-overrides", '{"0": {"gpu_memory_utilization": 0.13}, "1": {"gpu_memory_utilization": 0.11}}',
+    ])
+    assert main_mod._vllm_profile_status(settings, loose)["matches"] is False
+
+
+def test_flag_plan_leaves_an_uncomputable_budget_alone(monkeypatch):
+    from app import main as main_mod
+
+    monkeypatch.setattr(main_mod, "_gpu_memory", lambda: None)
+    settings = Settings()
+    values, _ = main_mod._vllm_flag_plan(settings, "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+    assert "--stage-overrides" not in values  # nothing to say: do not strip the flag
+    assert values["--max-model-len"] == "2048"

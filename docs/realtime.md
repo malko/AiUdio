@@ -143,6 +143,11 @@ depth, and per-stage timings (`/api/metrics`).
   (a stage left at 0 keeps being computed), which is the escape hatch when our numbers do not
   fit a given card.
 
+  The card also shows what the *container* really runs with, read from its command line
+  (`Qwen/…-0.6B-Base · 0=0.13 + 1=0.11 · ctx 2048 · eager`), so a divergence from the saved
+  profile is visible at a glance (`GET /api/vllm/service` → `profile.matches`) with the
+  *Save* that fixes it: no state to keep in sync, the command line is the truth.
+
   **Managing the service from the UI** (optional): with the Docker socket mounted and
   `docker.control` enabled, **Settings → vLLM-Omni** becomes a plain engine toggle —
   selecting **vLLM-Omni** starts the container (at boot too, since the gateway honours the

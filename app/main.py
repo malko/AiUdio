@@ -433,31 +433,87 @@ def _effective_budget(settings: Settings, model: str) -> Dict[str, Any]:
 
 
 def _vllm_flag_plan(settings: Settings, model: str) -> Tuple[Dict[str, Optional[str]], Dict[str, bool]]:
-    """`--flag value` / switch changes that make the container match the settings."""
+    """`--flag value` / switch changes that make the container match the settings.
+
+    The budget key is **omitted** when nothing could be computed (no CUDA, unknown
+    checkpoint): the container then keeps whatever `--stage-overrides` it was started
+    with, instead of having a working budget striped off.
+    """
     budget = _effective_budget(settings, model)
     stages = budget.get("stages") or {}
-    overrides = (
-        json.dumps(
+    values: Dict[str, Optional[str]] = {
+        "--max-model-len": str(int(settings.vllm.max_model_len)),
+    }
+    if stages:
+        values["--stage-overrides"] = json.dumps(
             {stage: {"gpu_memory_utilization": value} for stage, value in sorted(stages.items())},
             separators=(", ", ": "),
         )
-        if stages else None
-    )
-    values: Dict[str, Optional[str]] = {
-        "--stage-overrides": overrides,
-        "--max-model-len": str(int(settings.vllm.max_model_len)),
-    }
     return values, {"--enforce-eager": bool(settings.vllm.enforce_eager)}
 
 
 def _vllm_container_flags(cmd: Optional[List[str]]) -> Dict[str, Any]:
-    """The launch flags we manage, as read from a container's command line."""
+    """The launch profile of a container, as read from its command line."""
+    overrides: Dict[str, float] = {}
+    raw = docker_ctl.flag_value(cmd, "--stage-overrides")
+    if raw:
+        try:
+            for stage, spec in (json.loads(raw) or {}).items():
+                value = (spec or {}).get("gpu_memory_utilization")
+                if value is not None:
+                    overrides[str(stage)] = round(float(value), 2)
+        except (ValueError, TypeError, AttributeError):
+            log.debug("Could not read --stage-overrides %r", raw)
+    length = docker_ctl.flag_value(cmd, "--max-model-len")
     return {
-        "stage_overrides": docker_ctl.flag_value(cmd, "--stage-overrides"),
-        "max_model_len": docker_ctl.flag_value(cmd, "--max-model-len"),
+        "model": docker_ctl.served_model(cmd),
+        "stage_memory": overrides,
+        "max_model_len": int(length) if (length or "").isdigit() else None,
         "enforce_eager": docker_ctl.has_flag(cmd, "--enforce-eager"),
         "command": cmd,
     }
+
+
+def desired_stage_memory(values: Dict[str, Optional[str]]) -> Dict[str, float]:
+    """Stage fractions carried by a `--stage-overrides` value ({} when absent)."""
+    raw = values.get("--stage-overrides")
+    if not raw:
+        return {}
+    try:
+        return {
+            str(stage): round(float((spec or {}).get("gpu_memory_utilization")), 2)
+            for stage, spec in (json.loads(raw) or {}).items()
+            if (spec or {}).get("gpu_memory_utilization") is not None
+        }
+    except (ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _vllm_desired_profile(settings: Settings, model: str) -> Dict[str, Any]:
+    """The launch profile the settings ask for, with the budget resolved."""
+    budget = _effective_budget(settings, model)
+    return {
+        "model": str(settings.vllm.model or "").strip() or model,
+        "stage_memory": budget.get("stages") or {},
+        "max_model_len": int(settings.vllm.max_model_len),
+        "enforce_eager": bool(settings.vllm.enforce_eager),
+    }
+
+
+def _vllm_profile_status(settings: Settings, actual: Dict[str, Any]) -> Dict[str, Any]:
+    """Compare what the container runs with to what the settings want."""
+    model = actual.get("model") or str(
+        (settings.models.registry or {}).get(_vllm_family(settings), "")
+    )
+    desired = _vllm_desired_profile(settings, model)
+    matches = (
+        (not desired["model"] or desired["model"] == actual.get("model"))
+        # An uncomputable budget is not a requirement: leave the container alone.
+        and (not desired["stage_memory"] or desired["stage_memory"] == actual.get("stage_memory"))
+        and desired["max_model_len"] == actual.get("max_model_len")
+        and desired["enforce_eager"] == bool(actual.get("enforce_eager"))
+    )
+    return {"actual": actual, "desired": desired, "matches": matches}
 
 
 async def _vllm_reconcile(settings: Settings) -> None:
@@ -487,7 +543,10 @@ async def _vllm_reconcile(settings: Settings) -> None:
             applied = _vllm_container_flags(state.get("command"))
             unchanged = (
                 (not wanted_model or wanted_model == state.get("model"))
-                and str(applied.get("stage_overrides") or "") == str(values["--stage-overrides"] or "")
+                and (
+                    "--stage-overrides" not in values
+                    or desired_stage_memory(values) == applied.get("stage_memory")
+                )
                 and str(applied.get("max_model_len") or "") == values["--max-model-len"]
                 and bool(applied.get("enforce_eager")) == switches["--enforce-eager"]
             )
@@ -496,7 +555,8 @@ async def _vllm_reconcile(settings: Settings) -> None:
                     "Applying the vLLM-Omni launch profile to %s: %s --stage-overrides %s "
                     "--max-model-len %s%s",
                     cfg.container, wanted_model or "(same checkpoint)",
-                    values["--stage-overrides"], values["--max-model-len"],
+                    values.get("--stage-overrides") or "(unchanged)",
+                    values["--max-model-len"],
                     " --enforce-eager" if switches["--enforce-eager"] else "",
                 )
                 await docker_ctl.set_model(
@@ -1417,7 +1477,14 @@ def create_app(
             )
             return out
         try:
-            out["state"] = await docker_ctl.status(cfg.socket, cfg.container)
+            state = await docker_ctl.status(cfg.socket, cfg.container)
+            out["state"] = state
+            if state.get("exists"):
+                # What the container really runs with, versus what the settings ask
+                # for: the divergence is what the UI has to show.
+                out["profile"] = _vllm_profile_status(
+                    settings, _vllm_container_flags(state.get("command"))
+                )
         except docker_ctl.DockerError as exc:
             out["error"] = str(exc)
         return out

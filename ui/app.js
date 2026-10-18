@@ -2160,7 +2160,18 @@ async function refreshVllmService() {
     if (r.state) {
       const state = r.state.running ? t("vllm.running") : t("vllm.stopped");
       const asleep = r.sleeping ? ` (${t("vllm.asleep")})` : "";
-      status.textContent = `${r.container}: ${state}${asleep}${r.state.model ? ` — ${r.state.model}` : ""}`;
+      const actual = (r.profile && r.profile.actual) || {};
+      const bits = [];
+      const budget = Object.entries(actual.stage_memory || {})
+        .map(([stage, value]) => `${stage}=${value}`).join(" + ");
+      if (budget) bits.push(budget);
+      if (actual.max_model_len) bits.push(`ctx ${actual.max_model_len}`);
+      if (actual.enforce_eager) bits.push("eager");
+      const suffix = bits.length ? ` · ${bits.join(" · ")}` : "";
+      const diverges = r.profile && !r.profile.matches
+        ? ` ⚠ ${t("vllm.diverges")}` : "";
+      status.textContent =
+        `${r.container}: ${state}${asleep}${actual.model ? ` — ${actual.model}` : ""}${suffix}${diverges}`;
       if (r.state.model && $("#set-vllm-model")) {
         $("#set-vllm-model").value = r.state.model;
         if ($("#set-vllm-family")) $("#set-vllm-family").value = vllmFamilyForRepo(r.state.model);
