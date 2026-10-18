@@ -10,6 +10,7 @@ import asyncio
 import io
 import json
 import logging
+import math
 import re
 import time
 from dataclasses import asdict
@@ -307,6 +308,95 @@ def _vllm_family(settings: Settings) -> str:
     """Family the configured vLLM-Omni service serves (default: preset voices)."""
     value = str(getattr(settings.vllm, "family", "") or "").strip().lower()
     return value if value in _VLLM_FAMILIES else "custom_voice"
+
+
+#: Sizing model for the vLLM-Omni stages, calibrated on the observed footprints
+#: (1.7B → ~4.1 GiB of weights, 0.6B → ~1.4 GiB, i.e. bf16 plus ~30 % of buffers).
+_VLLM_BYTES_PER_PARAM = 2
+_VLLM_WEIGHT_FACTOR = 1.3
+#: Per-stage headroom on top of the weights, in GiB: the talker's KV pool (0.22 GiB
+#: at `--max-model-len 2048`) plus activations and CUDA contexts; the Code2Wav
+#: decoder is small but sizes its buffers for `max_num_batched_tokens` (65536).
+_VLLM_STAGE_HEADROOM = {0: 0.5, 1: 1.0}
+_VLLM_CODEC_WEIGHTS = 0.6
+
+
+def _gpu_memory() -> Optional[Dict[str, Any]]:
+    """Total/free VRAM of the card the gateway runs on (None without CUDA)."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        free, total = torch.cuda.mem_get_info(0)
+        return {
+            "free_bytes": int(free),
+            "total_bytes": int(total),
+            "name": torch.cuda.get_device_name(0),
+        }
+    except Exception:  # pragma: no cover - no driver/CPU-only install
+        return None
+
+
+def _params_from_repo(repo: str) -> Optional[float]:
+    """Billions of parameters read from a checkpoint id (``…-0.6B-Base`` → 0.6)."""
+    match = re.search(r"(\d+(?:\.\d+)?)B(?:[-_/]|$)", repo or "")
+    return float(match.group(1)) if match else None
+
+
+def _vllm_budget(settings: Settings, model: str) -> Dict[str, Any]:
+    """Suggested per-stage `gpu_memory_utilization` for a checkpoint on this card.
+
+    `gpu_memory_utilization` is a fraction of the GPU's **total** VRAM — vLLM says
+    so itself when it refuses: *desired GPU memory utilization (0.3, 23.78 GiB)* on
+    a 79.25 GiB card — and **every stage reserves its own share**, so the two
+    fractions add up. The smallest budget that fits a stage is
+
+        (weights + activation/KV headroom) / total VRAM
+
+    rounded up to the hundredth (on a 16 GiB card, 0.01 ≈ 160 MiB). The rest of the
+    card has to hold everything else (our own models, STT, the LLM…), which is why
+    the sum should stay well below 1.
+    """
+    name = (model or "").strip()
+    gpu = _gpu_memory()
+    params = _params_from_repo(name)
+    out: Dict[str, Any] = {"model": name, "gpu": gpu}
+    if gpu is None:
+        out["error"] = "CUDA is not visible from the gateway container"
+        return out
+    if "qwen3-tts" not in name.lower():
+        out["error"] = f"{name or 'the model'} is not a Qwen3-TTS checkpoint"
+        return out
+    if params is None:
+        out["error"] = f"cannot guess the size of {name!r}"
+        return out
+
+    total = gpu["total_bytes"] / 1024 ** 3
+    talker = params * 1e9 * _VLLM_BYTES_PER_PARAM * _VLLM_WEIGHT_FACTOR / 1024 ** 3
+    fraction = lambda gib: math.ceil((gib / total) * 100) / 100  # noqa: E731
+    stage0 = fraction(talker + _VLLM_STAGE_HEADROOM[0])
+    stage1 = fraction(_VLLM_CODEC_WEIGHTS + _VLLM_STAGE_HEADROOM[1])
+    reserved = (stage0 + stage1) * total
+    out["weights_gib"] = {"talker": round(talker, 2), "codec": _VLLM_CODEC_WEIGHTS}
+    out["total_gib"] = round(total, 2)
+    out["free_gib"] = round(gpu["free_bytes"] / 1024 ** 3, 2)
+    out["suggested"] = {
+        "0": stage0,
+        "1": stage1,
+        "reserved_gib": round(reserved, 2),
+        "stage_overrides": json.dumps(
+            {"0": {"gpu_memory_utilization": stage0},
+             "1": {"gpu_memory_utilization": stage1}},
+            separators=(", ", ": "),
+        ),
+        "max_model_len": 2048,
+    }
+    out["note"] = (
+        "each stage reserves its fraction of the card's total VRAM; keep room for the "
+        "gateway's own models, STT and anything else on the card"
+    )
+    return out
 
 
 def _preload_is_served_by_vllm(settings: Settings, voice: str) -> bool:
@@ -1174,6 +1264,22 @@ def create_app(
         except Exception as exc:  # unreachable / not vLLM
             out["error"] = str(exc)
         return out
+
+    @app.get("/api/vllm/budget", tags=["Settings"])
+    async def api_vllm_budget(request: Request, model: str = "") -> Dict[str, Any]:
+        """Suggested per-stage VRAM budget for a checkpoint on this card (admin).
+
+        Answers "what should `--stage-overrides` be for this model here?" so the
+        numbers do not have to be guessed per GPU. Read-only: the gateway's compose
+        (or the container it pilots) stays authoritative.
+        """
+        _admin_ok(request)
+        settings = app.state.settings
+        wanted = (model or "").strip()
+        if not wanted:
+            registry = settings.models.registry or {}
+            wanted = str(registry.get(_vllm_family(settings), "") or "")
+        return _vllm_budget(settings, wanted)
 
     @app.get("/api/vllm/service", tags=["Settings"])
     async def api_vllm_service(request: Request) -> Dict[str, Any]:

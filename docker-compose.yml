@@ -116,25 +116,27 @@ services:
     profiles: ["vllm"]
     # The model served here is this argument alone — the gateway's
     # `models.registry`/`default_size` only drive its *local* engine.
-    # On a small or shared card, budget the two stages (keys are stage ids: 0 =
-    # talker, 1 = Code2Wav; both live on the same GPU) separately. The bundled
-    # deploy YAML reserves 0.3 + 0.3, i.e. 60 % of the card whatever the variant,
-    # so lower stage 1 (a ~0.5 GiB vocoder), e.g. with `--max-model-len 2048
-    # --enforce-eager`:
-    #   --stage-overrides '{"0": {"gpu_memory_utilization": 0.30}, "1": {"gpu_memory_utilization": 0.12}}'
-    # Keep stage 0 large enough for the talker's weights (fraction × total VRAM
-    # ≥ ~4.1 GiB for the 1.7B, ~1.3 GiB for the 0.6B). See docs/realtime.md.
     # Serve a `-Base` checkpoint (and set `vllm.family: base`) to route cloned
     # voices here; `--allowed-local-media-path` lets it read the shared voice bank
     # below, so clips are sent as `file:///svc/voices/avatars/<id>.wav`
     # (vllm.ref_root: /svc/voices) instead of being inlined in every request.
     # `--enable-sleep-mode` allows the gateway to hibernate it when idle
     # (vllm.sleep_after > 0): the server stays up but gives its VRAM back.
+    #
+    # The three flags below are sized for a ~16 GiB card shared with the gateway
+    # and the LLM. Both stages live on the same GPU and each reserves its share of
+    # the card's *total* VRAM (the bundled deploy YAML asks 0.3 + 0.3 = 60 %,
+    # whatever the variant); `--stage-overrides` gives them different budgets, and
+    # `GET /api/vllm/budget` computes them for the checkpoint and the card in use
+    # (raise them, or drop the overrides, on a bigger GPU).
     command: >
       vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
       --omni --host 0.0.0.0 --port 8091
       --allowed-local-media-path /svc/voices
       --enable-sleep-mode
+      --max-model-len 2048
+      --enforce-eager
+      --stage-overrides '{"0": {"gpu_memory_utilization": 0.30}, "1": {"gpu_memory_utilization": 0.12}}'
     # vLLM needs a large shared-memory segment (Docker's default is 64 MB).
     shm_size: "8gb"
     ports:

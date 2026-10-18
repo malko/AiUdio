@@ -236,6 +236,7 @@ function applyVllmFields(cfg) {
   setVllmEngine(!!v.enabled);
   if ($("#set-vllm-family")) $("#set-vllm-family").value = v.family === "base" ? "base" : "custom_voice";
   fillVllmModels();
+  refreshVllmBudget();
   refreshVllmService();
   if ($("#set-vllm-url")) $("#set-vllm-url").value = v.base_url || "";
   if ($("#set-vllm-path")) $("#set-vllm-path").value = v.path || "/v1/audio/speech";
@@ -2117,6 +2118,24 @@ function wantToSwitchModel(wanted, running) {
   return !!(CONFIG.docker && CONFIG.docker.control && wanted && wanted !== running);
 }
 
+async function refreshVllmBudget() {
+  const box = $("#set-vllm-budget");
+  const select = $("#set-vllm-model");
+  if (!box || !select || !select.value) return;
+  try {
+    const r = await getJSON(`/api/vllm/budget?model=${encodeURIComponent(select.value)}`);
+    if (r.error) { box.textContent = ""; return; }
+    const s = r.suggested || {};
+    box.textContent =
+      `${t("vllm.card")} ${r.total_gib} GiB (${r.free_gib} GiB ${t("vllm.free")}) · ` +
+      `${t("vllm.weights")}: ${r.weights_gib.talker} + ${r.weights_gib.codec} GiB · ` +
+      `${t("vllm.suggested")} --stage-overrides '${s.stage_overrides}' ` +
+      `(--max-model-len ${s.max_model_len}) ≈ ${s.reserved_gib} GiB`;
+  } catch (e) {
+    box.textContent = "";
+  }
+}
+
 async function refreshVllmService() {
   const status = $("#set-vllm-status");
   const control = !!(CONFIG.docker && CONFIG.docker.control);
@@ -2183,6 +2202,7 @@ $("#set-vllm-save").addEventListener("click", async () => {
 $("#set-vllm-model") && $("#set-vllm-model").addEventListener("change", () => {
   // The checkpoint implies the family the gateway has to route to it.
   if ($("#set-vllm-family")) $("#set-vllm-family").value = vllmFamilyForRepo($("#set-vllm-model").value);
+  refreshVllmBudget();
 });
 
 for (const [id, action] of [["#set-vllm-start", "start"], ["#set-vllm-stop", "stop"], ["#set-vllm-restart", "restart"]]) {

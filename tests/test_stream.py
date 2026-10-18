@@ -459,3 +459,53 @@ def test_wake_failure_falls_back_to_the_local_engine(monkeypatch):
         assert asyncio.run(main_mod._vllm_wake_if_sleeping(settings)) is False
     finally:
         main_mod._forget_vllm_sleep()
+
+
+def test_budget_scales_the_stage_reservation_with_the_checkpoint(monkeypatch):
+    from app import main as main_mod
+
+    # A 15.48 GiB card, like the one this was tuned on.
+    monkeypatch.setattr(
+        main_mod, "_gpu_memory",
+        lambda: {"total_bytes": int(15.48 * 1024 ** 3), "free_bytes": int(9 * 1024 ** 3),
+                 "name": "NVIDIA GeForce RTX 5060 Ti"},
+    )
+    settings = Settings()
+
+    big = main_mod._vllm_budget(settings, "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+    small = main_mod._vllm_budget(settings, "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+
+    # The talker's share must cover its weights (4.1 GiB for the 1.7B, 1.4 for the
+    # 0.6B): the fraction follows the model, the codec's is the same for both.
+    assert big["weights_gib"]["talker"] > small["weights_gib"]["talker"]
+    assert big["suggested"]["0"] > small["suggested"]["0"]
+    assert big["suggested"]["1"] == small["suggested"]["1"]
+    assert small["suggested"]["0"] == 0.13  # (1.4 + 0.5) / 15.48
+    assert small["suggested"]["1"] == 0.11  # (0.6 + 1.0) / 15.48
+    assert big["suggested"]["0"] == 0.30  # (4.1 + 0.5) / 15.48
+    assert big["suggested"]["reserved_gib"] == round(
+        (big["suggested"]["0"] + big["suggested"]["1"]) * 15.48, 2
+    )
+    # The ready-to-paste flag is what the compose/command needs.
+    assert big["suggested"]["stage_overrides"] == (
+        '{"0": {"gpu_memory_utilization": 0.3}, "1": {"gpu_memory_utilization": 0.11}}'
+    )
+    assert big["total_gib"] == 15.48 and big["free_gib"] == 9.0
+
+
+def test_budget_says_so_when_it_cannot_guess(monkeypatch):
+    from app import main as main_mod
+
+    settings = Settings()
+    monkeypatch.setattr(main_mod, "_gpu_memory", lambda: None)
+    assert "CUDA" in main_mod._vllm_budget(settings, "Qwen/Qwen3-TTS-12Hz-0.6B-Base")["error"]
+
+    monkeypatch.setattr(
+        main_mod, "_gpu_memory",
+        lambda: {"total_bytes": 16 * 1024 ** 3, "free_bytes": 8 * 1024 ** 3, "name": "x"},
+    )
+    assert "Qwen3-TTS" in main_mod._vllm_budget(settings, "meta-llama/Llama-3-8B")["error"]
+    assert "guess" in main_mod._vllm_budget(settings, "Qwen/Qwen3-TTS-12Hz-Base")["error"]
+    assert main_mod._params_from_repo("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice") == 1.7
+    assert main_mod._params_from_repo("Qwen/Qwen3-TTS-12Hz-0.6B-Base") == 0.6
+    assert main_mod._params_from_repo("Qwen/Qwen3-TTS-12Hz-Base") is None

@@ -116,6 +116,26 @@ depth, and per-stage timings (`/api/metrics`).
   reserves at startup (that is what `--max-model-len`/`--gpu-memory-utilization` size). Sleep
   mode is the supported way to keep the server up with the VRAM released.
 
+  **Sizing the reservation** (`GET /api/vllm/budget?model=…`, shown under the model picker):
+  `gpu_memory_utilization` is a fraction of the GPU's **total** VRAM — vLLM says so itself
+  when it refuses to start (*desired GPU memory utilization (0.3, 23.78 GiB)* on a 79.25 GiB
+  card) — and **each stage reserves its own share**, so the two fractions add up. The gateway
+  runs on the same card and knows the checkpoint, so it computes the smallest budget that
+  fits each stage:
+
+  ```
+  stage 0 (talker)  ≈ (weights + KV & activations) / total VRAM   → 0.01 ≈ 160 MiB on 16 GiB
+  stage 1 (Code2Wav) ≈ (vocoder weights + its 64k-token buffers) / total VRAM
+  ```
+
+  Calibrated on the measured footprints (1.7B → ≈4.1 GiB of weights, 0.6B → ≈1.4 GiB, i.e.
+  bf16 plus ~30 % of buffers; the vocoder ≈0.6 GiB), that gives **0.30 + 0.11** for a 1.7B on
+  a 15.5 GiB card and **0.13 + 0.11** for a 0.6B — the numbers we had tuned by hand. Ready to
+  paste: `--stage-overrides '{"0": {"gpu_memory_utilization": 0.3}, "1": {"gpu_memory_utilization": 0.11}}'`.
+  The endpoint is read-only: your compose (or the container the gateway pilots) stays
+  authoritative, and the sum must leave room for everything else on the card (our own models,
+  STT, the LLM).
+
   **Managing the service from the UI** (optional): with the Docker socket mounted and
   `docker.control` enabled, **Settings → vLLM-Omni** becomes a plain engine toggle —
   selecting **vLLM-Omni** starts the container (at boot too, since the gateway honours the
