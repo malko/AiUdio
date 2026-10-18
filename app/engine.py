@@ -9,10 +9,12 @@ from __future__ import annotations
 import gc
 import hashlib
 import logging
+import math
 import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -90,6 +92,62 @@ def _resolve_device(name: str) -> str:  # pragma: no cover - requires torch
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+# Chatterbox samples from the T3 logits. A degenerate value (temperature 0,
+# min_p > 1, repetition_penalty 0...) turns the distribution into NaN/inf and the
+# sampler's CUDA kernel asserts, which poisons the worker's context. The API
+# rejects out-of-range values (`schemas.GenerationParams`); these bounds are the
+# safety net for values coming from config.yaml (which is not validated).
+# name: (min, max, fallback for non-finite values) — fallbacks are Chatterbox's
+# own `generate()` defaults.
+_CHATTERBOX_PARAM_BOUNDS = {
+    "temperature": (1e-3, 5.0, 0.8),
+    "top_p": (1e-3, 1.0, 1.0),
+    "repetition_penalty": (1e-3, 5.0, 1.2),
+    "exaggeration": (0.0, 2.0, 0.5),
+    "cfg_weight": (0.0, 1.0, 0.5),
+    "min_p": (0.0, 1.0, 0.05),
+}
+
+# Chatterbox encodes the reference clip; a degenerate one (silent, NaN/Inf,
+# shorter than a frame) is another way to make its kernels assert.
+_MIN_REF_SECONDS = 0.5
+_MIN_REF_PEAK = 1e-4
+
+
+def _clamp_chatterbox_param(name: str, value: Any) -> float:
+    """Clamp a Chatterbox sampling knob into its valid range."""
+    lo, hi, fallback = _CHATTERBOX_PARAM_BOUNDS[name]
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        val = float("nan")
+    if not math.isfinite(val):
+        log.warning("Chatterbox %s=%r is not finite: using %s", name, value, fallback)
+        return fallback
+    clamped = min(max(val, lo), hi)
+    if clamped != val:
+        log.warning("Chatterbox %s=%r out of [%s, %s]: using %s", name, value, lo, hi, clamped)
+    return clamped
+
+
+def _check_ref_audio(audio: np.ndarray, sr: int, origin: str) -> None:
+    """Reject a reference clip Chatterbox cannot condition on."""
+    if sr <= 0:
+        raise ValueError(f"Reference audio has no sample rate: {origin}")
+    arr = np.asarray(audio)
+    seconds = (arr.shape[0] if arr.ndim else 0) / float(sr)
+    if seconds < _MIN_REF_SECONDS:
+        raise ValueError(
+            f"Reference audio is too short ({seconds:.2f}s): Chatterbox needs "
+            f"at least {_MIN_REF_SECONDS:.1f}s"
+        )
+    if not np.isfinite(arr).all():
+        raise ValueError("Reference audio contains NaN/Inf samples")
+    peak = float(np.max(np.abs(arr))) if arr.size else 0.0
+    if peak < _MIN_REF_PEAK:
+        raise ValueError("Reference audio is silent")
 
 
 class TTSEngine:
@@ -272,7 +330,13 @@ class TTSEngine:
 
         handle = self.ensure(family)
         if handle.backend == "chatterbox":
-            return self._chatterbox_batch(handle, requested_family, items, t_start)
+            try:
+                return self._chatterbox_batch(handle, requested_family, items, t_start)
+            except Exception:
+                # A CUDA fault kills the worker for good: drop it so the next
+                # request reloads a fresh one instead of failing forever.
+                self._recover_chatterbox(handle)
+                raise
 
         gen = dict(self._generation_defaults())
         gen.update(items[0].get("generation") or {})
@@ -357,6 +421,23 @@ class TTSEngine:
             log.debug("Warm-up failed for %s", family, exc_info=True)
 
     # --------------------------------------------------------- chatterbox path
+    def _recover_chatterbox(self, handle: ModelHandle) -> None:
+        """Drop a dead/poisoned Chatterbox worker so the next request respawns it.
+
+        A CUDA failure (device-side assert, illegal access, OOM) leaves the
+        worker's context poisoned: the process can stay alive while every later
+        request fails with the same error. Unloading the family means one failed
+        request instead of a backend stuck until the container is restarted.
+        """
+        model = handle.model
+        if isinstance(model, ChatterboxClient) and not model.is_alive():
+            metrics.incr("chatterbox_worker_restarts")
+            log.error(
+                "Chatterbox worker for '%s' died (CUDA context lost?); unloading it — "
+                "the next request loads a fresh worker", handle.family,
+            )
+            self.unload(handle.family)
+
     def _chatterbox_batch(
         self, handle: ModelHandle, requested_family: str,
         items: List[Dict[str, Any]], t_start: float,
@@ -364,18 +445,24 @@ class TTSEngine:
         cfg = self.settings.models.chatterbox
         language = items[0].get("language")
         iso = lang.to_iso(language) or lang.to_iso(cfg.default_language) or "en"
-        audio_prompt = self._chatterbox_ref(items[0].get("ref_audio"))
+        audio_prompt, owns_ref = self._chatterbox_ref(items[0].get("ref_audio"))
         gen = self._generation_defaults()
         gen.update(items[0].get("generation") or {})
 
         t_gen = time.perf_counter()
-        with self._lock:
-            results = handle.model.synthesize(
-                [i["text"] for i in items],
-                language=iso,
-                audio_prompt=audio_prompt,
-                params=self._chatterbox_params(gen),
-            )
+        try:
+            with self._lock:
+                results = handle.model.synthesize(
+                    [i["text"] for i in items],
+                    language=iso,
+                    audio_prompt=audio_prompt,
+                    params=self._chatterbox_params(gen),
+                )
+        finally:
+            # An inline payload was written to a temp file for the worker only:
+            # delete it here (chunking means one per call).
+            if owns_ref and audio_prompt:
+                Path(audio_prompt).unlink(missing_ok=True)
         gen_s = time.perf_counter() - t_gen
         total_s = time.perf_counter() - t_start
         audio_s = sum(len(w) / float(s) for w, s in results) if results else 0.0
@@ -390,7 +477,10 @@ class TTSEngine:
     def _chatterbox_params(self, gen: Dict[str, Any]) -> Dict[str, Any]:
         keys = ("temperature", "top_p", "repetition_penalty", "exaggeration",
                 "cfg_weight", "min_p")
-        return {k: gen[k] for k in keys if gen.get(k) is not None}
+        return {
+            k: _clamp_chatterbox_param(k, gen[k])
+            for k in keys if gen.get(k) is not None
+        }
 
     def _qwen_params(self, gen: Dict[str, Any]) -> Dict[str, Any]:
         keys = ("temperature", "top_k", "top_p", "repetition_penalty",
@@ -398,10 +488,15 @@ class TTSEngine:
                 "subtalker_top_p")
         return {k: gen[k] for k in keys if gen.get(k) is not None}
 
-    def _chatterbox_ref(self, ref_audio: Optional[str]) -> Optional[str]:
-        """Materialize a reference audio into a local file path for Chatterbox."""
+    def _chatterbox_ref(self, ref_audio: Optional[str]) -> Tuple[Optional[str], bool]:
+        """Materialize a reference clip for Chatterbox.
+
+        Returns ``(path, owned)``. ``owned`` is True for a temporary file the
+        caller must delete once the synthesis is done (an inline payload we just
+        wrote out); a path from the request or the voice bank is not ours.
+        """
         if not ref_audio:
-            return None
+            return None, False
         ref = str(ref_audio)
         if ref.startswith("data:"):
             import base64
@@ -415,15 +510,29 @@ class TTSEngine:
                 audio, sr = sf.read(io.BytesIO(raw), dtype="float32", always_2d=False)
             except Exception as exc:
                 raise ValueError(f"Unreadable reference audio: {exc}") from exc
+            _check_ref_audio(audio, int(sr), "inline reference")
             fd, path = tempfile.mkstemp(prefix="cb-ref-", suffix=".wav")
             import os
 
             os.close(fd)
             sf.write(path, audio, int(sr))
-            return path
+            return path, True
         if ref.lower().startswith(("http://", "https://")):
             raise ValueError("Chatterbox does not support remote reference URLs")
-        return ref
+        if not Path(ref).is_file():
+            raise ValueError(f"Reference audio not found: {ref}")
+        # Only reject clips we can actually inspect: soundfile does not read every
+        # format Chatterbox (librosa) supports, and an undecodable file is already
+        # a clean error rather than a poisoned CUDA context.
+        import soundfile as sf
+
+        try:
+            audio, sr = sf.read(ref, dtype="float32", always_2d=False)
+        except Exception as exc:
+            log.debug("Could not inspect reference audio %s: %s", ref, exc)
+            return ref, False
+        _check_ref_audio(audio, int(sr), ref)
+        return ref, False
 
     def _default_speaker(self, handle: ModelHandle) -> str:
         """Stable default speaker for a loaded custom_voice model."""

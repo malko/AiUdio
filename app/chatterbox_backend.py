@@ -41,7 +41,12 @@ def resolve_python(configured: str = "") -> Optional[str]:
 
 
 class ChatterboxClient:
-    """Manages a single Chatterbox worker process and one loaded model."""
+    """Manages a single Chatterbox worker process and one loaded model.
+
+    A worker whose CUDA context dies (device-side assert, illegal access, OOM,
+    hang) is unrecoverable: it is flagged broken, its process is torn down and
+    the engine unloads the family so the next request spawns a fresh worker.
+    """
 
     def __init__(self, python: str, family: str, repo: str, *, t3_model: str = "v3",
                  device: str = "cpu", watermark: bool = False, timeout: float = 600.0):
@@ -50,6 +55,7 @@ class ChatterboxClient:
         self.timeout = timeout
         self._queue: queue.Queue[dict] = queue.Queue()
         self._lock = threading.Lock()
+        self._broken = False
         env = dict(os.environ)
         # An empty HF_TOKEN (docker-compose sets it to "" when unset) makes
         # huggingface_hub send an invalid "Authorization: Bearer " header.
@@ -67,12 +73,40 @@ class ChatterboxClient:
         )
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
-        self._request({
-            "cmd": "load", "family": family, "repo": repo,
-            "t3_model": t3_model,
-            "nano": family == "chatterbox_nano",
-            "device": device, "watermark": watermark,
-        })
+        try:
+            self._request({
+                "cmd": "load", "family": family, "repo": repo,
+                "t3_model": t3_model,
+                "nano": family == "chatterbox_nano",
+                "device": device, "watermark": watermark,
+            })
+        except Exception:
+            self.close()  # never leak a child process when the load fails
+            raise
+
+    # --------------------------------------------------------------- liveness
+    def is_alive(self) -> bool:
+        """False once the worker died or its CUDA context was poisoned."""
+        return not self._broken and self._proc.poll() is None
+
+    def _break(self, reason: str) -> None:
+        """Flag the worker unusable and tear its process down (best effort)."""
+        if not self._broken:
+            log.warning("Chatterbox worker unusable (%s): it will be respawned", reason)
+        self._broken = True
+        self._kill()
+
+    def _kill(self) -> None:
+        try:
+            if self._proc.poll() is None:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait(timeout=5)
+        except Exception:  # pragma: no cover - best effort
+            pass
 
     # -------------------------------------------------------------- transport
     def _read_stdout(self) -> None:
@@ -85,6 +119,9 @@ class ChatterboxClient:
                 self._queue.put(json.loads(line))
             except json.JSONDecodeError:
                 log.warning("Chatterbox worker sent non-JSON: %s", line[:200])
+        # EOF: the worker exited (clean shutdown or a crash such as a poisoned
+        # CUDA context). Stop handing out requests to it.
+        self._broken = True
 
     def _read_stderr(self) -> None:
         assert self._proc.stderr is not None
@@ -93,7 +130,8 @@ class ChatterboxClient:
 
     def _request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
-            if self._proc.poll() is not None:
+            if self._broken or self._proc.poll() is not None:
+                self._broken = True
                 raise RuntimeError("Chatterbox worker is not running")
             assert self._proc.stdin is not None
             self._proc.stdin.write(json.dumps(payload) + "\n")
@@ -101,10 +139,16 @@ class ChatterboxClient:
             try:
                 reply = self._queue.get(timeout=self.timeout)
             except queue.Empty:
+                # A call that never comes back is usually a wedged CUDA context.
+                self._break("timed out")
                 raise RuntimeError("Chatterbox worker timed out") from None
         if not reply.get("ok"):
             msg = reply.get("error", "unknown error")
             log.error("Chatterbox worker error: %s\n%s", msg, reply.get("trace", ""))
+            if reply.get("fatal"):
+                # The worker reported a CUDA fault: its context is gone for good,
+                # kill it so the next request starts from scratch.
+                self._break(msg)
             raise RuntimeError(f"Chatterbox: {msg}")
         return reply
 
@@ -134,6 +178,12 @@ class ChatterboxClient:
             audio, sr = sf.read(item["path"], dtype="float32", always_2d=False)
             results.append((np.asarray(audio, dtype=np.float32), int(item.get("sr") or sr)))
         self._cleanup(out_dir)
+        split = sum(1 for item in reply.get("items", []) if (item.get("parts") or 1) > 1)
+        if split:
+            log.info(
+                "Chatterbox split %d text(s) over the model's text-token limit "
+                "(pieces joined with a short silence)", split,
+            )
         return results
 
     @staticmethod
@@ -147,16 +197,13 @@ class ChatterboxClient:
 
     def close(self) -> None:
         try:
-            if self._proc.poll() is None:
+            if not self._broken and self._proc.poll() is None:
                 self._request({"cmd": "shutdown"})
         except Exception:  # best effort
             pass
         finally:
-            try:
-                self._proc.terminate()
-                self._proc.wait(timeout=10)
-            except Exception:
-                self._proc.kill()
+            self._broken = True
+            self._kill()
 
 
 def is_available(settings) -> bool:

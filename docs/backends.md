@@ -73,6 +73,43 @@ are then uninstalled so the system's GPU-enabled build takes over.
 - **No batch API**: `generate()` is single-text, so the micro-batcher (`app/scheduler.py`) only
   helps Qwen families; Chatterbox requests are processed sequentially (lower throughput under
   concurrency, but identical single-stream latency profile).
+- **Input guards**: the `generation` knobs are validated at the API boundary (out-of-range or
+  non-finite → `422`) and clamped once more in `_chatterbox_params` (covers values coming from
+  `config.yaml`, which is not validated). A reference clip that is silent, shorter than 0.5 s
+  or contains NaN/Inf is refused before it reaches the model. A degenerate sampling
+  distribution (`temperature: 0`, `min_p > 1`, `repetition_penalty: 0`…) or a degenerate clip
+  makes the T3 sampler / S3Gen kernels assert on the GPU.
+- **Text length**: the gateway splits a `text` according to `chunking`/`max_chars` for **all**
+  engines (streaming and non-streaming) and joins the audio back, cutting on sentence
+  punctuation, then clause punctuation, then line breaks, then word breaks (a chunk never ends
+  inside a word — see [api](api.md#post-apitts)). The engine-side limit is the safety net: the
+  multilingual T3 embeds text through a learned positional table of `max_text_tokens` (**2048**)
+  entries plus the start/stop pair that `mtl_tts.generate()` pads in, and a longer text is the
+  classic `device-side assert` (surfacing from `T3.prepare_input_embeds` → `text_pos_emb` →
+  `F.embedding`, after which every call in that process fails with the same sticky error). So
+  with `chunking: false`, or a chunk above what the model can embed, the worker bounds the text
+  in **characters** — `(2048 − 2) // factor` per language — and splits it on the same
+  boundaries, joining the pieces with `chunking.silence_ms`-style silence (120 ms); one `text`
+  still yields one file (`items[].parts` in the worker protocol reports the split; the gateway
+  logs it). Turbo/Nano set `input_pos_emb = None` (no positional table — their HF tokenizer
+  truncates), so they are left untouched.
+- **Why characters and not tokens**: counting tokens would mean running the multilingual
+  tokenizer, which besides duplicating `generate()` triggers heavy per-language preprocessing
+  (`pkuseg` + Cangjie for Chinese, `pykakasi` for Japanese, an ONNX diacritizer for Hebrew, a
+  stresser for Russian) *on the time-to-first-audio path*. The factor is how many tokens one
+  character can become: **8** for Chinese (verified against the shipped `Cangjie5_TC.json`:
+  126 610 entries, never more than 8 tokens per glyph), 8 for Japanese/Korean/Hebrew/Russian
+  (decompositions and added marks), **2** otherwise (NFKD). That gives 255 characters for the
+  first group and 1023 for the rest — both **above** `chunking.max_chars` (240), so the
+  gateway's own chunks are never split a second time, and this guard costs nothing on the normal
+  path (it never tokenizes; a text under its budget goes straight to `generate()`).
+- **Fault recovery**: a CUDA fault (`device-side assert`, illegal memory access, OOM) leaves the
+  worker's context poisoned — the process can stay alive while **every** later call fails with
+  the same error, and `/health` still answers `200` (it never touches CUDA). The worker reports
+  such errors as `fatal` and exits; the gateway marks the client broken, kills the process and
+  unloads the family, so the next request spawns a clean worker (`Engine._recover_chatterbox`).
+  A hung call (timeout) is treated the same way. Counted in `chatterbox_worker_restarts`
+  (`GET /api/metrics`); `POST /api/models/unload {"family": "chatterbox"}` does it on demand.
 
 ## Model downloads
 

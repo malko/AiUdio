@@ -245,6 +245,22 @@ Python environment: `chatterbox-tts` pins different `torch`/`transformers` versi
 - Chatterbox has no batch API: concurrent requests are processed **sequentially** (the
   micro-batcher only benefits Qwen families). "Auto" language is not supported — a default is
   used (`models.chatterbox.default_language`).
+- **Input guards.** The `generation` knobs are bounds-checked (out-of-range or `nan`/`inf` →
+  `422`) and clamped again when the request is built, and a reference clip that is silent,
+  shorter than 0.5 s or contains NaN/Inf is refused — a degenerate sampling distribution or
+  clip is a known way to make Chatterbox's CUDA kernels assert.
+- **Long texts are split, not truncated.** Chunking applies to every engine and every route
+  (streaming *and* non-streaming): `chunking`/`max_chars` (40–600) split the text and the audio
+  is joined back with `chunking.silence_ms`, so the response still has one file per `text`.
+  Cuts land on sentence/clause punctuation, line breaks, then word boundaries — never inside a
+  word. The multilingual Chatterbox model embeds text through a positional table of **2048**
+  tokens; if a request opts out of chunking (`chunking: false`) the worker bounds the text in
+  characters (per-language, e.g. 1023 for French, 255 for Chinese) and splits further rather
+  than poison the GPU. Turbo/Nano have no such table (their tokenizer truncates).
+- **Fault recovery.** A worker whose CUDA context dies (device-side assert, illegal access,
+  OOM, hang) can stay alive while every later call fails with the same error. The gateway
+  detects it, kills the process and unloads the family, so the **next** request loads a fresh
+  worker instead of the family staying stuck until the container is restarted.
 
 By default the weights are downloaded automatically on first use (into the `hf_cache`
 volume). To pre-fetch them instead, run `./scripts/download_models.sh` (plain **curl**, no
@@ -457,6 +473,7 @@ A `commit-msg` hook (`.githooks/`) checks the prefix. Enable it with `make hooks
 | `Warning: flash-attn is not installed` | expected — attention falls back to PyTorch `sdpa` (no FlashAttention build in the image) |
 | `Chatterbox is not installed` | build the image with `INSTALL_CHATTERBOX=1`, or point `models.chatterbox.python` at a venv with `chatterbox-tts` |
 | Chatterbox slow with many callers | it has no batch API; requests are serialized (use Qwen for concurrent throughput) |
+| Chatterbox `CUDA error: device-side assert triggered` (or illegal access / OOM, then *every* request fails) | a kernel asserted. The usual cause is a **text longer than the model's 2048-token positional table** — now split automatically (older builds asserted in `text_pos_emb`); degenerate sampling values or a bad reference clip are rejected/clamped earlier. The gateway tears the poisoned worker down and respawns it on the next request; `POST /api/models/unload {"family":"chatterbox"}` forces it. For the true kernel, restart with `CUDA_LAUNCH_BLOCKING=1` and `TORCH_USE_CUDA_DSA=1` |
 
 ## Licenses and credits
 

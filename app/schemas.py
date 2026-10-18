@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
+from .chunking import MAX_CHUNK_CHARS, MIN_CHUNK_CHARS
+
 FAMILIES = (
     "custom_voice", "voice_design", "base",
     "chatterbox", "chatterbox_turbo", "chatterbox_nano",
@@ -13,18 +15,25 @@ FAMILIES = (
 
 
 class GenerationParams(BaseModel):
-    temperature: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    max_new_tokens: Optional[int] = None
-    subtalker_temperature: Optional[float] = None
-    subtalker_top_k: Optional[int] = None
-    subtalker_top_p: Optional[float] = None
+    """Per-request generation knobs.
+
+    The bounds keep degenerate sampling values out of the engines: a NaN/zero
+    probability vector makes the Chatterbox sampler's CUDA kernel assert and
+    poisons the worker (see ``docs/backends.md``).
+    """
+
+    temperature: Optional[float] = Field(default=None, gt=0, le=5)
+    top_k: Optional[int] = Field(default=None, ge=0, le=1000)
+    top_p: Optional[float] = Field(default=None, gt=0, le=1)
+    repetition_penalty: Optional[float] = Field(default=None, gt=0, le=5)
+    max_new_tokens: Optional[int] = Field(default=None, ge=1, le=32768)
+    subtalker_temperature: Optional[float] = Field(default=None, gt=0, le=5)
+    subtalker_top_k: Optional[int] = Field(default=None, ge=0, le=1000)
+    subtalker_top_p: Optional[float] = Field(default=None, gt=0, le=1)
     # Chatterbox-specific knobs.
-    exaggeration: Optional[float] = None
-    cfg_weight: Optional[float] = None
-    min_p: Optional[float] = None
+    exaggeration: Optional[float] = Field(default=None, ge=0, le=2)
+    cfg_weight: Optional[float] = Field(default=None, ge=0, le=1)
+    min_p: Optional[float] = Field(default=None, ge=0, le=1)
 
     def to_kwargs(self) -> Dict[str, Any]:
         return {k: v for k, v in self.model_dump().items() if v is not None}
@@ -60,7 +69,9 @@ class TTSRequest(BaseModel):
     response_format: Optional[str] = None
     speed: Optional[float] = None
     chunking: Optional[bool] = None
-    max_chars: Optional[int] = None
+    max_chars: Optional[int] = Field(
+        default=None, ge=MIN_CHUNK_CHARS, le=MAX_CHUNK_CHARS
+    )
     generation: GenerationParams = Field(default_factory=GenerationParams)
 
     def requested_family(self) -> Optional[str]:
